@@ -1,0 +1,3807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>enowXAI - Unified AI Proxy Dashboard</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#222636;--surface3:#2a2f3f;
+  --border:#2e3348;--border-hover:#3d4460;
+  --text:#e4e6f0;--text-dim:#8b90a8;--text-muted:#5c6180;
+  --accent:#6c8aff;--accent-dim:#4a65d4;--accent-glow:rgba(108,138,255,.15);
+  --green:#34d399;--green-dim:rgba(52,211,153,.12);
+  --red:#f87171;--red-dim:rgba(248,113,113,.12);
+  --orange:#fbbf24;--orange-dim:rgba(251,191,36,.12);
+  --purple:#a78bfa;--purple-dim:rgba(167,139,250,.12);
+  --gray:#6b7280;--gray-dim:rgba(107,114,128,.12);
+  --cyan:#22d3ee;
+  --radius:8px;--radius-lg:12px;--radius-sm:6px;
+  --shadow:0 2px 8px rgba(0,0,0,.3);
+  --transition:180ms ease;
+}
+
+html{font-size:14px}
+body{
+  font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);
+  min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased;
+}
+code,pre,.mono{font-family:'JetBrains Mono',monospace}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+::-webkit-scrollbar-thumb:hover{background:var(--border-hover)}
+
+/* ── Auth Overlay ── */
+#auth-overlay{
+  position:fixed;inset:0;z-index:9999;background:var(--bg);
+  display:flex;align-items:center;justify-content:center;
+}
+.auth-box{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  padding:2.5rem;width:380px;text-align:center;
+}
+.auth-box h2{font-size:1.5rem;font-weight:600;margin-bottom:.25rem;letter-spacing:-.02em}
+.auth-box .brand-accent{color:var(--accent)}
+.auth-box p{color:var(--text-dim);font-size:.9rem;margin-bottom:1.5rem}
+.auth-input{
+  width:100%;padding:.75rem 1rem;background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius);color:var(--text);font-size:.95rem;outline:none;
+  font-family:'Outfit',sans-serif;transition:border var(--transition);
+}
+.auth-input:focus{border-color:var(--accent)}
+.auth-input::placeholder{color:var(--text-muted)}
+.auth-btn{
+  width:100%;margin-top:1rem;padding:.75rem;background:var(--accent);color:#fff;
+  border:none;border-radius:var(--radius);font-size:.95rem;font-weight:500;
+  cursor:pointer;font-family:'Outfit',sans-serif;transition:all var(--transition);
+}
+.auth-btn:hover{background:var(--accent-dim);transform:translateY(-1px)}
+.auth-error{color:var(--red);font-size:.85rem;margin-top:.75rem;display:none}
+
+/* ── Layout ── */
+#app{display:none;min-height:100vh;display:flex;flex-direction:column}
+.topbar{
+  display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;
+  background:var(--surface);border-bottom:1px solid var(--border);
+  position:sticky;top:0;z-index:100;backdrop-filter:blur(12px);
+}
+.brand{font-size:1.25rem;font-weight:700;letter-spacing:-.03em;display:flex;align-items:center;gap:.5rem}
+.brand span{color:var(--accent)}
+.brand-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+.topbar-spacer{flex:1}
+.api-key-box{
+  display:flex;align-items:center;gap:.5rem;background:var(--surface2);
+  border:1px solid var(--border);border-radius:var(--radius);padding:.4rem .75rem;
+  font-size:.8rem;cursor:pointer;transition:border var(--transition);
+}
+.api-key-box:hover{border-color:var(--accent)}
+.api-key-box .key-label{color:var(--text-muted);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em}
+.api-key-box .key-value{font-family:'JetBrains Mono',monospace;color:var(--text-dim);font-size:.8rem}
+
+.btn{
+  display:inline-flex;align-items:center;gap:.4rem;padding:.45rem .85rem;
+  border-radius:var(--radius-sm);font-size:.8rem;font-weight:500;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface2);color:var(--text);
+  font-family:'Outfit',sans-serif;transition:all var(--transition);white-space:nowrap;
+}
+.btn:hover{border-color:var(--border-hover);background:var(--surface3)}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-accent:hover{background:var(--accent-dim);border-color:var(--accent-dim)}
+.btn-danger{border-color:var(--red);color:var(--red)}
+.btn-danger:hover{background:var(--red-dim)}
+.btn-sm{padding:.3rem .6rem;font-size:.75rem}
+.btn-icon{padding:.35rem;width:30px;height:30px;justify-content:center}
+.btn:disabled{opacity:.4;cursor:not-allowed;pointer-events:none}
+
+/* ── Tabs ── */
+.tab-nav{
+  display:flex;gap:0;background:var(--surface);border-bottom:1px solid var(--border);
+  padding:0 1.5rem;overflow-x:auto;
+}
+.tab-btn{
+  padding:.85rem 1.25rem;font-size:.85rem;font-weight:500;color:var(--text-dim);
+  background:none;border:none;cursor:pointer;position:relative;
+  font-family:'Outfit',sans-serif;transition:color var(--transition);white-space:nowrap;
+}
+.tab-btn:hover{color:var(--text)}
+.tab-btn.active{color:var(--accent)}
+.tab-btn.active::after{
+  content:'';position:absolute;bottom:0;left:.5rem;right:.5rem;height:2px;
+  background:var(--accent);border-radius:1px 1px 0 0;
+}
+
+.tab-content{display:none;padding:1.5rem;flex:1;max-width:1400px;width:100%;margin:0 auto}
+.tab-content.active{display:block}
+
+/* ── Cards ── */
+.cards-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:.75rem;margin-bottom:1.25rem}
+.stat-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:1rem 1.15rem;transition:border var(--transition);
+}
+.stat-card:hover{border-color:var(--border-hover)}
+.stat-card .card-label{font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);margin-bottom:.35rem}
+.stat-card .card-value{font-size:1.6rem;font-weight:700;letter-spacing:-.03em}
+.stat-card .card-sub{font-size:.75rem;color:var(--text-dim);margin-top:.2rem}
+.stat-card.green .card-value{color:var(--green)}
+.stat-card.red .card-value{color:var(--red)}
+.stat-card.orange .card-value{color:var(--orange)}
+.stat-card.gray .card-value{color:var(--gray)}
+.stat-card.accent .card-value{color:var(--accent)}
+
+/* ── Filters ── */
+.filter-bar{display:flex;align-items:center;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}
+.filter-btn{
+  padding:.35rem .75rem;font-size:.78rem;border-radius:var(--radius-sm);
+  background:var(--surface);border:1px solid var(--border);color:var(--text-dim);
+  cursor:pointer;font-family:'Outfit',sans-serif;transition:all var(--transition);
+}
+.filter-btn:hover{border-color:var(--border-hover);color:var(--text)}
+.filter-btn.active{background:var(--accent-glow);border-color:var(--accent);color:var(--accent)}
+
+/* ── Tables ── */
+.table-wrap{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  overflow:hidden;
+}
+.table-wrap table{width:100%;border-collapse:collapse}
+.table-wrap th{
+  text-align:left;padding:.65rem 1rem;font-size:.7rem;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--text-muted);background:var(--surface2);
+  border-bottom:1px solid var(--border);font-weight:600;white-space:nowrap;
+}
+.table-wrap td{
+  padding:.6rem 1rem;font-size:.85rem;border-bottom:1px solid var(--border);
+  vertical-align:middle;
+}
+.table-wrap tr:last-child td{border-bottom:none}
+.table-wrap tbody tr{transition:background var(--transition)}
+.table-wrap tbody tr:hover{background:var(--surface2)}
+
+/* ── Badges ── */
+.badge{
+  display:inline-flex;align-items:center;gap:.3rem;padding:.2rem .55rem;
+  border-radius:4px;font-size:.72rem;font-weight:600;letter-spacing:.02em;
+}
+.badge-active{background:var(--green-dim);color:var(--green)}
+.badge-failed{background:var(--red-dim);color:var(--red)}
+.badge-banned{background:var(--orange-dim);color:var(--orange)}
+.badge-exhausted,.badge-rate_limited{background:var(--gray-dim);color:var(--gray)}
+.badge-standard{background:rgba(108,138,255,.12);color:var(--accent)}
+.badge-max{background:var(--purple-dim);color:var(--purple)}
+.badge-max_gl{background:rgba(34,211,238,.12);color:var(--cyan)}
+.badge-success{background:var(--green-dim);color:var(--green)}
+.badge-error{background:var(--red-dim);color:var(--red)}
+.badge-queued{background:var(--gray-dim);color:var(--gray)}
+.badge-running{background:rgba(34,211,238,.12);color:var(--cyan)}
+
+.status-icon{font-size:.9rem}
+.status-ok{color:var(--green)}
+.status-fail{color:var(--red)}
+.status-warn{color:var(--orange)}
+.status-na{color:var(--text-muted)}
+
+/* ── Progress bar ── */
+.progress{
+  height:4px;background:var(--surface3);border-radius:2px;overflow:hidden;width:80px;
+  display:inline-block;vertical-align:middle;margin-left:.4rem;
+}
+.progress-fill{height:100%;border-radius:2px;transition:width .3s ease}
+.progress-fill.green{background:var(--green)}
+.progress-fill.orange{background:var(--orange)}
+.progress-fill.red{background:var(--red)}
+.progress-fill.gray{background:var(--gray)}
+
+/* ── Collapsible ── */
+.collapsible-header{
+  display:flex;align-items:center;gap:.5rem;padding:.65rem 1rem;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  cursor:pointer;font-size:.85rem;font-weight:500;color:var(--text-dim);
+  margin-top:1rem;transition:all var(--transition);
+}
+.collapsible-header:hover{border-color:var(--border-hover);color:var(--text)}
+.collapsible-header .arrow{transition:transform var(--transition);font-size:.7rem}
+.collapsible-header.open .arrow{transform:rotate(90deg)}
+.collapsible-body{display:none;margin-top:.5rem}
+.collapsible-body.open{display:block}
+
+/* ── Models Grid ── */
+.models-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1.5rem}
+@media(max-width:900px){.models-grid{grid-template-columns:1fr}}
+.models-col h3{font-size:1rem;font-weight:600;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+.model-card{
+  display:flex;align-items:center;gap:.75rem;padding:.65rem .85rem;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);
+  margin-bottom:.4rem;transition:all var(--transition);
+}
+.model-card:hover{border-color:var(--border-hover);background:var(--surface2)}
+.model-name{font-size:.85rem;font-weight:500;flex:1}
+.model-provider{font-size:.7rem;color:var(--text-muted);background:var(--surface3);padding:.15rem .45rem;border-radius:3px}
+
+/* ── Usage Chart ── */
+.chart-container{margin:1.25rem 0}
+.bar-chart{display:flex;flex-direction:column;gap:.4rem}
+.bar-row{display:flex;align-items:center;gap:.75rem}
+.bar-label{width:180px;font-size:.78rem;color:var(--text-dim);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{flex:1;height:22px;background:var(--surface2);border-radius:3px;overflow:hidden;position:relative}
+.bar-fill{height:100%;border-radius:3px;transition:width .5s ease;min-width:2px}
+.bar-fill.accent{background:linear-gradient(90deg,var(--accent-dim),var(--accent))}
+.bar-fill.purple{background:linear-gradient(90deg,#7c3aed,var(--purple))}
+.bar-count{font-size:.75rem;color:var(--text-muted);width:50px;font-family:'JetBrains Mono',monospace}
+
+/* ── Batch Login ── */
+.batch-layout{display:grid;grid-template-columns:280px 1fr;gap:1rem}
+@media(max-width:900px){.batch-layout{grid-template-columns:1fr}}
+.batch-input-area{display:flex;flex-direction:column;gap:.5rem}
+.batch-input-area textarea{
+  width:100%;min-height:180px;padding:.75rem;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius);color:var(--text);
+  font-family:'JetBrains Mono',monospace;font-size:.8rem;resize:vertical;
+  outline:none;transition:border var(--transition);line-height:1.6;
+}
+.batch-input-area textarea:focus{border-color:var(--accent)}
+.batch-input-area textarea::placeholder{color:var(--text-muted)}
+.checkbox-row{display:flex;align-items:center;gap:1rem}
+.checkbox-row label{display:flex;align-items:center;gap:.4rem;font-size:.85rem;color:var(--text-dim);cursor:pointer}
+.checkbox-row input[type="checkbox"]{
+  appearance:none;width:16px;height:16px;border:1.5px solid var(--border);
+  border-radius:3px;background:var(--surface2);cursor:pointer;position:relative;
+  transition:all var(--transition);
+}
+.checkbox-row input[type="checkbox"]:checked{background:var(--accent);border-color:var(--accent)}
+.checkbox-row input[type="checkbox"]:checked::after{
+  content:'';position:absolute;top:2px;left:5px;width:4px;height:8px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);
+}
+.batch-actions{display:flex;gap:.5rem}
+.batch-stats{display:flex;gap:1rem;font-size:.8rem;color:var(--text-dim);flex-wrap:wrap}
+.batch-stats span{display:flex;align-items:center;gap:.3rem}
+
+.job-list{
+  max-height:200px;overflow-y:auto;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius);
+}
+.job-item{
+  display:flex;align-items:center;gap:.5rem;padding:.45rem .75rem;
+  border-bottom:1px solid var(--border);font-size:.8rem;
+}
+.job-item:last-child{border-bottom:none}
+.job-email{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim)}
+
+.log-viewer{
+  background:#0a0c12;border:1px solid var(--border);border-radius:var(--radius);
+  padding:.75rem;font-family:'JetBrains Mono',monospace;font-size:.72rem;
+  line-height:1.7;max-height:250px;overflow-y:auto;color:var(--text-dim);
+  margin-top:.75rem;
+}
+.log-viewer .log-line{white-space:pre-wrap;word-break:break-word;padding:2px 0;max-width:100%;line-height:1.4;border-bottom:1px solid rgba(255,255,255,.02)}
+.log-viewer .log-ok{color:var(--green)}
+.log-viewer .log-err{color:var(--red)}
+.log-viewer .log-info{color:var(--accent)}
+.log-viewer .log-warn{color:var(--orange)}
+
+/* ── API Docs ── */
+.docs-section{margin-bottom:2rem}
+.docs-section h3{font-size:1.05rem;font-weight:600;margin-bottom:.75rem;display:flex;align-items:center;gap:.5rem}
+.docs-section h4{font-size:.9rem;font-weight:500;margin:1rem 0 .5rem;color:var(--text-dim)}
+.endpoint-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  margin-bottom:1rem;overflow:hidden;
+}
+.endpoint-header{
+  display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;
+  border-bottom:1px solid var(--border);
+}
+.method{
+  font-family:'JetBrains Mono',monospace;font-size:.72rem;font-weight:700;
+  padding:.2rem .5rem;border-radius:3px;letter-spacing:.03em;
+}
+.method-post{background:rgba(52,211,153,.15);color:var(--green)}
+.method-get{background:rgba(108,138,255,.15);color:var(--accent)}
+.method-delete{background:rgba(248,113,113,.15);color:var(--red)}
+.endpoint-path{font-family:'JetBrains Mono',monospace;font-size:.85rem;color:var(--text)}
+.endpoint-desc{font-size:.8rem;color:var(--text-dim);margin-left:auto}
+.endpoint-body{padding:1rem}
+.endpoint-body p{font-size:.82rem;color:var(--text-dim);margin-bottom:.5rem;line-height:1.6}
+
+.code-block{
+  position:relative;background:#0a0c12;border:1px solid var(--border);
+  border-radius:var(--radius-sm);padding:.85rem 1rem;margin:.5rem 0;
+  font-family:'JetBrains Mono',monospace;font-size:.76rem;line-height:1.65;
+  color:var(--text-dim);overflow-x:auto;white-space:pre;
+}
+.code-block .copy-btn{
+  position:absolute;top:.5rem;right:.5rem;padding:.25rem .5rem;font-size:.65rem;
+  background:var(--surface2);border:1px solid var(--border);border-radius:3px;
+  color:var(--text-muted);cursor:pointer;font-family:'Outfit',sans-serif;
+  transition:all var(--transition);opacity:0;
+}
+.code-block:hover .copy-btn{opacity:1}
+.code-block .copy-btn:hover{background:var(--surface3);color:var(--text)}
+.code-block .kw{color:var(--purple)}
+.code-block .str{color:var(--green)}
+.code-block .num{color:var(--orange)}
+.code-block .cmt{color:var(--text-muted)}
+
+.config-card{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  padding:1rem 1.15rem;margin-bottom:.75rem;
+}
+.config-card h5{font-size:.85rem;font-weight:600;margin-bottom:.5rem;display:flex;align-items:center;gap:.4rem}
+
+/* ── Toast ── */
+.toast-container{position:fixed;bottom:1.5rem;right:1.5rem;z-index:10000;display:flex;flex-direction:column;gap:.5rem}
+.toast{
+  padding:.65rem 1rem;background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);font-size:.82rem;color:var(--text);
+  box-shadow:var(--shadow);animation:toastIn .25s ease;max-width:340px;
+  display:flex;align-items:center;gap:.5rem;
+}
+.toast.success{border-color:var(--green);color:var(--green)}
+.toast.error{border-color:var(--red);color:var(--red)}
+@keyframes toastIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Loading ── */
+.loading-spinner{
+  display:inline-block;width:16px;height:16px;border:2px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-overlay{
+  display:flex;align-items:center;justify-content:center;padding:3rem;
+  color:var(--text-muted);gap:.5rem;font-size:.85rem;
+}
+.empty-state{
+  text-align:center;padding:3rem;color:var(--text-muted);font-size:.85rem;
+}
+
+/* ── Test Modal ── */
+.modal-overlay{
+  position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.6);
+  display:flex;align-items:center;justify-content:center;
+  animation:fadeIn .2s ease;
+}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+.modal-box{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);
+  width:720px;max-width:92vw;max-height:85vh;display:flex;flex-direction:column;
+  box-shadow:0 8px 32px rgba(0,0,0,.5);animation:modalIn .25s ease;
+}
+@keyframes modalIn{from{opacity:0;transform:translateY(12px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+.modal-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:1rem 1.25rem;border-bottom:1px solid var(--border);
+}
+.modal-header h3{font-size:1rem;font-weight:600}
+.modal-close{
+  background:none;border:none;color:var(--text-muted);font-size:1.2rem;
+  cursor:pointer;padding:.25rem;transition:color var(--transition);
+}
+.modal-close:hover{color:var(--text)}
+.modal-body{padding:1rem 1.25rem;overflow-y:auto;flex:1}
+.test-result-item{
+  display:flex;align-items:center;gap:.75rem;padding:.6rem .75rem;
+  border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:.4rem;
+  background:var(--surface2);transition:border var(--transition);
+}
+.test-result-item:hover{border-color:var(--border-hover)}
+.test-result-item .test-model{font-size:.85rem;font-weight:500;flex:1}
+.test-result-item .test-latency{font-size:.75rem;color:var(--text-dim);font-family:'JetBrains Mono',monospace}
+.test-result-item .test-preview{
+  font-size:.72rem;color:var(--text-muted);font-family:'JetBrains Mono',monospace;
+  max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.test-inline-result{
+  display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;
+  font-family:'JetBrains Mono',monospace;color:var(--text-dim);
+  margin-left:.5rem;animation:fadeIn .2s ease;
+}
+
+/* ── Logs Tab ── */
+.logs-table-wrap{overflow-x:auto}
+.log-entry-detail{
+  display:none;padding:.75rem 1rem;background:#0a0c12;
+  border-bottom:1px solid var(--border);
+}
+.log-entry-detail.open{display:block}
+.log-entry-detail pre{
+  font-family:'JetBrains Mono',monospace;font-size:.72rem;line-height:1.6;
+  color:var(--text-dim);white-space:pre-wrap;word-break:break-all;
+  max-height:200px;overflow-y:auto;margin:.35rem 0;
+  background:var(--surface2);padding:.5rem .75rem;border-radius:var(--radius-sm);
+}
+.log-entry-detail h5{
+  font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--text-muted);margin-top:.5rem;margin-bottom:.2rem;font-weight:600;
+}
+.log-entry-detail h5:first-child{margin-top:0}
+.log-expand-btn{
+  background:none;border:none;color:var(--text-muted);cursor:pointer;
+  font-size:.75rem;padding:.15rem .35rem;border-radius:3px;
+  transition:all var(--transition);
+}
+.log-expand-btn:hover{color:var(--accent);background:var(--accent-glow)}
+.logs-auto-badge{
+  display:inline-flex;align-items:center;gap:.3rem;font-size:.72rem;
+  color:var(--green);background:var(--green-dim);padding:.2rem .5rem;
+  border-radius:4px;font-weight:500;
+}
+.logs-auto-badge.paused{color:var(--orange);background:var(--orange-dim)}
+
+/* ── Credit Progress (Accounts) ── */
+.credit-cell{display:flex;flex-direction:column;gap:.2rem}
+.credit-row{display:flex;align-items:center;gap:.35rem;font-size:.78rem}
+.credit-progress{
+  height:3px;background:var(--surface3);border-radius:2px;overflow:hidden;
+  width:60px;display:inline-block;vertical-align:middle;
+}
+.credit-progress-fill{height:100%;border-radius:2px;transition:width .3s ease}
+.expiry-tag{font-size:.68rem;color:var(--text-muted);font-style:italic}
+
+/* ── Misc ── */
+.section-title{font-size:.95rem;font-weight:600;margin-bottom:.75rem}
+.flex-between{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap}
+.gap-sm{gap:.35rem}
+.mt-1{margin-top:.75rem}
+.mb-1{margin-bottom:.75rem}
+.text-dim{color:var(--text-dim)}
+.text-muted{color:var(--text-muted)}
+.text-sm{font-size:.8rem}
+.mono{font-family:'JetBrains Mono',monospace}
+.inline-flex{display:inline-flex;align-items:center;gap:.3rem}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Proxy Tab ── */
+.proxy-header{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1.25rem;flex-wrap:wrap}
+.proxy-toggle-row{display:flex;align-items:center;gap:.75rem}
+.proxy-switch{position:relative;width:42px;height:22px;display:inline-block}
+.proxy-switch input{opacity:0;width:0;height:0}
+.proxy-switch .slider{
+  position:absolute;inset:0;background:var(--surface3);border-radius:11px;cursor:pointer;
+  transition:all var(--transition);border:1px solid var(--border);
+}
+.proxy-switch .slider::before{
+  content:'';position:absolute;width:16px;height:16px;border-radius:50%;
+  background:var(--text-muted);top:2px;left:2px;transition:all var(--transition);
+}
+.proxy-switch input:checked+.slider{background:var(--green-dim);border-color:var(--green)}
+.proxy-switch input:checked+.slider::before{transform:translateX(20px);background:var(--green)}
+.proxy-toggle-label{font-size:.85rem;font-weight:500}
+
+.proxy-add-form{
+  display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;
+  padding:1rem;background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);margin-bottom:1rem;
+}
+.proxy-add-form .form-group{display:flex;flex-direction:column;gap:.25rem}
+.proxy-add-form .form-group label{font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600}
+.proxy-add-form input,.proxy-add-form select{
+  padding:.45rem .65rem;background:var(--surface2);border:1px solid var(--border);
+  border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;outline:none;
+  font-family:'Outfit',sans-serif;transition:border var(--transition);
+}
+.proxy-add-form input:focus,.proxy-add-form select:focus{border-color:var(--accent)}
+.proxy-add-form input::placeholder{color:var(--text-muted)}
+.proxy-add-form .form-group.url-group{flex:1;min-width:200px}
+.proxy-add-form .form-group.label-group{width:140px}
+.proxy-add-form .form-group.type-group{width:110px}
+.proxy-add-form select{cursor:pointer;appearance:none;padding-right:1.5rem;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235c6180'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right .5rem center;
+}
+
+.proxy-table .latency-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:.35rem;vertical-align:middle}
+.proxy-table .latency-dot.fast{background:var(--green)}
+.proxy-table .latency-dot.medium{background:var(--orange)}
+.proxy-table .latency-dot.slow{background:var(--red)}
+.proxy-table .latency-dot.untested{background:var(--text-muted)}
+.proxy-table .proxy-status{display:inline-flex;align-items:center;gap:.25rem;font-size:.78rem;font-weight:500}
+.proxy-table .proxy-status.ok{color:var(--green)}
+.proxy-table .proxy-status.fail{color:var(--red)}
+.proxy-table .proxy-status.untested{color:var(--text-muted)}
+
+.proxy-active-toggle{
+  position:relative;width:32px;height:17px;display:inline-block;vertical-align:middle;
+}
+.proxy-active-toggle input{opacity:0;width:0;height:0}
+.proxy-active-toggle .slider{
+  position:absolute;inset:0;background:var(--surface3);border-radius:9px;cursor:pointer;
+  transition:all var(--transition);border:1px solid var(--border);
+}
+.proxy-active-toggle .slider::before{
+  content:'';position:absolute;width:11px;height:11px;border-radius:50%;
+  background:var(--text-muted);top:2px;left:2px;transition:all var(--transition);
+}
+.proxy-active-toggle input:checked+.slider{background:var(--green-dim);border-color:var(--green)}
+.proxy-active-toggle input:checked+.slider::before{transform:translateX(15px);background:var(--green)}
+
+/* ── Accounts Column Layout ── */
+.acct-columns{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+@media(max-width:1000px){.acct-columns{grid-template-columns:1fr}}
+.acct-col{
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+  overflow:hidden;display:flex;flex-direction:column;
+}
+.acct-col-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.75rem 1rem;background:var(--surface2);border-bottom:1px solid var(--border);
+}
+.acct-col-header h4{font-size:.9rem;font-weight:600;display:flex;align-items:center;gap:.5rem;margin:0}
+.acct-col-header .acct-count{
+  font-size:.7rem;font-weight:700;background:var(--accent-glow);color:var(--accent);
+  padding:.15rem .45rem;border-radius:10px;min-width:22px;text-align:center;
+}
+.acct-col-filters{display:flex;gap:0;border-bottom:1px solid var(--border)}
+.acct-col-filter{
+  flex:1;padding:.4rem .5rem;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;
+  font-weight:600;color:var(--text-muted);background:none;border:none;cursor:pointer;
+  font-family:'Outfit',sans-serif;transition:all var(--transition);text-align:center;
+  border-bottom:2px solid transparent;
+}
+.acct-col-filter:hover{color:var(--text)}
+.acct-col-filter.active{color:var(--accent);border-bottom-color:var(--accent)}
+.acct-col-body{flex:1;overflow-y:auto;max-height:420px;padding:.5rem}
+.acct-card{
+  display:flex;flex-direction:column;gap:.3rem;padding:.55rem .7rem;
+  border:1px solid var(--border);border-radius:var(--radius-sm);margin-bottom:.35rem;
+  transition:all var(--transition);background:var(--surface);
+}
+.acct-card:hover{border-color:var(--border-hover);background:var(--surface2)}
+.acct-card-top{display:flex;align-items:center;gap:.4rem}
+.acct-card-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.acct-card-dot.active{background:var(--green)}
+.acct-card-dot.exhausted{background:var(--orange)}
+.acct-card-dot.banned{background:var(--red)}
+.acct-card-dot.failed{background:var(--red)}
+.acct-card-dot.error{background:var(--red)}
+.acct-card-dot.expired{background:var(--gray)}
+.acct-card-dot.ok{background:var(--green)}
+.acct-card-email{font-size:.78rem;font-family:'JetBrains Mono',monospace;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.acct-card-badge{font-size:.62rem;font-weight:700;padding:.1rem .35rem;border-radius:3px;text-transform:uppercase;letter-spacing:.03em;flex-shrink:0}
+.acct-card-badge.active,.acct-card-badge.ok{background:var(--green-dim);color:var(--green)}
+.acct-card-badge.exhausted{background:var(--orange-dim);color:var(--orange)}
+.acct-card-badge.banned{background:var(--red-dim);color:var(--red)}
+.acct-card-badge.failed,.acct-card-badge.error{background:var(--red-dim);color:var(--red)}
+.acct-card-badge.expired{background:var(--gray-dim);color:var(--gray)}
+.acct-card-credit{display:flex;align-items:center;gap:.4rem}
+.acct-card-credit-text{font-size:.72rem;color:var(--text-dim);font-family:'JetBrains Mono',monospace}
+.acct-card-bar{flex:1;height:3px;background:var(--surface3);border-radius:2px;overflow:hidden;max-width:80px}
+.acct-card-bar-fill{height:100%;border-radius:2px;transition:width .3s ease}
+.acct-card-bar-fill.green{background:var(--green)}
+.acct-card-bar-fill.orange{background:var(--orange)}
+.acct-card-bar-fill.red{background:var(--red)}
+.acct-card-bar-fill.gray{background:var(--gray)}
+.acct-col-empty{text-align:center;padding:2rem 1rem;color:var(--text-muted);font-size:.82rem}
+
+/* ── Account Verification States ── */
+.acct-card.temporary{border-left:3px solid var(--orange)}
+.acct-card.fix{border-left:3px solid var(--red)}
+.acct-verify-label{
+  font-size:.62rem;font-weight:700;padding:.1rem .35rem;border-radius:3px;
+  text-transform:uppercase;letter-spacing:.03em;display:inline-flex;align-items:center;gap:.2rem;
+}
+.acct-verify-label.temporary{background:var(--orange-dim);color:var(--orange)}
+.acct-verify-label.fix{background:var(--red-dim);color:var(--red)}
+.acct-test-error{
+  font-size:.7rem;font-family:'JetBrains Mono',monospace;
+  padding:.2rem .4rem;border-radius:3px;margin-top:.15rem;
+  cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  max-width:100%;transition:all var(--transition);
+}
+.acct-test-error.err{color:var(--red);background:var(--red-dim)}
+.acct-test-error.ok{color:var(--green);background:var(--green-dim)}
+.acct-test-error.expanded{white-space:pre-wrap;word-break:break-all}
+.acct-card-actions{display:flex;gap:.25rem;margin-top:.2rem}
+.acct-card-actions .btn{padding:.15rem .4rem;font-size:.68rem}
+.acct-toolbar{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+.acct-toolbar .btn .loading-spinner{width:12px;height:12px;border-width:1.5px;display:inline-block;vertical-align:middle}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .topbar{padding:.6rem 1rem;flex-wrap:wrap}
+  .tab-content{padding:1rem}
+  .cards-row{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+  .batch-layout{grid-template-columns:1fr}
+  .models-grid{grid-template-columns:1fr}
+  .proxy-add-form{flex-direction:column}
+  .proxy-add-form .form-group.url-group,
+  .proxy-add-form .form-group.label-group,
+  .proxy-add-form .form-group.type-group{width:100%;min-width:0}
+  .acct-columns{grid-template-columns:1fr}
+}
+
+/* ── Proxy Sections (split API / Batch) ── */
+.proxy-section{
+  margin-bottom:24px;padding-bottom:20px;
+  border-bottom:1px solid rgba(255,255,255,.1);
+}
+.proxy-section:last-child{border-bottom:none}
+.proxy-section-header{
+  display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap;
+}
+.proxy-section-title{font-size:16px;font-weight:600}
+
+/* Proxy checkbox */
+.batch-result-list{max-height:200px;overflow-y:auto;font-size:12px;font-family:monospace;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px}
+.batch-result-list .br-row{padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04);display:flex;gap:8px;align-items:baseline}
+.batch-result-list .br-row:last-child{border-bottom:none}
+.br-email{color:var(--text);min-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.br-provider{font-size:11px;padding:1px 5px;border-radius:3px;white-space:nowrap}
+.br-ok{background:rgba(34,197,94,.15);color:#22c55e}
+.br-fail{background:rgba(239,68,68,.15);color:#ef4444}
+.br-reason{font-size:11px;color:#888;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.br-header{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);padding:2px 6px}
+.proxy-check{width:15px;height:15px;cursor:pointer;accent-color:#6366f1}
+.proxy-toolbar{display:flex;gap:8px;margin:10px 0 6px;align-items:center;flex-wrap:wrap}
+.proxy-mode-bar{display:flex;align-items:center;gap:10px;margin:10px 0;flex-wrap:wrap}
+.proxy-mode-select{background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;cursor:pointer}
+.proxy-mode-select:focus{border-color:var(--accent);outline:none}
+.proxy-mode-label{font-size:13px;color:var(--text-muted)}
+.proxy-mode-label strong{color:var(--accent);font-weight:700}
+
+/* Toggle switch */
+.toggle-label{
+  display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;
+}
+.toggle-label input[type="checkbox"]{
+  width:36px;height:20px;appearance:none;-webkit-appearance:none;
+  background:#444;border-radius:10px;position:relative;cursor:pointer;
+  transition:background .2s;border:none;outline:none;
+}
+.toggle-label input[type="checkbox"]:checked{background:#6366f1}
+.toggle-label input[type="checkbox"]::after{
+  content:'';position:absolute;width:16px;height:16px;background:#fff;
+  border-radius:50%;top:2px;left:2px;transition:transform .2s;
+}
+.toggle-label input[type="checkbox"]:checked::after{transform:translateX(16px)}
+
+/* Sticky account badge */
+.badge-sticky{
+  background:#22c55e;color:#fff;font-size:10px;font-weight:600;
+  padding:1px 6px;border-radius:4px;margin-left:6px;
+}
+.acct-created{font-size:11px;color:#888;margin-top:2px}
+
+/* Proxy used in batch */
+.proxy-used-tag{
+  font-size:.7rem;color:var(--cyan);font-family:'JetBrains Mono',monospace;
+  margin-left:.4rem;
+}
+</style>
+</head>
+<body>
+
+<!-- Auth Overlay -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <h2>enow<span class="brand-accent">XAI</span></h2>
+    <p>Enter admin password to continue</p>
+    <input type="password" class="auth-input" id="auth-password" placeholder="Admin password" autocomplete="off">
+    <button class="auth-btn" id="auth-submit">Authenticate</button>
+    <div class="auth-error" id="auth-error">Authentication failed. Check your password.</div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="app" style="display:none">
+  <!-- Top Bar -->
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span> enow<span>XAI</span></div>
+    <div class="topbar-spacer"></div>
+    <div class="api-key-box" id="api-key-box" title="Click to copy API key">
+      <div>
+        <div class="key-label">API Key</div>
+        <div class="key-value" id="api-key-display">sk-••••••••••••</div>
+      </div>
+    </div>
+    <button class="btn btn-sm" id="regen-key-btn" title="Regenerate API key">&#x21bb; Regenerate</button>
+    <button class="btn btn-sm" id="refresh-credits-btn" title="Refresh all credits">&#x21bb; Credits</button>
+  </div>
+
+  <!-- Tab Navigation -->
+  <div class="tab-nav">
+    <button class="tab-btn active" data-tab="accounts">Accounts</button>
+    <button class="tab-btn" data-tab="models">Models</button>
+    <button class="tab-btn" data-tab="usage">Usage</button>
+    <button class="tab-btn" data-tab="logs">Logs</button>
+    <button class="tab-btn" data-tab="batch">Batch Login</button>
+<button class="tab-btn" data-tab="proxy">Proxy</button>
+<button class="tab-btn" data-tab="filter">Filter</button>
+<button class="tab-btn" data-tab="docs">API Docs</button>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Accounts                               -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content active" id="tab-accounts">
+    <div class="cards-row" id="account-cards">
+      <div class="stat-card green"><div class="card-label">Active</div><div class="card-value" id="card-active">-</div></div>
+      <div class="stat-card red"><div class="card-label">Failed</div><div class="card-value" id="card-failed">-</div></div>
+      <div class="stat-card orange"><div class="card-label">Banned</div><div class="card-value" id="card-banned">-</div></div>
+      <div class="stat-card gray"><div class="card-label">Exhausted</div><div class="card-value" id="card-exhausted">-</div></div>
+      <div class="stat-card accent"><div class="card-label">Total</div><div class="card-value" id="card-total">-</div></div>
+    </div>
+
+    <div class="flex-between mb-1">
+      <div class="section-title" style="margin-bottom:0">Accounts by Provider</div>
+      <div class="acct-toolbar">
+        <button class="btn btn-sm" id="test-batch-btn" onclick="testBatchAccounts()">&#x1f9ea; Test Batch</button>
+        <button class="btn btn-sm" id="approve-all-btn" onclick="approveAllAccounts()">&#x2705; Approve All</button>
+        <button class="btn btn-sm btn-danger" id="delete-fix-btn" onclick="deleteFixAccounts()">&#x1f5d1; Delete Fix</button>
+        <button class="btn btn-sm" id="refresh-accounts-btn">&#x21bb; Refresh</button>
+      </div>
+    </div>
+
+    <!-- Email Search -->
+    <div style="margin-bottom:.75rem">
+      <input type="text" id="acct-search" placeholder="Search email across all providers..." oninput="onAccountSearch(this.value)" style="width:100%;max-width:400px;padding:.5rem .75rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.82rem;outline:none">
+    </div>
+
+    <div class="acct-columns" id="acct-columns" style="grid-template-columns:repeat(4,1fr)">
+      <div class="acct-col" id="acct-col-kiro">
+        <div class="acct-col-header">
+          <h4>&#x1f680; KIRO <span class="acct-count" id="acct-count-kiro">0</span></h4>
+        </div>
+        <div class="acct-col-filters" data-provider="kiro">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-kiro">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
+      <div class="acct-col" id="acct-col-cb">
+        <div class="acct-col-header">
+          <h4>&#x1f4bb; CODEBUDDY <span class="acct-count" id="acct-count-cb">0</span></h4>
+        </div>
+        <div class="acct-col-filters" data-provider="cb">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-cb">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
+      <div class="acct-col" id="acct-col-ws">
+        <div class="acct-col-header">
+          <h4>&#x26a1; WAVESPEED <span class="acct-count" id="acct-count-ws">0</span></h4>
+        </div>
+        <div class="acct-col-filters" data-provider="ws">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-ws">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
+      <div class="acct-col" id="acct-col-gl">
+        <div class="acct-col-header">
+          <h4>&#x1f30a; GUMLOOP <span class="acct-count" id="acct-count-gl">0</span></h4>
+        </div>
+        <div class="acct-col-filters" data-provider="gl">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-gl">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Trash Section -->
+    <div class="collapsible-header" id="trash-header">
+      <span class="arrow">&#9654;</span>
+      <span>Trashed Accounts</span>
+      <span class="badge badge-exhausted" id="trash-count">0</span>
+    </div>
+    <div class="collapsible-body" id="trash-body">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Status</th><th>Actions</th></tr>
+          </thead>
+          <tbody id="trash-tbody">
+            <tr><td colspan="3" class="empty-state">No trashed accounts</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Models                                 -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-models">
+    <div class="flex-between mb-1">
+      <div class="section-title" style="margin-bottom:0">Available Models</div>
+      <button class="btn btn-accent" id="test-all-models-btn" onclick="testAllModels()">&#x1f9ea; Test All Models</button>
+    </div>
+    <div class="models-grid">
+      <div class="models-col">
+        <h3><span class="badge badge-standard">Standard</span> Kiro Models</h3>
+        <div id="standard-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+      <div class="models-col">
+        <h3><span class="badge badge-max">MAX</span> CodeBuddy Models</h3>
+        <div id="max-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+      <div class="models-col">
+        <h3><span class="badge" style="background:rgba(52,211,153,.2);color:#34d399">WaveSpeed</span> WaveSpeed Models</h3>
+        <div id="wavespeed-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+      <div class="models-col">
+        <h3><span class="badge" style="background:rgba(34,211,238,.2);color:#22d3ee">MAX-GL</span> Gumloop Models</h3>
+        <div id="gumloop-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Usage                                  -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-usage">
+    <div class="cards-row">
+      <div class="stat-card accent"><div class="card-label">Total Requests</div><div class="card-value" id="usage-total">-</div></div>
+      <div class="stat-card green"><div class="card-label">Success Rate</div><div class="card-value" id="usage-success">-</div></div>
+      <div class="stat-card"><div class="card-label">Avg Latency</div><div class="card-value" id="usage-latency">-</div></div>
+      <div class="stat-card" style="border-color:var(--cyan)"><div class="card-label">Captcha Solved</div><div class="card-value" id="usage-captcha" style="color:var(--cyan)">-</div><div class="card-sub" id="usage-captcha-err"></div></div>
+    </div>
+
+    <!-- Captcha API Key Setting -->
+    <div style="display:flex;align-items:center;gap:.75rem;padding:.75rem 1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1.25rem;flex-wrap:wrap">
+      <span style="font-size:.8rem;font-weight:600;color:var(--text-dim)">&#x1f511; 2Captcha API Key</span>
+      <input type="text" id="captcha-key-input" placeholder="Enter 2Captcha API key..." style="flex:1;min-width:200px;padding:.4rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.8rem;outline:none">
+      <span id="captcha-key-status" style="font-size:.75rem;color:var(--text-muted)"></span>
+      <button class="btn btn-sm btn-accent" onclick="saveCaptchaKey()">Save</button>
+      <button class="btn btn-sm btn-danger" onclick="clearCaptchaKey()">Clear</button>
+    </div>
+
+
+    <div class="section-title">Requests by Model (Top 10)</div>
+    <div class="chart-container">
+      <div class="bar-chart" id="usage-chart"></div>
+    </div>
+
+    <div class="section-title mt-1">Recent Requests</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Time</th><th>Model</th><th>Tier</th><th>Account</th><th>Status</th><th>Latency</th></tr>
+        </thead>
+        <tbody id="usage-tbody">
+          <tr><td colspan="6"><div class="loading-overlay"><div class="loading-spinner"></div> Loading usage data...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Logs                                   -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-logs">
+    <div class="flex-between mb-1">
+      <div class="section-title" style="margin-bottom:0">API Request Logs</div>
+      <div class="inline-flex" style="gap:.75rem">
+        <span class="logs-auto-badge" id="logs-auto-badge">&#x25cf; Auto-refresh 10s</span>
+        <button class="btn btn-sm" id="logs-refresh-btn" onclick="loadLogs()">&#x21bb; Refresh</button>
+      </div>
+    </div>
+    <div class="table-wrap logs-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Time</th>
+            <th>Model</th>
+            <th>Tier</th>
+            <th>Status</th>
+            <th>Latency</th>
+            <th>Account</th>
+            <th>Proxy</th>
+          </tr>
+        </thead>
+        <tbody id="logs-tbody">
+          <tr><td colspan="7"><div class="loading-overlay"><div class="loading-spinner"></div> Loading logs...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div id="logs-pagination"></div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Batch Login                            -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-batch">
+    <div class="batch-layout">
+      <!-- Left: Input + Controls -->
+      <div class="batch-input-area">
+        <div class="section-title" style="margin-bottom:4px">Add Accounts</div>
+        <textarea id="batch-textarea" placeholder="email1@example.com:password1&#10;email2@example.com:password2" style="min-height:80px;max-height:120px"></textarea>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;font-size:13px">
+          <label><input type="checkbox" id="chk-kiro"> Kiro</label>
+          <label><input type="checkbox" id="chk-codebuddy" checked> CodeBuddy</label>
+          <label><input type="checkbox" id="chk-wavespeed"> WaveSpeed</label>
+          <label><input type="checkbox" id="chk-gumloop"> Gumloop</label>
+          <span style="border-left:1px solid var(--border);padding-left:10px"><label><input type="checkbox" id="chk-headless" checked> Headless</label></span>
+          <span style="display:inline-flex;align-items:center;gap:3px">Parallel: <input type="number" id="batch-concurrency" value="1" min="1" max="10" style="width:40px;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:1px 4px;font-size:12px;text-align:center"></span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-accent btn-sm" id="batch-start-btn">&#9654; Start</button>
+          <button class="btn btn-sm" id="batch-cancel-btn" disabled style="opacity:.3">&#x2716; Cancel</button>
+          <span class="batch-stats" id="batch-stats" style="font-size:12px;gap:8px">
+            <span>&#x2713;<strong id="bs-ok">0</strong></span>
+            <span style="color:var(--red)">&#x2717;<strong id="bs-fail">0</strong></span>
+            <span style="color:var(--cyan)">&#x25cf;<strong id="bs-run">0</strong></span>
+            <span style="color:var(--gray)">&#x25cb;<strong id="bs-queue">0</strong></span>
+          </span>
+        </div>
+      </div>
+      <!-- Right: Job Status + Log -->
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div>
+          <div class="section-title" style="margin-bottom:4px">Job Status</div>
+          <div class="job-list" id="job-list" style="max-height:100px;font-size:12px">
+            <div class="empty-state" style="font-size:12px">No batch jobs yet</div>
+          </div>
+        </div>
+        <div>
+          <div class="section-title" style="margin-bottom:4px;font-size:12px">Log</div>
+          <div class="log-viewer" id="log-viewer" style="max-height:120px;font-size:11px">
+            <div class="log-line log-info">Ready</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Results: Success + Failed columns -->
+    <div id="batch-results" style="display:none;margin-top:16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <!-- Success column -->
+        <div>
+          <div class="section-title" style="color:var(--green)">&#x2713; Success <span id="batch-res-ok-count" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <div id="batch-res-ok-headers" style="display:flex;gap:0;margin-bottom:4px"></div>
+          <div id="batch-res-ok" class="batch-result-list"></div>
+          <button class="btn btn-sm" id="btn-copy-success" onclick="copyBatchResults('success')" style="margin-top:6px;display:none">&#x1f4cb; Copy email:pass</button>
+        </div>
+        <!-- Failed column -->
+        <div>
+          <div class="section-title" style="color:var(--red)">&#x2717; Failed <span id="batch-res-fail-count" style="font-weight:400;color:var(--text-muted)"></span></div>
+          <div id="batch-res-fail-headers" style="display:flex;gap:0;margin-bottom:4px"></div>
+          <div id="batch-res-fail" class="batch-result-list"></div>
+          <button class="btn btn-sm" id="btn-copy-failed" onclick="copyBatchResults('failed')" style="margin-top:6px;display:none">&#x1f4cb; Copy email:pass</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Proxy                                   -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-proxy">
+    <div class="flex-between mb-1">
+      <div class="section-title" style="margin-bottom:0">Proxy Pool Management</div>
+      <div class="inline-flex" style="gap:.5rem">
+        <button class="btn btn-sm" onclick="loadProxies('api');loadProxies('batch')">&#x21bb; Refresh</button>
+      </div>
+    </div>
+
+    <!-- ── Section 1: API Call Proxies ── -->
+    <div class="proxy-section" id="proxy-section-api">
+      <div class="proxy-section-header">
+        <span class="proxy-section-title">&#x1f310; API Call Proxies</span>
+        <label class="toggle-label"><input type="checkbox" id="proxy-enable-api" onchange="setProxyEnabled('api',this.checked)"> Enable</label>
+        <span class="badge badge-exhausted" id="proxy-status-badge-api">Disabled</span>
+      </div>
+      <div class="proxy-mode-bar">
+        <select id="proxy-mode-api" class="proxy-mode-select">
+          <option value="sticky">Sticky (fallback on fail)</option>
+          <option value="rotate">Smart Rotate</option>
+        </select>
+        <button class="btn btn-sm btn-accent" onclick="applyProxyMode('api')">Use Mode</button>
+        <span class="proxy-mode-label">Mode: <strong id="proxy-mode-current-api">—</strong></span>
+      </div>
+      <div class="proxy-add-form" style="flex-direction:column;gap:8px">
+        <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Add Proxies <span style="font-weight:400;text-transform:none">(one per line &bull; auto-detected &bull; tested before adding)</span></label>
+        <textarea id="proxy-urls-api" rows="3" placeholder="socks5://host:port:user:pass&#10;http://host:port:user:pass&#10;socks5://127.0.0.1:9000" style="width:100%;resize:vertical;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6"></textarea>
+        <button class="btn btn-accent" onclick="addProxy('api')" style="align-self:flex-start">&#x2b; Add &amp; Test</button>
+      </div>
+      <div class="proxy-toolbar">
+        <button class="btn btn-sm btn-danger" onclick="deleteFailedProxies('api')">&#x2716; Delete Failed</button>
+        <button class="btn btn-sm btn-danger" id="btn-del-sel-api" onclick="deleteSelectedProxies('api')" disabled>&#x1f5d1; Delete Selected (<span id="sel-count-api">0</span>)</button>
+        <button class="btn btn-sm" onclick="selectAllProxies('api')">Select All</button>
+        <button class="btn btn-sm" onclick="deselectAllProxies('api')">Deselect All</button>
+        <button class="btn btn-sm btn-accent" onclick="testAllProxiesPurpose('api')">&#x1f9ea; Test All</button>
+        <button class="btn btn-sm" onclick="editAllProxies('api')">&#x270e; Edit All</button>
+      </div>
+      <div class="table-wrap proxy-table">
+        <table>
+          <thead><tr>
+            <th style="width:36px">&#x2610;</th>
+            <th>URL</th>
+            <th style="width:70px">Type</th>
+            <th style="width:80px">Latency</th>
+            <th style="width:80px">Status</th>
+            <th style="width:100px">Actions</th>
+          </tr></thead>
+          <tbody id="proxy-table-api"><tr><td colspan="6" class="empty-state">No proxies. Add above.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── Section 2: Batch Login Proxies ── -->
+    <div class="proxy-section" id="proxy-section-batch">
+      <div class="proxy-section-header">
+        <span class="proxy-section-title">&#x1f4e6; Batch Login Proxies</span>
+        <label class="toggle-label"><input type="checkbox" id="proxy-enable-batch" onchange="setProxyEnabled('batch',this.checked)"> Enable</label>
+        <span class="badge badge-exhausted" id="proxy-status-badge-batch">Disabled</span>
+      </div>
+      <div class="proxy-mode-bar">
+        <select id="proxy-mode-batch" class="proxy-mode-select">
+          <option value="sticky">Sticky (fallback on fail)</option>
+          <option value="rotate">Smart Rotate</option>
+        </select>
+        <button class="btn btn-sm btn-accent" onclick="applyProxyMode('batch')">Use Mode</button>
+        <span class="proxy-mode-label">Mode: <strong id="proxy-mode-current-batch">—</strong></span>
+      </div>
+      <div class="proxy-add-form" style="flex-direction:column;gap:8px">
+        <label style="font-size:11px;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Add Proxies <span style="font-weight:400;text-transform:none">(one per line &bull; auto-detected &bull; tested before adding)</span></label>
+        <textarea id="proxy-urls-batch" rows="3" placeholder="socks5://host:port:user:pass&#10;http://host:port:user:pass&#10;socks5://127.0.0.1:9000" style="width:100%;resize:vertical;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6"></textarea>
+        <button class="btn btn-accent" onclick="addProxy('batch')" style="align-self:flex-start">&#x2b; Add &amp; Test</button>
+      </div>
+      <div class="proxy-toolbar">
+        <button class="btn btn-sm btn-danger" onclick="deleteFailedProxies('batch')">&#x2716; Delete Failed</button>
+        <button class="btn btn-sm btn-danger" id="btn-del-sel-batch" onclick="deleteSelectedProxies('batch')" disabled>&#x1f5d1; Delete Selected (<span id="sel-count-batch">0</span>)</button>
+        <button class="btn btn-sm" onclick="selectAllProxies('batch')">Select All</button>
+        <button class="btn btn-sm" onclick="deselectAllProxies('batch')">Deselect All</button>
+        <button class="btn btn-sm btn-accent" onclick="testAllProxiesPurpose('batch')">&#x1f9ea; Test All</button>
+        <button class="btn btn-sm" onclick="editAllProxies('batch')">&#x270e; Edit All</button>
+      </div>
+      <div class="table-wrap proxy-table">
+        <table>
+          <thead><tr>
+            <th style="width:36px">&#x2610;</th>
+            <th>URL</th>
+            <th style="width:70px">Type</th>
+            <th style="width:80px">Latency</th>
+            <th style="width:80px">Status</th>
+            <th style="width:100px">Actions</th>
+          </tr></thead>
+          <tbody id="proxy-table-batch"><tr><td colspan="6" class="empty-state">No proxies. Add above.</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Proxy Add Progress Modal -->
+    <div id="proxy-add-modal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px 28px;min-width:380px;max-width:500px;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+        <div style="font-size:15px;font-weight:600;margin-bottom:16px" id="proxy-modal-title">Testing Proxies...</div>
+        <div id="proxy-modal-progress" style="font-size:13px;color:var(--text-muted);margin-bottom:12px"></div>
+        <div id="proxy-modal-results" style="max-height:300px;overflow-y:auto;font-size:12px;font-family:monospace"></div>
+        <div id="proxy-modal-summary" style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);display:none">
+          <div style="display:flex;gap:16px;font-size:14px;font-weight:600">
+            <span style="color:#22c55e" id="proxy-modal-ok">&#x2713; 0 added</span>
+            <span style="color:#ef4444" id="proxy-modal-fail">&#x2717; 0 failed</span>
+          </div>
+        </div>
+        <button class="btn btn-sm" id="proxy-modal-close" onclick="closeProxyModal()" style="margin-top:14px;display:none">Close</button>
+      </div>
+    </div>
+
+    <!-- Proxy Edit Modal -->
+    <div id="proxy-edit-modal" style="display:none;position:fixed;inset:0;z-index:9998;background:rgba(0,0,0,.7);backdrop-filter:blur(4px);align-items:center;justify-content:center">
+      <div style="background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px 28px;min-width:450px;max-width:600px;box-shadow:0 20px 60px rgba(0,0,0,.5)">
+        <div style="font-size:15px;font-weight:600;margin-bottom:12px">&#x270e; Edit Proxies <span style="font-weight:400;color:var(--text-muted);font-size:12px" id="proxy-edit-purpose-label"></span></div>
+        <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px">Edit URLs below (one per line). Changed/new proxies will be tested on save. Removed lines will be deleted.</p>
+        <textarea id="proxy-edit-textarea" rows="10" style="width:100%;resize:vertical;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6"></textarea>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn btn-accent" id="proxy-edit-save" onclick="saveEditProxies()">Save &amp; Test</button>
+          <button class="btn btn-sm" onclick="closeEditModal()">Cancel</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Filter                                  -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-filter">
+    <div class="cards-row">
+      <div class="stat-card accent"><div class="card-label">Total Rules</div><div class="card-value" id="filter-card-total">-</div></div>
+      <div class="stat-card green"><div class="card-label">Active Rules</div><div class="card-value" id="filter-card-active">-</div></div>
+      <div class="stat-card orange"><div class="card-label">Total Hits</div><div class="card-value" id="filter-card-hits">-</div></div>
+    </div>
+
+    <div style="display:flex;gap:.5rem;align-items:flex-end;flex-wrap:wrap;padding:1rem;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:1rem">
+      <div style="display:flex;flex-direction:column;gap:.25rem;flex:1;min-width:180px">
+        <label style="font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600">Find</label>
+        <input type="text" id="filter-add-find" placeholder="Text or regex to match" style="padding:.45rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.82rem;outline:none">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.25rem;flex:1;min-width:180px">
+        <label style="font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600">Replace</label>
+        <input type="text" id="filter-add-replace" placeholder="Replacement (empty = remove)" style="padding:.45rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:'JetBrains Mono',monospace;font-size:.82rem;outline:none">
+      </div>
+      <div style="display:flex;flex-direction:column;gap:.25rem;width:180px">
+        <label style="font-size:.68rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600">Description</label>
+        <input type="text" id="filter-add-desc" placeholder="Optional note" style="padding:.45rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;outline:none">
+      </div>
+      <label style="display:flex;align-items:center;gap:.35rem;font-size:.78rem;color:var(--text-dim);cursor:pointer;align-self:flex-end;padding-bottom:.45rem">
+        <input type="checkbox" id="filter-add-regex" style="width:14px;height:14px"> Regex
+      </label>
+      <button class="btn btn-accent" onclick="addFilterRule()" style="align-self:flex-end">&#x2b; Add Rule</button>
+    </div>
+
+    <div class="flex-between mb-1">
+      <div class="section-title" style="margin-bottom:0">Filter Rules</div>
+      <div class="inline-flex" style="gap:.5rem">
+        <button class="btn btn-sm" onclick="seedFilters()">&#x1f331; Seed Defaults</button>
+        <button class="btn btn-sm" onclick="loadFilters()">&#x21bb; Refresh</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>On</th>
+            <th>Find</th>
+            <th>Replace</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th>Hits</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="filter-tbody">
+          <tr><td colspan="7"><div class="loading-overlay"><div class="loading-spinner"></div> Loading filters...</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: API Docs                               -->
+  <!-- ═══════════════════════════════════════════ -->
+  <div class="tab-content" id="tab-docs">
+    <div class="docs-section">
+      <h3>&#x1f517; Base URL</h3>
+      <div class="code-block" id="base-url-block">http://<span id="docs-host">localhost</span>:1430<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+    </div>
+
+    <div class="docs-section">
+      <h3>&#x1f511; Authentication</h3>
+      <p class="text-sm text-dim" style="margin-bottom:.5rem">All API requests require a Bearer token in the Authorization header.</p>
+      <div class="code-block">Authorization: Bearer sk-xxxxx<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+    </div>
+
+    <div class="docs-section">
+      <h3>&#x1f4e1; Endpoints</h3>
+
+      <!-- POST /v1/chat/completions -->
+      <div class="endpoint-card">
+        <div class="endpoint-header">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/v1/chat/completions</span>
+          <span class="endpoint-desc">OpenAI-compatible chat completions</span>
+        </div>
+        <div class="endpoint-body">
+          <p>Send chat messages and receive AI completions. Supports streaming.</p>
+          <h4>curl Example</h4>
+          <div class="code-block">curl -X POST http://localhost:1430/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-xxxxx" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ],
+    "stream": true
+  }'<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+          <h4>Request Schema</h4>
+          <div class="code-block">{
+  <span class="kw">"model"</span>:    <span class="str">"string"</span>,     <span class="cmt">// Model ID from /v1/models</span>
+  <span class="kw">"messages"</span>: [              <span class="cmt">// Array of message objects</span>
+    {
+      <span class="kw">"role"</span>:    <span class="str">"user"</span>,    <span class="cmt">// "system" | "user" | "assistant"</span>
+      <span class="kw">"content"</span>: <span class="str">"string"</span>
+    }
+  ],
+  <span class="kw">"stream"</span>:   <span class="num">true</span>,         <span class="cmt">// Enable SSE streaming</span>
+  <span class="kw">"temperature"</span>: <span class="num">0.7</span>,      <span class="cmt">// Optional: 0.0 - 2.0</span>
+  <span class="kw">"max_tokens"</span>:  <span class="num">4096</span>       <span class="cmt">// Optional: max output tokens</span>
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+          <h4>Response Schema</h4>
+          <div class="code-block">{
+  <span class="kw">"id"</span>:      <span class="str">"chatcmpl-xxx"</span>,
+  <span class="kw">"object"</span>:  <span class="str">"chat.completion"</span>,
+  <span class="kw">"model"</span>:   <span class="str">"claude-sonnet-4"</span>,
+  <span class="kw">"choices"</span>: [{
+    <span class="kw">"index"</span>: <span class="num">0</span>,
+    <span class="kw">"message"</span>: {
+      <span class="kw">"role"</span>:    <span class="str">"assistant"</span>,
+      <span class="kw">"content"</span>: <span class="str">"Hello! How can I help?"</span>
+    },
+    <span class="kw">"finish_reason"</span>: <span class="str">"stop"</span>
+  }],
+  <span class="kw">"usage"</span>: {
+    <span class="kw">"prompt_tokens"</span>:     <span class="num">12</span>,
+    <span class="kw">"completion_tokens"</span>: <span class="num">8</span>,
+    <span class="kw">"total_tokens"</span>:      <span class="num">20</span>
+  }
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+        </div>
+      </div>
+
+      <!-- GET /v1/models -->
+      <div class="endpoint-card">
+        <div class="endpoint-header">
+          <span class="method method-get">GET</span>
+          <span class="endpoint-path">/v1/models</span>
+          <span class="endpoint-desc">List available models</span>
+        </div>
+        <div class="endpoint-body">
+          <p>Returns all available models with their routing tier and provider information.</p>
+          <div class="code-block">curl http://localhost:1430/v1/models \
+  -H "Authorization: Bearer sk-xxxxx"<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+        </div>
+      </div>
+
+      <!-- POST /v1/messages -->
+      <div class="endpoint-card">
+        <div class="endpoint-header">
+          <span class="method method-post">POST</span>
+          <span class="endpoint-path">/v1/messages</span>
+          <span class="endpoint-desc">Anthropic Messages API format</span>
+        </div>
+        <div class="endpoint-body">
+          <p>Native Anthropic Messages API compatibility. Use this if your client expects the Anthropic format.</p>
+          <div class="code-block">curl -X POST http://localhost:1430/v1/messages \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: sk-xxxxx" \
+  -H "anthropic-version: 2023-06-01" \
+  -d '{
+    "model": "claude-sonnet-4",
+    "max_tokens": 1024,
+    "messages": [
+      {"role": "user", "content": "Hello!"}
+    ]
+  }'<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="docs-section">
+      <h3>&#x2699; Integration Snippets</h3>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; OpenCode Configuration</h5>
+        <div class="code-block">{
+  <span class="kw">"provider"</span>: {
+    <span class="kw">"name"</span>: <span class="str">"openai-compatible"</span>,
+    <span class="kw">"apiKey"</span>: <span class="str">"sk-xxxxx"</span>,
+    <span class="kw">"baseURL"</span>: <span class="str">"http://localhost:1430/v1"</span>
+  },
+  <span class="kw">"model"</span>: <span class="str">"claude-sonnet-4"</span>
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Cursor Configuration</h5>
+        <div class="code-block"><span class="cmt">// In Cursor Settings &gt; Models &gt; OpenAI API Key</span>
+<span class="kw">API Key</span>:  <span class="str">sk-xxxxx</span>
+<span class="kw">Base URL</span>: <span class="str">http://localhost:1430/v1</span>
+
+<span class="cmt">// Or in .cursor/settings.json:</span>
+{
+  <span class="kw">"openai.apiKey"</span>: <span class="str">"sk-xxxxx"</span>,
+  <span class="kw">"openai.baseUrl"</span>: <span class="str">"http://localhost:1430/v1"</span>
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Generic OpenAI SDK</h5>
+        <div class="code-block"><span class="kw">import</span> OpenAI <span class="kw">from</span> <span class="str">'openai'</span>;
+
+<span class="kw">const</span> client = <span class="kw">new</span> OpenAI({
+  apiKey:  <span class="str">'sk-xxxxx'</span>,
+  baseURL: <span class="str">'http://localhost:1430/v1'</span>,
+});
+
+<span class="kw">const</span> res = <span class="kw">await</span> client.chat.completions.create({
+  model: <span class="str">'claude-sonnet-4'</span>,
+  messages: [{ role: <span class="str">'user'</span>, content: <span class="str">'Hello!'</span> }],
+});<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Zed Editor</h5>
+        <div class="code-block"><span class="cmt">// In ~/.config/zed/settings.json:</span>
+{
+  <span class="kw">"language_models"</span>: {
+    <span class="kw">"openai"</span>: {
+      <span class="kw">"api_url"</span>: <span class="str">"http://YOUR_VPS_IP:1430/v1"</span>,
+      <span class="kw">"api_key"</span>: <span class="str">"sk-xxxxx"</span>,
+      <span class="kw">"available_models"</span>: [
+        { <span class="kw">"name"</span>: <span class="str">"claude-sonnet-4.5"</span>, <span class="kw">"max_tokens"</span>: <span class="num">64000</span> },
+        { <span class="kw">"name"</span>: <span class="str">"gpt-5.4"</span>, <span class="kw">"max_tokens"</span>: <span class="num">64000</span> },
+        { <span class="kw">"name"</span>: <span class="str">"claude-opus-4.6"</span>, <span class="kw">"max_tokens"</span>: <span class="num">64000</span> }
+      ]
+    }
+  }
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; OpenCode (opencode.json)</h5>
+        <div class="code-block">{
+  <span class="kw">"provider"</span>: {
+    <span class="kw">"enowx"</span>: {
+      <span class="kw">"npm"</span>: <span class="str">"@ai-sdk/openai-compatible"</span>,
+      <span class="kw">"name"</span>: <span class="str">"enowXAI"</span>,
+      <span class="kw">"options"</span>: {
+        <span class="kw">"baseURL"</span>: <span class="str">"http://YOUR_VPS_IP:1430/v1"</span>,
+        <span class="kw">"apiKey"</span>: <span class="str">"sk-xxxxx"</span>
+      },
+      <span class="kw">"models"</span>: {
+        <span class="kw">"claude-sonnet-4.5"</span>: {
+          <span class="kw">"name"</span>: <span class="str">"Claude Sonnet 4.5"</span>,
+          <span class="kw">"limit"</span>: { <span class="kw">"context"</span>: <span class="num">200000</span>, <span class="kw">"output"</span>: <span class="num">64000</span> }
+        },
+        <span class="kw">"claude-opus-4.6"</span>: {
+          <span class="kw">"name"</span>: <span class="str">"Claude Opus 4.6"</span>,
+          <span class="kw">"limit"</span>: { <span class="kw">"context"</span>: <span class="num">200000</span>, <span class="kw">"output"</span>: <span class="num">64000</span> }
+        },
+        <span class="kw">"gpt-5.4"</span>: {
+          <span class="kw">"name"</span>: <span class="str">"GPT-5.4"</span>,
+          <span class="kw">"limit"</span>: { <span class="kw">"context"</span>: <span class="num">200000</span>, <span class="kw">"output"</span>: <span class="num">64000</span> }
+        }
+      }
+    }
+  }
+}<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Claude Code</h5>
+        <div class="code-block"><span class="cmt"># Set environment variables:</span>
+<span class="kw">export</span> ANTHROPIC_BASE_URL=<span class="str">"http://YOUR_VPS_IP:1430"</span>
+<span class="kw">export</span> ANTHROPIC_API_KEY=<span class="str">"sk-xxxxx"</span>
+
+<span class="cmt"># Then run Claude Code normally:</span>
+claude<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Windsurf / Codeium</h5>
+        <div class="code-block"><span class="cmt">// In Windsurf Settings &gt; AI Provider:</span>
+<span class="kw">Provider</span>:  <span class="str">OpenAI Compatible</span>
+<span class="kw">API Key</span>:   <span class="str">sk-xxxxx</span>
+<span class="kw">Base URL</span>:  <span class="str">http://YOUR_VPS_IP:1430/v1</span>
+<span class="kw">Model</span>:     <span class="str">claude-sonnet-4.5</span><button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+
+      <div class="config-card">
+        <h5>&#x1f4bb; Python (requests)</h5>
+        <div class="code-block"><span class="kw">import</span> requests
+
+resp = requests.post(
+    <span class="str">"http://YOUR_VPS_IP:1430/v1/chat/completions"</span>,
+    headers={<span class="str">"Authorization"</span>: <span class="str">"Bearer sk-xxxxx"</span>},
+    json={
+        <span class="str">"model"</span>: <span class="str">"claude-sonnet-4.5"</span>,
+        <span class="str">"messages"</span>: [{<span class="str">"role"</span>: <span class="str">"user"</span>, <span class="str">"content"</span>: <span class="str">"Hello!"</span>}],
+        <span class="str">"stream"</span>: False
+    }
+)
+print(resp.json()[<span class="str">"choices"</span>][0][<span class="str">"message"</span>][<span class="str">"content"</span>])<button class="copy-btn" onclick="copyCode(this)">Copy</button></div>
+      </div>
+    </div>
+
+    <div class="docs-section">
+      <h3>&#x26a0; Rate Limits &amp; Error Codes</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code</th><th>Meaning</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">200</td><td>Success</td><td class="text-dim">Request completed successfully</td></tr>
+            <tr><td class="mono">400</td><td>Bad Request</td><td class="text-dim">Invalid request body or parameters</td></tr>
+            <tr><td class="mono">401</td><td>Unauthorized</td><td class="text-dim">Missing or invalid API key</td></tr>
+            <tr><td class="mono">403</td><td>Forbidden</td><td class="text-dim">API key lacks required permissions</td></tr>
+            <tr><td class="mono">429</td><td>Rate Limited</td><td class="text-dim">Too many requests. Retry after cooldown. Default: 60 req/min</td></tr>
+            <tr><td class="mono">500</td><td>Server Error</td><td class="text-dim">Internal proxy error</td></tr>
+            <tr><td class="mono">502</td><td>Bad Gateway</td><td class="text-dim">Upstream provider error. Account may be rotated automatically</td></tr>
+            <tr><td class="mono">503</td><td>Unavailable</td><td class="text-dim">No available accounts for the requested model tier</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast Container -->
+<div class="toast-container" id="toast-container"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════
+   enowXAI Dashboard — Complete Frontend
+   ═══════════════════════════════════════════════════════════════ */
+
+// ── State ──
+let state = {
+  accounts: [],
+  trashedAccounts: [],
+  currentFilter: 'all',
+  apiKey: null,
+  apiKeyId: null,
+  batchEventSource: null,
+  batchJobs: [],
+  batchRunning: false,
+};
+
+// Models state — must be declared early (before initDashboard calls loadModels)
+var loadedModels = { standard: [], max: [], wavespeed: [], gumloop: [] };
+
+// Logs state — must be declared early
+var logsTimer = null;
+var logsData = [];
+
+// ── Helpers ──
+function getAdminPassword() {
+  return localStorage.getItem('admin_pw') || '';
+}
+
+function adminHeaders() {
+  return {
+    'Authorization': 'Bearer ' + getAdminPassword(),
+    'Content-Type': 'application/json'
+  };
+}
+
+async function apiFetch(path, opts = {}) {
+  const url = path;
+  const res = await fetch(url, {
+    ...opts,
+    headers: { ...adminHeaders(), ...(opts.headers || {}) }
+  });
+  if (res.status === 401 || res.status === 403) {
+    localStorage.removeItem('admin_pw');
+    location.reload();
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  const ct = res.headers.get('content-type') || '';
+  if (ct.includes('application/json')) return res.json();
+  return res.text();
+}
+
+function toast(msg, type = 'info') {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.getElementById('toast-container').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300); }, 3500);
+}
+
+function relativeTime(dateStr) {
+  if (!dateStr) return '—';
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = Math.max(0, now - then);
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return s + 's ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + 'h ago';
+  const d = Math.floor(h / 24);
+  return d + 'd ago';
+}
+
+function escHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+function creditColor(pct) {
+  if (pct > 50) return 'green';
+  if (pct > 20) return 'orange';
+  if (pct > 0) return 'red';
+  return 'gray';
+}
+
+// ── Auth ──
+(function initAuth() {
+  const overlay = document.getElementById('auth-overlay');
+  const app = document.getElementById('app');
+  const pw = localStorage.getItem('admin_pw');
+
+  if (pw) {
+    overlay.style.display = 'none';
+    app.style.display = 'flex';
+    initDashboard();
+    return;
+  }
+
+  overlay.style.display = 'flex';
+  app.style.display = 'none';
+
+  const input = document.getElementById('auth-password');
+  const btn = document.getElementById('auth-submit');
+  const err = document.getElementById('auth-error');
+
+  async function tryAuth() {
+    const val = input.value.trim();
+    if (!val) return;
+    btn.disabled = true;
+    btn.textContent = 'Authenticating...';
+    err.style.display = 'none';
+    try {
+      const res = await fetch('/api/accounts', {
+        headers: { 'Authorization': 'Bearer ' + val }
+      });
+      if (res.ok || res.status === 200) {
+        localStorage.setItem('admin_pw', val);
+        overlay.style.display = 'none';
+        app.style.display = 'flex';
+        initDashboard();
+      } else {
+        throw new Error('bad');
+      }
+    } catch (e) {
+      err.style.display = 'block';
+      btn.disabled = false;
+      btn.textContent = 'Authenticate';
+      input.focus();
+    }
+  }
+
+  btn.addEventListener('click', tryAuth);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryAuth(); });
+  input.focus();
+})();
+
+// ── Dashboard Init ──
+function initDashboard() {
+  try { initTabs(); } catch(e) { console.error('initTabs:', e); }
+  try { loadApiKey(); } catch(e) { console.error('loadApiKey:', e); }
+  try { loadAccounts(); } catch(e) { console.error('loadAccounts:', e); }
+  try { loadModels(); } catch(e) { console.error('loadModels:', e); }
+  try { loadUsage(); } catch(e) { console.error('loadUsage:', e); }
+  try { loadLogs(); } catch(e) { console.error('loadLogs:', e); }
+  try { startLogsAutoRefresh(); } catch(e) { console.error('startLogsAutoRefresh:', e); }
+  try { loadBatchStatus(); } catch(e) { console.error('loadBatchStatus:', e); }
+  try { loadFilters(); } catch(e) { console.error('loadFilters:', e); }
+  try { loadCaptchaKey(); } catch(e) { console.error('loadCaptchaKey:', e); }
+  try { setupDocsHost(); } catch(e) { console.error('setupDocsHost:', e); }
+
+  var el;
+  el = document.getElementById('regen-key-btn'); if (el) el.addEventListener('click', regenerateApiKey);
+  el = document.getElementById('refresh-credits-btn'); if (el) el.addEventListener('click', refreshCredits);
+  el = document.getElementById('refresh-accounts-btn'); if (el) el.addEventListener('click', loadAccounts);
+  el = document.getElementById('api-key-box'); if (el) el.addEventListener('click', copyApiKey);
+  el = document.getElementById('batch-start-btn'); if (el) el.addEventListener('click', startBatch);
+  el = document.getElementById('batch-cancel-btn'); if (el) el.addEventListener('click', cancelBatch);
+
+  // Trash toggle
+  document.getElementById('trash-header').addEventListener('click', function() {
+    this.classList.toggle('open');
+    document.getElementById('trash-body').classList.toggle('open');
+  });
+
+  // Per-provider column filters
+  document.querySelectorAll('.acct-col-filters').forEach(filterBar => {
+    filterBar.addEventListener('click', e => {
+      if (!e.target.classList.contains('acct-col-filter')) return;
+      const provider = filterBar.dataset.provider;
+      filterBar.querySelectorAll('.acct-col-filter').forEach(b => b.classList.remove('active'));
+      e.target.classList.add('active');
+      acctColFilters[provider] = e.target.dataset.pfilter;
+      renderAccountColumn(provider);
+    });
+  });
+}
+
+// ── Tabs ──
+function initTabs() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+      // Load proxy data when proxy tab is activated
+      if (btn.dataset.tab === 'proxy') { loadProxies('api'); loadProxies('batch'); }
+      if (btn.dataset.tab === 'filter') loadFilters();
+    });
+  });
+}
+
+// ── API Key ──
+async function loadApiKey() {
+  try {
+    const data = await apiFetch('/api/keys');
+    const keys = Array.isArray(data) ? data : (data.keys || []);
+    if (keys.length > 0) {
+      state.apiKeyPrefix = keys[0].key_prefix || '';
+      state.apiKeyId = keys[0].id || keys[0]._id || '';
+      state.apiKey = '';  // Full key only available after regenerate
+      renderApiKey();
+    } else {
+      // Generate a default key
+      const res = await apiFetch('/api/keys/generate', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'default' })
+      });
+      state.apiKey = res.key || '';
+      state.apiKeyPrefix = res.key ? res.key.substring(0, 7) + '...' : '';
+      state.apiKeyId = res.id || res._id || '';
+      renderApiKey();
+      if (state.apiKey) {
+        copyToClipboard(state.apiKey).then(() => toast('New API key generated & copied!', 'success'));
+      }
+    }
+  } catch (e) {
+    document.getElementById('api-key-display').textContent = 'Error loading key';
+  }
+}
+
+function renderApiKey() {
+  const display = document.getElementById('api-key-display');
+  if (state.apiKey) {
+    // Full key available (just regenerated) — show masked but copyable
+    const masked = state.apiKey.substring(0, 6) + '••••' + state.apiKey.slice(-4);
+    display.textContent = masked;
+    display.title = 'Click to copy full key';
+  } else if (state.apiKeyPrefix) {
+    display.textContent = state.apiKeyPrefix;
+    display.title = 'Click Regenerate to get copyable key';
+  } else {
+    display.textContent = 'No key';
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;left:-9999px';
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand('copy');
+  document.body.removeChild(ta);
+}
+
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => { fallbackCopy(text); return true; });
+  }
+  fallbackCopy(text);
+  return Promise.resolve(true);
+}
+
+function copyApiKey() {
+  if (state.apiKey) {
+    copyToClipboard(state.apiKey).then(() => toast('API key copied!', 'success'));
+  } else {
+    toast('Click Regenerate to get a copyable key', 'info');
+  }
+}
+
+async function regenerateApiKey() {
+  if (!state.apiKeyId) return;
+  try {
+    const res = await apiFetch('/api/keys/' + state.apiKeyId + '/regenerate', { method: 'POST' });
+    state.apiKey = res.key || res.value || res.token || '';
+    state.apiKeyPrefix = state.apiKey ? state.apiKey.substring(0, 7) + '...' : state.apiKeyPrefix;
+    renderApiKey();
+    if (state.apiKey) {
+      copyToClipboard(state.apiKey).then(() => toast('New key copied to clipboard!', 'success'));
+    } else {
+      toast('API key regenerated', 'success');
+    }
+  } catch (e) {
+    toast('Failed to regenerate key: ' + e.message, 'error');
+  }
+}
+
+// ── Proxy Management (Split: API + Batch) ──
+var proxyDataApi = { proxies: [], enabled: false, smart_rotate: false };
+var proxyDataBatch = { proxies: [], enabled: false, smart_rotate: false };
+
+async function loadProxies(purpose) {
+  // If no purpose given, load both
+  if (!purpose) { loadProxies('api'); loadProxies('batch'); return; }
+  try {
+    const data = await apiFetch('/api/proxy?purpose=' + purpose);
+    if (purpose === 'api') {
+      proxyDataApi = data || { proxies: [], enabled: false, smart_rotate: false };
+      var toggle = document.getElementById('proxy-enable-api');
+      if (toggle) toggle.checked = !!proxyDataApi.enabled;
+      var smart = document.getElementById('proxy-smart-api');
+      if (smart) smart.checked = !!proxyDataApi.smart_rotate;
+      var badge = document.getElementById('proxy-status-badge-api');
+      if (badge) {
+        badge.textContent = proxyDataApi.enabled ? 'Enabled' : 'Disabled';
+        badge.className = 'badge ' + (proxyDataApi.enabled ? 'badge-active' : 'badge-exhausted');
+      }
+      renderProxies('api');
+    } else {
+      proxyDataBatch = data || { proxies: [], enabled: false, smart_rotate: false };
+      var toggle2 = document.getElementById('proxy-enable-batch');
+      if (toggle2) toggle2.checked = !!proxyDataBatch.enabled;
+      var smart2 = document.getElementById('proxy-smart-batch');
+      if (smart2) smart2.checked = !!proxyDataBatch.smart_rotate;
+      var badge2 = document.getElementById('proxy-status-badge-batch');
+      if (badge2) {
+        badge2.textContent = proxyDataBatch.enabled ? 'Enabled' : 'Disabled';
+        badge2.className = 'badge ' + (proxyDataBatch.enabled ? 'badge-active' : 'badge-exhausted');
+      }
+      renderProxies('batch');
+    }
+  } catch(e) {
+    console.error('loadProxies(' + purpose + '):', e);
+    var el = document.getElementById('proxy-table-' + purpose);
+    if (el) el.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load proxies: ' + escHtml(e.message) + '</td></tr>';
+  }
+}
+
+function proxyLatencyHtml(p) {
+  var lat = p.last_latency_ms;
+  var hasError = !!p.last_error;
+  var tested = lat !== -1 && lat !== null && lat !== undefined;
+  if (!tested && !hasError) return { latency: '<span class="latency-dot untested"></span><span class="text-muted">\u2014</span>', status: '<span class="proxy-status untested">\u2014 Untested</span>' };
+  if (hasError || lat === -1) return { latency: '<span class="latency-dot slow"></span><span style="color:var(--red);font-family:\'JetBrains Mono\',monospace;font-size:.78rem">FAIL</span>', status: '<span class="proxy-status fail">&#x2717; Failed</span>' };
+  var dotClass = lat < 500 ? 'fast' : lat <= 2000 ? 'medium' : 'slow';
+  var dotColor = lat < 500 ? 'var(--green)' : lat <= 2000 ? 'var(--orange)' : 'var(--red)';
+  return { latency: '<span class="latency-dot ' + dotClass + '"></span><span style="color:' + dotColor + ';font-family:\'JetBrains Mono\',monospace;font-size:.78rem">' + lat + 'ms</span>', status: '<span class="proxy-status ok">&#x2713; OK</span>' };
+}
+
+function renderProxies(purpose) {
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var tbody = document.getElementById('proxy-table-' + purpose);
+  if (!tbody) return;
+  var proxies = data.proxies || [];
+
+  // Update enable checkbox + badge
+  var enableCb = document.getElementById('proxy-enable-' + purpose);
+  var badge = document.getElementById('proxy-status-badge-' + purpose);
+  if (enableCb) enableCb.checked = !!data.enabled;
+  if (badge) {
+    badge.textContent = data.enabled ? 'Enabled' : 'Disabled';
+    badge.className = 'badge ' + (data.enabled ? 'badge-active' : 'badge-exhausted');
+  }
+
+  // Update mode dropdown + label
+  var modeSelect = document.getElementById('proxy-mode-' + purpose);
+  var modeLabel = document.getElementById('proxy-mode-current-' + purpose);
+  if (modeSelect) modeSelect.value = data.smart_rotate ? 'rotate' : 'sticky';
+  if (modeLabel) modeLabel.textContent = data.smart_rotate ? 'Smart Rotate' : 'Sticky';
+
+  if (proxies.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No proxies. Add above.</td></tr>';
+    return;
+  }
+  selectedProxies[purpose] = new Set();
+  updateSelCount(purpose);
+  tbody.innerHTML = proxies.map(function(p) {
+    var info = proxyLatencyHtml(p);
+    var isFailed = p.last_latency_ms === -1 && p.last_tested;
+    var rowCls = isFailed ? ' style="opacity:.6"' : '';
+    var typeBadge = (p.type || 'http').toUpperCase();
+    var chk = p.checked ? ' checked' : '';
+    return '<tr' + rowCls + '>' +
+      '<td><input type="checkbox" class="proxy-check" data-pid="' + p.id + '" onchange="onProxyRowCheck(\'' + p.id + '\',this.checked,\'' + purpose + '\')"' + chk + '></td>' +
+      '<td class="mono text-sm" style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(p.url) + '">' + escHtml(p.url) + '</td>' +
+      '<td><span class="badge badge-standard" style="font-size:.6rem;padding:1px 5px">' + typeBadge + '</span></td>' +
+      '<td class="text-sm">' + info.latency + '</td>' +
+      '<td>' + info.status + '</td>' +
+      '<td><div style="display:flex;gap:4px;align-items:center">' +
+        '<button class="btn btn-sm" onclick="testProxy(\'' + p.id + '\',\'' + purpose + '\')" title="Test">&#x1f9ea;</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="deleteProxy(\'' + p.id + '\',\'' + purpose + '\')" title="Delete" style="padding:2px 6px">&#x2716;</button>' +
+      '</div></td>' +
+    '</tr>';
+  }).join('');
+}
+
+function onProxyRowCheck(id, checked, purpose) {
+  // Update checked state in backend
+  apiFetch('/api/proxy/' + id + '/check', {
+    method: 'POST',
+    body: JSON.stringify({ checked: checked, purpose: purpose })
+  }).catch(function(e) { toast('Failed: ' + e.message, 'error'); });
+  // Track selection for delete
+  var sid = String(id);
+  if (checked) { selectedProxies[purpose].add(sid); } else { selectedProxies[purpose].delete(sid); }
+  updateSelCount(purpose);
+}
+
+function updateSelCount(purpose) {
+  var cnt = selectedProxies[purpose] ? selectedProxies[purpose].size : 0;
+  var span = document.getElementById('sel-count-' + purpose);
+  var btn = document.getElementById('btn-del-sel-' + purpose);
+  if (span) span.textContent = cnt;
+  if (btn) btn.disabled = cnt === 0;
+}
+
+function selectAllProxies(purpose) {
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var proxies = data.proxies || [];
+  selectedProxies[purpose] = new Set();
+  proxies.forEach(function(p) { selectedProxies[purpose].add(String(p.id)); });
+  var tbody = document.getElementById('proxy-table-' + purpose);
+  if (tbody) tbody.querySelectorAll('.proxy-check').forEach(function(cb) { cb.checked = true; });
+  // Also check all in backend
+  proxies.forEach(function(p) {
+    if (!p.checked) {
+      apiFetch('/api/proxy/' + p.id + '/check', {
+        method: 'POST', body: JSON.stringify({ checked: true, purpose: purpose })
+      }).catch(function(){});
+    }
+  });
+  updateSelCount(purpose);
+}
+
+function deselectAllProxies(purpose) {
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var proxies = data.proxies || [];
+  selectedProxies[purpose] = new Set();
+  var tbody = document.getElementById('proxy-table-' + purpose);
+  if (tbody) tbody.querySelectorAll('.proxy-check').forEach(function(cb) { cb.checked = false; });
+  proxies.forEach(function(p) {
+    if (p.checked) {
+      apiFetch('/api/proxy/' + p.id + '/check', {
+        method: 'POST', body: JSON.stringify({ checked: false, purpose: purpose })
+      }).catch(function(){});
+    }
+  });
+  updateSelCount(purpose);
+}
+
+async function setProxyEnabled(purpose, enabled) {
+  try {
+    if (purpose === 'api') {
+      await apiFetch('/api/proxy/toggle', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) });
+    } else {
+      await apiFetch('/api/proxy/batch-toggle', { method: 'POST', body: JSON.stringify({ enabled: !!enabled }) });
+    }
+    var badge = document.getElementById('proxy-status-badge-' + purpose);
+    if (badge) {
+      badge.textContent = enabled ? 'Enabled' : 'Disabled';
+      badge.className = 'badge ' + (enabled ? 'badge-active' : 'badge-exhausted');
+    }
+    toast((purpose === 'api' ? 'API' : 'Batch') + ' proxy ' + (enabled ? 'enabled' : 'disabled'), 'success');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function applyProxyMode(purpose) {
+  var select = document.getElementById('proxy-mode-' + purpose);
+  var mode = select.value;
+  var isRotate = mode === 'rotate';
+  try {
+    await apiFetch('/api/proxy/smart-rotate', {
+      method: 'POST',
+      body: JSON.stringify({ purpose: purpose, enabled: isRotate })
+    });
+    var label = document.getElementById('proxy-mode-current-' + purpose);
+    if (label) label.textContent = isRotate ? 'Smart Rotate' : 'Sticky';
+    toast('Mode set to ' + (isRotate ? 'Smart Rotate' : 'Sticky'), 'success');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+function showProxyModal() {
+  var m = document.getElementById('proxy-add-modal');
+  m.style.display = 'flex';
+  document.getElementById('proxy-modal-title').textContent = 'Testing Proxies...';
+  document.getElementById('proxy-modal-progress').textContent = '';
+  document.getElementById('proxy-modal-results').innerHTML = '';
+  document.getElementById('proxy-modal-summary').style.display = 'none';
+  document.getElementById('proxy-modal-close').style.display = 'none';
+}
+function closeProxyModal() {
+  document.getElementById('proxy-add-modal').style.display = 'none';
+}
+function updateProxyModal(current, total, results) {
+  document.getElementById('proxy-modal-progress').textContent = 'Testing ' + current + ' / ' + total + '...';
+  var html = '';
+  results.forEach(function(r) {
+    if (r.ok) {
+      html += '<div style="color:#22c55e;padding:2px 0">&#x2713; ' + escHtml(r.url) + ' <span style="color:#888">(' + r.latency_ms + 'ms)</span></div>';
+    } else {
+      html += '<div style="color:#ef4444;padding:2px 0">&#x2717; ' + escHtml(r.url) + ' <span style="color:#888">' + escHtml(r.error || 'timeout') + '</span></div>';
+    }
+  });
+  document.getElementById('proxy-modal-results').innerHTML = html;
+}
+function finalizeProxyModal(added, failed) {
+  document.getElementById('proxy-modal-title').textContent = 'Done';
+  document.getElementById('proxy-modal-progress').textContent = '';
+  document.getElementById('proxy-modal-ok').innerHTML = '&#x2713; ' + added.length + ' added';
+  document.getElementById('proxy-modal-fail').innerHTML = '&#x2717; ' + failed.length + ' failed';
+  document.getElementById('proxy-modal-summary').style.display = 'block';
+  document.getElementById('proxy-modal-close').style.display = 'inline-block';
+}
+
+async function addProxy(purpose) {
+  purpose = purpose || 'api';
+  var textarea = document.getElementById('proxy-urls-' + purpose);
+  var urls = textarea.value.trim();
+  if (!urls) { toast('Enter proxy URL(s)', 'error'); return; }
+  var lines = urls.split('\n').map(function(l){return l.trim()}).filter(Boolean);
+  if (!lines.length) return;
+
+  showProxyModal();
+  try {
+    var data = await apiFetch('/api/proxy/add', {
+      method: 'POST',
+      body: JSON.stringify({ urls: urls, purpose: purpose })
+    });
+    var added = data.added || [];
+    var failed = data.failed || [];
+    var allResults = added.map(function(a){ return {ok:true, url:a.url, latency_ms:a.latency_ms||0}; })
+      .concat(failed.map(function(f){ return {ok:false, url:f.url, error:f.error||'failed'}; }));
+    updateProxyModal(lines.length, lines.length, allResults);
+    finalizeProxyModal(added, failed);
+    textarea.value = '';
+    await loadProxies(purpose);
+  } catch(e) {
+    document.getElementById('proxy-modal-title').textContent = 'Error';
+    document.getElementById('proxy-modal-progress').textContent = e.message;
+    document.getElementById('proxy-modal-close').style.display = 'inline-block';
+  }
+}
+
+// Track selected proxy IDs per purpose
+var selectedProxies = { api: new Set(), batch: new Set() };
+
+function toggleSelectAll(purpose, checked) {
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var proxies = data.proxies || [];
+  var set = selectedProxies[purpose];
+  set.clear();
+  if (checked) {
+    proxies.forEach(function(p) { set.add(String(p.id)); });
+  }
+  var tbody = document.getElementById('proxy-table-' + purpose);
+  if (tbody) {
+    tbody.querySelectorAll('.proxy-check').forEach(function(cb) { cb.checked = checked; });
+  }
+}
+
+function toggleProxySelect(id, checked, purpose) {
+  var set = selectedProxies[purpose];
+  var sid = String(id);
+  if (checked) { set.add(sid); } else { set.delete(sid); }
+}
+
+async function deleteFailedProxies(purpose) {
+  if (!confirm('Delete all failed/timeout proxies?')) return;
+  try {
+    var data = await apiFetch('/api/proxy/delete-failed', {
+      method: 'POST',
+      body: JSON.stringify({ purpose: purpose })
+    });
+    toast(data.deleted + ' failed proxy(s) deleted', 'success');
+    await loadProxies(purpose);
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function deleteSelectedProxies(purpose) {
+  var ids = Array.from(selectedProxies[purpose]);
+  if (ids.length === 0) { toast('No proxies selected', 'error'); return; }
+  if (!confirm('Delete ' + ids.length + ' selected proxy(s)?')) return;
+  try {
+    var data = await apiFetch('/api/proxy/delete-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ ids: ids })
+    });
+    selectedProxies[purpose].clear();
+    toast(data.deleted + ' proxy(s) deleted', 'success');
+    await loadProxies(purpose);
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+// ── Test All per purpose ──
+var _proxyTestAbort = false;
+
+async function testAllProxiesPurpose(purpose) {
+  _proxyTestAbort = false;
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var proxies = (data.proxies || []).filter(function(p) { return p.active !== false; });
+  if (!proxies.length) { toast('No active proxies to test', 'error'); return; }
+
+  showProxyModal();
+  document.getElementById('proxy-modal-title').textContent = 'Testing ' + proxies.length + ' proxies...';
+  // Show stop button
+  var closeBtn = document.getElementById('proxy-modal-close');
+  closeBtn.style.display = 'inline-block';
+  closeBtn.textContent = 'Stop';
+  closeBtn.onclick = function() { _proxyTestAbort = true; closeBtn.textContent = 'Stopping...'; closeBtn.disabled = true; };
+
+  var results = [];
+  var ok = 0, fail = 0;
+
+  // Test proxies in parallel batches of 5
+  var batchSize = 5;
+  for (var i = 0; i < proxies.length; i += batchSize) {
+    if (_proxyTestAbort) break;
+    var batch = proxies.slice(i, i + batchSize);
+    var promises = batch.map(function(p) {
+      return apiFetch('/api/proxy/' + p.id + '/test', { method: 'POST' })
+        .then(function(r) { return { ok: r.ok, url: p.url, latency_ms: r.latency_ms || 0, error: r.error || '', id: p.id }; })
+        .catch(function(e) { return { ok: false, url: p.url, latency_ms: -1, error: e.message, id: p.id }; });
+    });
+    var batchResults = await Promise.all(promises);
+    for (var j = 0; j < batchResults.length; j++) {
+      results.push(batchResults[j]);
+      if (batchResults[j].ok) ok++; else fail++;
+    }
+    updateProxyModal(results.length, proxies.length, results);
+    document.getElementById('proxy-modal-progress').textContent = 'Tested ' + results.length + ' / ' + proxies.length + ' (' + ok + ' ok, ' + fail + ' fail)';
+  }
+
+  // Finalize
+  document.getElementById('proxy-modal-title').textContent = _proxyTestAbort ? 'Stopped' : 'Done';
+  document.getElementById('proxy-modal-ok').innerHTML = '&#x2713; ' + ok + ' ok';
+  document.getElementById('proxy-modal-fail').innerHTML = '&#x2717; ' + fail + ' failed';
+  document.getElementById('proxy-modal-summary').style.display = 'block';
+  closeBtn.textContent = 'Close';
+  closeBtn.disabled = false;
+  closeBtn.onclick = function() { closeProxyModal(); };
+  await loadProxies(purpose);
+}
+
+// ── Edit All ──
+var _editPurpose = 'api';
+
+function editAllProxies(purpose) {
+  _editPurpose = purpose;
+  var data = purpose === 'api' ? proxyDataApi : proxyDataBatch;
+  var proxies = data.proxies || [];
+  var urls = proxies.map(function(p) { return p.url; }).join('\n');
+  document.getElementById('proxy-edit-textarea').value = urls;
+  document.getElementById('proxy-edit-purpose-label').textContent = '(' + purpose + ')';
+  document.getElementById('proxy-edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+  document.getElementById('proxy-edit-modal').style.display = 'none';
+}
+
+async function saveEditProxies() {
+  var textarea = document.getElementById('proxy-edit-textarea');
+  var urls = textarea.value.trim();
+  var purpose = _editPurpose;
+  closeEditModal();
+  showProxyModal();
+  try {
+    var data = await apiFetch('/api/proxy/edit-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ urls: urls, purpose: purpose })
+    });
+    var added = data.added || [];
+    var failed = data.failed || [];
+    var allResults = added.map(function(a) { return { ok: true, url: a.url, latency_ms: a.latency_ms || 0 }; })
+      .concat(failed.map(function(f) { return { ok: false, url: f.url, error: f.error || 'failed' }; }));
+    if (allResults.length > 0) {
+      updateProxyModal(allResults.length, allResults.length, allResults);
+    } else {
+      document.getElementById('proxy-modal-progress').textContent = 'No new proxies to test.';
+    }
+    var kept = data.kept || 0;
+    var deleted = data.deleted || 0;
+    document.getElementById('proxy-modal-title').textContent = 'Edit Complete';
+    document.getElementById('proxy-modal-ok').innerHTML = '&#x2713; ' + added.length + ' added, ' + kept + ' kept';
+    document.getElementById('proxy-modal-fail').innerHTML = '&#x2717; ' + failed.length + ' failed, ' + deleted + ' removed';
+    document.getElementById('proxy-modal-summary').style.display = 'block';
+    document.getElementById('proxy-modal-close').style.display = 'inline-block';
+    await loadProxies(purpose);
+  } catch(e) {
+    document.getElementById('proxy-modal-title').textContent = 'Error';
+    document.getElementById('proxy-modal-progress').textContent = e.message;
+    document.getElementById('proxy-modal-close').style.display = 'inline-block';
+  }
+}
+
+async function deleteProxy(id, purpose) {
+  if (!confirm('Delete this proxy?')) return;
+  try {
+    await apiFetch('/api/proxy/' + id, { method: 'DELETE' });
+    toast('Proxy deleted', 'success');
+    await loadProxies(purpose || 'api');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function testProxy(id, purpose) {
+  try {
+    toast('Testing proxy...', 'info');
+    var data = await apiFetch('/api/proxy/' + id + '/test', { method: 'POST' });
+    if (data.ok) {
+      toast('Proxy OK \u2014 ' + data.latency_ms + 'ms', 'success');
+    } else {
+      toast('Proxy failed: ' + (data.error || 'unknown'), 'error');
+    }
+    await loadProxies(purpose || 'api');
+  } catch(e) { toast('Test failed: ' + e.message, 'error'); }
+}
+
+async function testAllProxies() {
+  var btn = document.getElementById('proxy-test-all-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="loading-spinner" style="width:14px;height:14px;border-width:1.5px;display:inline-block;vertical-align:middle"></div> Testing...';
+  try {
+    var data = await apiFetch('/api/proxy/test-all', { method: 'POST' });
+    var results = data.results || [];
+    var ok = results.filter(function(r) { return r.ok; }).length;
+    var fail = results.length - ok;
+    toast(ok + ' passed, ' + fail + ' failed', ok > 0 ? 'success' : 'error');
+    loadProxies('api');
+    loadProxies('batch');
+  } catch(e) { toast('Test all failed: ' + e.message, 'error'); }
+  btn.disabled = false;
+  btn.innerHTML = '&#x1f9ea; Test All';
+}
+
+async function toggleProxyActive(id, active, purpose) {
+  try {
+    await apiFetch('/api/proxy/' + id + '/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ active: !!active })
+    });
+    toast('Proxy ' + (active ? 'activated' : 'deactivated'), 'success');
+    await loadProxies(purpose || 'api');
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+// ── Filter Management ──
+var filterData = [];
+
+async function loadFilters() {
+  try {
+    var data = await apiFetch('/api/filters');
+    filterData = (data && data.filters) ? data.filters : [];
+    renderFilters();
+  } catch(e) {
+    document.getElementById('filter-tbody').innerHTML =
+      '<tr><td colspan="7" class="empty-state">Failed to load: ' + escHtml(e.message) + '</td></tr>';
+  }
+}
+
+function renderFilters() {
+  var total = filterData.length;
+  var active = filterData.filter(function(f){ return f.enabled; }).length;
+  var totalHits = filterData.reduce(function(sum, f){ return sum + (f.hit_count || 0); }, 0);
+  var el;
+  el = document.getElementById('filter-card-total'); if (el) el.textContent = total;
+  el = document.getElementById('filter-card-active'); if (el) el.textContent = active;
+  el = document.getElementById('filter-card-hits'); if (el) el.textContent = totalHits;
+
+  var tbody = document.getElementById('filter-tbody');
+  if (!tbody) return;
+  if (filterData.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No filter rules. Click "Seed Defaults" to add common rules.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filterData.map(function(f) {
+    var enabled = f.enabled ? 'checked' : '';
+    var findDisplay = escHtml(f.find_text || '');
+    var replaceDisplay = f.replace_text ? escHtml(f.replace_text) : '<span style="color:var(--text-muted);font-style:italic;font-size:.78rem">(remove)</span>';
+    var typeBadge = f.is_regex
+      ? '<span class="badge" style="background:var(--purple-dim);color:var(--purple)">Regex</span>'
+      : '<span class="badge badge-standard">Text</span>';
+    var desc = escHtml(f.description || '\u2014');
+    var hits = f.hit_count || 0;
+
+    return '<tr' + (f.enabled ? '' : ' style="opacity:.5"') + '>' +
+      '<td><label class="proxy-active-toggle"><input type="checkbox" ' + enabled + ' onchange="toggleFilterRule(' + f.id + ',this.checked)"><span class="slider"></span></label></td>' +
+      '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:\'JetBrains Mono\',monospace;font-size:.8rem" title="' + findDisplay + '">' + findDisplay + '</td>' +
+      '<td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:\'JetBrains Mono\',monospace;font-size:.8rem" title="' + escHtml(f.replace_text || '') + '">' + replaceDisplay + '</td>' +
+      '<td>' + typeBadge + '</td>' +
+      '<td class="text-dim text-sm">' + desc + '</td>' +
+      '<td class="mono text-sm">' + hits + '</td>' +
+      '<td><div class="inline-flex gap-sm">' +
+        '<button class="btn btn-sm" onclick="editFilterRule(' + f.id + ')" title="Edit">&#x270f;</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="deleteFilterRule(' + f.id + ')" title="Delete">&#x2716;</button>' +
+      '</div></td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function addFilterRule() {
+  var find = document.getElementById('filter-add-find').value.trim();
+  if (!find) { toast('Find text is required', 'error'); return; }
+  var replace = document.getElementById('filter-add-replace').value;
+  var desc = document.getElementById('filter-add-desc').value.trim();
+  var isRegex = document.getElementById('filter-add-regex').checked;
+  try {
+    await apiFetch('/api/filters', {
+      method: 'POST',
+      body: JSON.stringify({ find_text: find, replace_text: replace, is_regex: isRegex, description: desc })
+    });
+    document.getElementById('filter-add-find').value = '';
+    document.getElementById('filter-add-replace').value = '';
+    document.getElementById('filter-add-desc').value = '';
+    document.getElementById('filter-add-regex').checked = false;
+    toast('Filter rule added', 'success');
+    loadFilters();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function toggleFilterRule(id, enabled) {
+  try {
+    await apiFetch('/api/filters/' + id + '/toggle', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: !!enabled })
+    });
+    loadFilters();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function deleteFilterRule(id) {
+  if (!confirm('Delete this filter rule?')) return;
+  try {
+    await apiFetch('/api/filters/' + id, { method: 'DELETE' });
+    toast('Filter deleted', 'success');
+    loadFilters();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+function editFilterRule(id) {
+  var rule = filterData.find(function(f){ return f.id === id; });
+  if (!rule) return;
+  var modalHtml = '<div class="modal-overlay" id="filter-edit-modal" onclick="if(event.target===this)closeFilterEditModal()">' +
+    '<div class="modal-box" style="width:520px">' +
+    '<div class="modal-header"><h3>Edit Filter Rule</h3><button class="modal-close" onclick="closeFilterEditModal()">&#x2715;</button></div>' +
+    '<div class="modal-body">' +
+      '<div style="display:flex;flex-direction:column;gap:.75rem">' +
+        '<div><label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;display:block;margin-bottom:.25rem">Find</label>' +
+          '<input type="text" id="filter-edit-find" value="' + escHtml(rule.find_text) + '" style="width:100%;padding:.5rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:\'JetBrains Mono\',monospace;font-size:.82rem;outline:none"></div>' +
+        '<div><label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;display:block;margin-bottom:.25rem">Replace</label>' +
+          '<input type="text" id="filter-edit-replace" value="' + escHtml(rule.replace_text) + '" style="width:100%;padding:.5rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-family:\'JetBrains Mono\',monospace;font-size:.82rem;outline:none"></div>' +
+        '<div><label style="font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;color:var(--text-muted);font-weight:600;display:block;margin-bottom:.25rem">Description</label>' +
+          '<input type="text" id="filter-edit-desc" value="' + escHtml(rule.description || '') + '" style="width:100%;padding:.5rem .65rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;outline:none"></div>' +
+        '<div style="display:flex;align-items:center;gap:.4rem"><label style="display:flex;align-items:center;gap:.35rem;font-size:.85rem;color:var(--text-dim);cursor:pointer"><input type="checkbox" id="filter-edit-regex" ' + (rule.is_regex ? 'checked' : '') + '> Regex pattern</label></div>' +
+        '<div style="display:flex;gap:.5rem;justify-content:flex-end;margin-top:.5rem">' +
+          '<button class="btn" onclick="closeFilterEditModal()">Cancel</button>' +
+          '<button class="btn btn-accent" onclick="saveFilterEdit(' + id + ')">Save</button>' +
+        '</div>' +
+      '</div>' +
+    '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+}
+
+function closeFilterEditModal() {
+  var modal = document.getElementById('filter-edit-modal');
+  if (modal) modal.remove();
+}
+
+async function saveFilterEdit(id) {
+  var find = document.getElementById('filter-edit-find').value.trim();
+  var replace = document.getElementById('filter-edit-replace').value;
+  var desc = document.getElementById('filter-edit-desc').value.trim();
+  var isRegex = document.getElementById('filter-edit-regex').checked;
+  if (!find) { toast('Find text is required', 'error'); return; }
+  try {
+    await apiFetch('/api/filters/' + id, {
+      method: 'PUT',
+      body: JSON.stringify({ find_text: find, replace_text: replace, description: desc, is_regex: isRegex })
+    });
+    closeFilterEditModal();
+    toast('Filter updated', 'success');
+    loadFilters();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function seedFilters() {
+  var force = filterData.length > 0
+    ? confirm('This will DELETE all existing rules and replace with defaults. Continue?')
+    : true;
+  try {
+    var data = await apiFetch('/api/filters/seed', {
+      method: 'POST',
+      body: JSON.stringify({ force: force })
+    });
+    var count = data.seeded || 0;
+    toast('Seeded ' + count + ' default rule(s)', count > 0 ? 'success' : 'info');
+    loadFilters();
+  } catch(e) { toast('Seed failed: ' + e.message, 'error'); }
+}
+
+async function refreshCredits() {
+  try {
+    document.getElementById('refresh-credits-btn').disabled = true;
+    await apiFetch('/api/accounts/refresh-credits');
+    toast('Credits refreshed', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Failed to refresh credits: ' + e.message, 'error');
+  } finally {
+    document.getElementById('refresh-credits-btn').disabled = false;
+  }
+}
+
+// ── Accounts ──
+async function loadAccounts() {
+  try {
+    const data = await apiFetch('/api/accounts');
+    // API returns {accounts: {active:[], failed:[], trash:[], banned:[]}, total, active, failed, trash, sticky}
+    const groups = data.accounts || {};
+    const active = Array.isArray(groups.active) ? groups.active : [];
+    const failed = Array.isArray(groups.failed) ? groups.failed : [];
+    const banned = Array.isArray(groups.banned) ? groups.banned : [];
+    const trash = Array.isArray(groups.trash) ? groups.trash : [];
+    // Flatten all non-trash into state.accounts with proper status
+    state.accounts = [
+      ...active.map(a => ({...a, status: 'active'})),
+      ...failed.map(a => ({...a, status: 'failed'})),
+      ...banned.map(a => ({...a, status: 'banned'})),
+    ];
+    state.trashedAccounts = trash;
+    // Store sticky account IDs: {standard: id, max: id, wavespeed: id}
+    state.sticky = data.sticky || {};
+    // Count provider-level statuses across all accounts
+    var countActive = 0, countFailed = 0, countBanned = 0, countExhausted = 0;
+    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status'];
+    state.accounts.forEach(function(a) {
+      var hasAnyOk = false;
+      var hasAnyFailed = false;
+      var hasAnyBanned = false;
+      var hasAnyExhausted = false;
+      providerCols.forEach(function(col) {
+        var s = (a[col] || '').toLowerCase();
+        if (s === 'ok') hasAnyOk = true;
+        if (s === 'failed') hasAnyFailed = true;
+        if (s === 'banned') hasAnyBanned = true;
+        if (s === 'exhausted' || s === 'rate_limited') hasAnyExhausted = true;
+      });
+      if (hasAnyOk) countActive++;
+      if (hasAnyFailed && !hasAnyOk) countFailed++;
+      if (hasAnyBanned) countBanned++;
+      if (hasAnyExhausted) countExhausted++;
+    });
+    renderAccountCards({
+      active: countActive,
+      failed: countFailed,
+      banned: countBanned,
+      exhausted: countExhausted,
+      total: data.total ?? state.accounts.length
+    });
+    renderAccounts();
+    renderTrash();
+  } catch (e) {
+    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = '<div class="acct-col-empty">Failed to load: ' + escHtml(e.message) + '</div>';
+    });
+  }
+}
+
+function renderAccountCards(apiCounts) {
+  // Use API-provided counts directly instead of counting local array (Issue 5)
+  const counts = apiCounts || { active: 0, failed: 0, banned: 0, exhausted: 0, total: 0 };
+  document.getElementById('card-active').textContent = counts.active;
+  document.getElementById('card-failed').textContent = counts.failed;
+  document.getElementById('card-banned').textContent = counts.banned;
+  document.getElementById('card-exhausted').textContent = counts.exhausted;
+  document.getElementById('card-total').textContent = counts.total;
+}
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diff = then - now;
+  if (isNaN(diff)) return null;
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+// ── Per-provider column filter state ──
+var acctColFilters = { kiro: 'all', cb: 'all', ws: 'all', gl: 'all' };
+var acctSearchQuery = '';
+
+function onAccountSearch(query) {
+  acctSearchQuery = (query || '').trim().toLowerCase();
+  renderAccounts();
+}
+
+function renderAccounts() {
+  renderAccountColumn('kiro');
+  renderAccountColumn('cb');
+  renderAccountColumn('ws');
+  renderAccountColumn('gl');
+}
+
+function getProviderAccounts(provider) {
+  return state.accounts.filter(a => {
+    if (provider === 'kiro') {
+      const s = (a.kiro_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'cb') {
+      const s = (a.cb_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'ws') {
+      const s = (a.ws_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'gl') {
+      const s = (a.gl_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
+    }
+    return false;
+  });
+}
+
+function getProviderStatus(a, provider) {
+  if (provider === 'kiro') return (a.kiro_status || 'none').toLowerCase();
+  if (provider === 'cb') return (a.cb_status || 'none').toLowerCase();
+  if (provider === 'ws') return (a.ws_status || 'none').toLowerCase();
+  if (provider === 'gl') return (a.gl_status || 'none').toLowerCase();
+  return 'none';
+}
+
+function normalizeStatus(s) {
+  if (s === 'ok') return 'active';
+  if (s === 'error' || s === 'failed') return 'failed';
+  if (s === 'expired') return 'exhausted';
+  if (s === 'rate_limited') return 'exhausted';
+  return s;
+}
+
+function getProviderVerified(a, provider) {
+  if (provider === 'kiro') return parseInt(a.kiro_verified) || 0;
+  if (provider === 'cb') return parseInt(a.cb_verified) || 0;
+  if (provider === 'ws') return parseInt(a.ws_verified) || 0;
+  if (provider === 'gl') return parseInt(a.gl_verified) || 0;
+  return 0;
+}
+
+function getProviderTestError(a, provider) {
+  if (provider === 'kiro') return a.kiro_test_error || '';
+  if (provider === 'cb') return a.cb_test_error || '';
+  if (provider === 'ws') return a.ws_test_error || '';
+  if (provider === 'gl') return a.gl_test_error || '';
+  return '';
+}
+
+function getProviderApiName(provider) {
+  if (provider === 'kiro') return 'kiro';
+  if (provider === 'cb') return 'codebuddy';
+  if (provider === 'ws') return 'wavespeed';
+  if (provider === 'gl') return 'gumloop';
+  return provider;
+}
+
+function isExhaustedOrBanned(normStatus) {
+  return normStatus === 'exhausted' || normStatus === 'banned' || normStatus === 'failed' || normStatus === 'rate_limited';
+}
+
+function getStickyIdForProvider(provider) {
+  var sticky = state.sticky || {};
+  if (provider === 'kiro') return sticky.standard || '';
+  if (provider === 'cb') return sticky.max || '';
+  if (provider === 'ws') return sticky.wavespeed || '';
+  if (provider === 'gl') return sticky.max_gl || '';
+  return '';
+}
+
+function getTierForProvider(provider) {
+  if (provider === 'kiro') return 'standard';
+  if (provider === 'cb') return 'max';
+  if (provider === 'ws') return 'wavespeed';
+  if (provider === 'gl') return 'max_gl';
+  return provider;
+}
+
+async function setStickyAccount(accountId, provider) {
+  var tier = getTierForProvider(provider);
+  try {
+    await apiFetch('/api/accounts/' + accountId + '/sticky/' + tier, { method: 'POST' });
+    toast('Set as active account for ' + provider.toUpperCase(), 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+function formatCreatedAt(dateStr) {
+  if (!dateStr) return '';
+  try {
+    var d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    var y = d.getFullYear();
+    var m = String(d.getMonth() + 1).padStart(2, '0');
+    var day = String(d.getDate()).padStart(2, '0');
+    var h = String(d.getHours()).padStart(2, '0');
+    var min = String(d.getMinutes()).padStart(2, '0');
+    return 'Added: ' + y + '-' + m + '-' + day + ' ' + h + ':' + min;
+  } catch(e) { return ''; }
+}
+
+function renderAccountColumn(provider) {
+  let allAccts = getProviderAccounts(provider);
+  const filter = acctColFilters[provider] || 'all';
+  let accts = allAccts;
+
+  // Apply search filter — show only matching, or all if no search
+  if (acctSearchQuery) {
+    accts = allAccts.filter(a => (a.email || '').toLowerCase().includes(acctSearchQuery));
+  }
+  if (filter === 'active') {
+    accts = allAccts.filter(a => normalizeStatus(getProviderStatus(a, provider)) === 'active');
+  } else if (filter === 'temporary') {
+    accts = allAccts.filter(a => {
+      const ns = normalizeStatus(getProviderStatus(a, provider));
+      return isExhaustedOrBanned(ns) && getProviderVerified(a, provider) === 0;
+    });
+  } else if (filter === 'fix') {
+    accts = allAccts.filter(a => {
+      const ns = normalizeStatus(getProviderStatus(a, provider));
+      return isExhaustedOrBanned(ns) && getProviderVerified(a, provider) === 1;
+    });
+  }
+
+  // Sort by created_at ASC (oldest first)
+  accts.sort(function(a, b) {
+    var ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+    var tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+    return ta - tb;
+  });
+
+  // Pin sticky account to top
+  var stickyId = getStickyIdForProvider(provider);
+  if (stickyId) {
+    var stickyIdx = accts.findIndex(function(a) { return (a.id || '') === stickyId; });
+    if (stickyIdx > 0) {
+      var stickyAcct = accts.splice(stickyIdx, 1)[0];
+      accts.unshift(stickyAcct);
+    }
+  }
+
+  // Update count
+  const countEl = document.getElementById('acct-count-' + provider);
+  if (countEl) countEl.textContent = allAccts.length;
+
+  const body = document.getElementById('acct-body-' + provider);
+  if (!body) return;
+
+  if (accts.length === 0) {
+    body.innerHTML = '<div class="acct-col-empty">No ' + (filter === 'all' ? '' : filter + ' ') + 'accounts</div>';
+    return;
+  }
+
+  body.innerHTML = accts.map(a => {
+    const email = a.email || '—';
+    const id = a.id || '';
+    const pStatus = getProviderStatus(a, provider);
+    const normStatus = normalizeStatus(pStatus);
+    const verified = getProviderVerified(a, provider);
+    const testError = getProviderTestError(a, provider);
+    const isBad = isExhaustedOrBanned(normStatus);
+    const isSticky = stickyId && id === stickyId;
+    let creditText = '', barPct = 0, barColor = 'gray';
+
+    if (provider === 'kiro') {
+      const remain = parseFloat(a.kiro_credits) || 0;
+      const total = parseFloat(a.kiro_credits_total) || 0;
+      if (total > 0) {
+        creditText = remain.toFixed(0) + '/' + total.toFixed(0);
+        barPct = Math.min(100, (remain / total) * 100);
+      } else if (pStatus === 'ok') {
+        creditText = 'Active';
+        barPct = 100;
+      } else {
+        creditText = pStatus;
+        barPct = 0;
+      }
+    } else if (provider === 'cb') {
+      const credits = parseFloat(a.cb_credits) || 0;
+      const total = 250;
+      creditText = credits.toFixed(1) + '/' + total;
+      barPct = Math.min(100, (credits / total) * 100);
+    } else if (provider === 'ws') {
+      const credits = parseFloat(a.ws_credits) || 0;
+      const total = 1.0;
+      creditText = '$' + credits.toFixed(2) + '/$' + total.toFixed(2);
+      barPct = Math.min(100, (credits / total) * 100);
+    } else if (provider === 'gl') {
+      if (pStatus === 'ok') {
+        creditText = a.gl_gummie_id ? 'Active' : 'No gummie';
+        barPct = a.gl_gummie_id ? 100 : 0;
+      } else {
+        creditText = pStatus;
+        barPct = 0;
+      }
+    }
+
+    if (barPct > 50) barColor = 'green';
+    else if (barPct > 20) barColor = 'orange';
+    else if (barPct > 0) barColor = 'red';
+    else barColor = 'gray';
+
+    // Verification label for exhausted/banned accounts
+    let verifyHtml = '';
+    if (isBad) {
+      if (verified === 1) {
+        verifyHtml = '<span class="acct-verify-label fix">&#x2620; Fix</span>';
+      } else {
+        verifyHtml = '<span class="acct-verify-label temporary">&#x23f3; Temporary</span>';
+      }
+    }
+
+    // Sticky badge
+    let stickyBadge = '';
+    if (isSticky) {
+      stickyBadge = '<span class="badge-sticky">ACTIVE</span>';
+    }
+
+    // Test error display
+    let testErrorHtml = '';
+    if (testError) {
+      const truncated = testError.length > 80 ? testError.substring(0, 80) + '...' : testError;
+      const isOk = testError.toLowerCase() === 'ok';
+      testErrorHtml = '<div class="acct-test-error ' + (isOk ? 'ok' : 'err') + '" title="' + escHtml(testError) + '" onclick="this.classList.toggle(\'expanded\')">' + escHtml(truncated) + '</div>';
+    }
+
+    // Created at display
+    let createdAtHtml = '';
+    var createdStr = formatCreatedAt(a.created_at);
+    if (createdStr) {
+      createdAtHtml = '<div class="acct-created">' + escHtml(createdStr) + '</div>';
+    }
+
+    // Action buttons
+    let actionsHtml = '';
+    var btns = '';
+    if (normStatus === 'active' && !isSticky) {
+      btns += '<button class="btn btn-sm" onclick="event.stopPropagation();setStickyAccount(\'' + id + '\',\'' + provider + '\')">&#x1f4cc; Use</button>';
+    }
+    if (isBad) {
+      if (verified === 0) {
+        btns += '<button class="btn btn-sm" onclick="event.stopPropagation();approveAccount(\'' + id + '\',\'' + getProviderApiName(provider) + '\')">&#x2705; Approve</button>';
+      }
+      btns += '<button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteAccount(\'' + id + '\')">&#x1f5d1; Delete</button>';
+    }
+    if (btns) {
+      actionsHtml = '<div class="acct-card-actions">' + btns + '</div>';
+    }
+
+    const cardClass = 'acct-card' + (isBad ? (verified === 1 ? ' fix' : ' temporary') : '');
+
+    return '<div class="' + cardClass + '">' +
+      '<div class="acct-card-top">' +
+        '<span class="acct-card-dot ' + normStatus + '"></span>' +
+        '<span class="acct-card-email" title="' + escHtml(email) + '">' + escHtml(email) + '</span>' +
+        stickyBadge +
+        verifyHtml +
+        '<span class="acct-card-badge ' + normStatus + '">' + (normStatus === 'active' ? '&#x2713;' : normStatus) + '</span>' +
+      '</div>' +
+      createdAtHtml +
+      '<div class="acct-card-credit">' +
+        '<span class="acct-card-credit-text">' + creditText + '</span>' +
+        '<div class="acct-card-bar"><div class="acct-card-bar-fill ' + barColor + '" style="width:' + barPct + '%"></div></div>' +
+      '</div>' +
+      testErrorHtml +
+      actionsHtml +
+    '</div>';
+  }).join('');
+}
+
+function renderTrash() {
+  const tbody = document.getElementById('trash-tbody');
+  const count = state.trashedAccounts.length;
+  document.getElementById('trash-count').textContent = count;
+
+  if (count === 0) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-state">No trashed accounts</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = state.trashedAccounts.map(a => {
+    const id = a.id || a._id || '';
+    const email = a.email || a.username || '—';
+    const status = (a.status || 'unknown').toLowerCase();
+    return '<tr>' +
+      '<td class="mono text-sm">' + escHtml(email) + '</td>' +
+      '<td><span class="badge badge-' + status + '">' + status + '</span></td>' +
+      '<td><button class="btn btn-sm" onclick="restoreAccount(\'' + id + '\')">&#x21a9; Restore</button></td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function retryAccount(id) {
+  try {
+    await apiFetch('/api/accounts/' + id + '/retry', { method: 'POST' });
+    toast('Retrying account...', 'success');
+    setTimeout(loadAccounts, 1000);
+  } catch (e) { toast('Retry failed: ' + e.message, 'error'); }
+}
+
+async function trashAccount(id) {
+  try {
+    await apiFetch('/api/accounts/' + id + '/trash', { method: 'POST' });
+    toast('Account trashed', 'success');
+    loadAccounts();
+  } catch (e) { toast('Trash failed: ' + e.message, 'error'); }
+}
+
+async function restoreAccount(id) {
+  try {
+    await apiFetch('/api/accounts/' + id + '/restore', { method: 'POST' });
+    toast('Account restored', 'success');
+    loadAccounts();
+  } catch (e) { toast('Restore failed: ' + e.message, 'error'); }
+}
+
+async function deleteAccount(id) {
+  if (!confirm('Permanently delete this account?')) return;
+  try {
+    await apiFetch('/api/accounts/' + id, { method: 'DELETE' });
+    toast('Account deleted', 'success');
+    loadAccounts();
+  } catch (e) { toast('Delete failed: ' + e.message, 'error'); }
+}
+
+// ── Account Verification Actions ──
+
+async function testBatchAccounts() {
+  const btn = document.getElementById('test-batch-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Testing...';
+  try {
+    const data = await apiFetch('/api/accounts/test-batch', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    const results = data.results || [];
+    const okCount = results.filter(r => r.test_ok).length;
+    const failCount = results.length - okCount;
+    toast('Test complete: ' + okCount + ' OK, ' + failCount + ' failed (' + results.length + ' total)', okCount > 0 ? 'success' : 'error');
+    await loadAccounts();
+  } catch (e) {
+    toast('Test batch failed: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.innerHTML = '&#x1f9ea; Test Batch';
+}
+
+async function approveAccount(id, provider) {
+  try {
+    await apiFetch('/api/accounts/' + id + '/approve/' + provider, { method: 'POST' });
+    toast('Account approved as fix', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Approve failed: ' + e.message, 'error');
+  }
+}
+
+async function approveAllAccounts() {
+  if (!confirm('Approve ALL temporary accounts as fix? This marks them as permanently exhausted/banned.')) return;
+  const btn = document.getElementById('approve-all-btn');
+  btn.disabled = true;
+  try {
+    const data = await apiFetch('/api/accounts/approve-all', {
+      method: 'POST',
+      body: JSON.stringify({})
+    });
+    const count = data.approved || 0;
+    toast('Approved ' + count + ' account(s) as fix', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Approve all failed: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+}
+
+async function deleteFixAccounts() {
+  if (!confirm('Delete ALL accounts where every provider is verified fix? This is permanent!')) return;
+  const btn = document.getElementById('delete-fix-btn');
+  btn.disabled = true;
+  try {
+    const data = await apiFetch('/api/accounts/delete-fix', { method: 'DELETE' });
+    const count = data.deleted || 0;
+    toast('Deleted ' + count + ' fix account(s)', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Delete fix failed: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+}
+
+// ── Models ──
+
+async function loadModels() {
+  const stdEl = document.getElementById('standard-models');
+  const maxEl = document.getElementById('max-models');
+  try {
+    const res = await fetch('/api/models', { headers: adminHeaders() });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    const models = (data && data.data) ? data.data : (Array.isArray(data) ? data : []);
+    const standard = [];
+    const max = [];
+    const wavespeed = [];
+    const gumloop = [];
+    for (let i = 0; i < models.length; i++) {
+      const m = models[i];
+      const id = m.id || m.name || '';
+      const tier = (m.tier || '').toLowerCase();
+      const owner = m.owned_by || m.provider || '';
+      const entry = { name: id, provider: owner, tier: tier };
+      if (tier === 'max_gl' || owner.toLowerCase() === 'gumloop') {
+        gumloop.push(entry);
+      } else if (tier === 'wavespeed' || owner.toLowerCase() === 'wavespeed') {
+        wavespeed.push(entry);
+      } else if (tier === 'max' || owner.toLowerCase() === 'codebuddy') {
+        max.push(entry);
+      } else {
+        standard.push(entry);
+      }
+    }
+    loadedModels.standard = standard;
+    loadedModels.max = max;
+    loadedModels.wavespeed = wavespeed;
+    loadedModels.gumloop = gumloop;
+    renderModelColumn('standard-models', standard, 'standard');
+    renderModelColumn('max-models', max, 'max');
+    renderModelColumn('wavespeed-models', wavespeed, 'wavespeed');
+    renderModelColumn('gumloop-models', gumloop, 'max_gl');
+  } catch (e) {
+    if (stdEl) stdEl.innerHTML = '<div class="empty-state">Failed to load models: ' + (e.message || e) + '</div>';
+    if (maxEl) maxEl.innerHTML = '<div class="empty-state">Failed to load models</div>';
+    console.error('loadModels error:', e);
+  }
+}
+
+function renderModelColumn(containerId, models, tier) {
+  const container = document.getElementById(containerId);
+  if (!models || models.length === 0) {
+    container.innerHTML = '<div class="empty-state">No models in this tier</div>';
+    return;
+  }
+  container.innerHTML = models.map(m => {
+    const isThinking = m.name.endsWith('-thinking');
+    const modelId = escHtml(m.name);
+    return '<div class="model-card" id="model-card-' + modelId + '">' +
+      '<div class="model-name">' + modelId + (isThinking ? ' <span style="color:var(--orange);font-size:.7rem">&#x1f4ad;</span>' : '') + '</div>' +
+      '<span class="badge badge-' + tier + '">' + (tier === 'standard' ? 'STD' : tier === 'max_gl' ? 'GL' : 'MAX') + '</span>' +
+      '<span class="model-provider">' + escHtml(m.provider) + '</span>' +
+      '<button class="btn btn-sm" onclick="testSingleModel(\'' + modelId + '\', this)" title="Test model" style="margin-left:auto;padding:.2rem .5rem;font-size:.7rem">Test</button>' +
+      '<span class="test-inline-result" id="test-result-' + modelId + '"></span>' +
+    '</div>';
+  }).join('');
+}
+
+// ── Test Models ──
+async function testSingleModel(modelName, btn) {
+  const resultEl = document.getElementById('test-result-' + modelName);
+  if (btn) btn.disabled = true;
+  if (resultEl) resultEl.innerHTML = '<div class="loading-spinner" style="width:12px;height:12px;border-width:1.5px"></div>';
+  try {
+    const data = await apiFetch('/api/test-model', {
+      method: 'POST',
+      body: JSON.stringify({ model: modelName })
+    });
+    const ok = data.status === 'ok' || data.success;
+    const latency = data.latency_ms || data.latency || 0;
+    const preview = (data.response || data.content || '').substring(0, 60);
+    if (resultEl) {
+      resultEl.innerHTML = (ok ? '<span class="status-ok">&#x2713;</span>' : '<span class="status-fail">&#x2717;</span>') +
+        ' <span>' + latency + 'ms</span>' +
+        (preview ? ' <span class="text-muted" style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:middle">' + escHtml(preview) + '</span>' : '');
+    }
+  } catch (e) {
+    if (resultEl) resultEl.innerHTML = '<span class="status-fail">&#x2717;</span> <span>' + escHtml(e.message).substring(0, 40) + '</span>';
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function testAllModels() {
+  const btn = document.getElementById('test-all-models-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<div class="loading-spinner" style="width:14px;height:14px;border-width:1.5px;display:inline-block;vertical-align:middle"></div> Testing...';
+
+  // Show modal
+  const allModels = [...loadedModels.standard, ...loadedModels.max];
+  let modalHtml = '<div class="modal-overlay" id="test-modal" onclick="if(event.target===this)closeTestModal()">' +
+    '<div class="modal-box">' +
+    '<div class="modal-header"><h3>&#x1f9ea; Test All Models (' + allModels.length + ')</h3><button class="modal-close" onclick="closeTestModal()">&#x2715;</button></div>' +
+    '<div class="modal-body" id="test-modal-body">' +
+    allModels.map(m => {
+      return '<div class="test-result-item" id="test-all-' + escHtml(m.name) + '">' +
+        '<div class="test-model">' + escHtml(m.name) + '</div>' +
+        '<span class="badge badge-' + (m.tier === 'max' ? 'max' : 'standard') + '">' + (m.tier === 'max' ? 'MAX' : 'STD') + '</span>' +
+        '<span class="test-latency" id="test-all-lat-' + escHtml(m.name) + '"><div class="loading-spinner" style="width:12px;height:12px;border-width:1.5px"></div></span>' +
+        '<span class="test-preview" id="test-all-prev-' + escHtml(m.name) + '">waiting...</span>' +
+      '</div>';
+    }).join('') +
+    '</div></div></div>';
+  document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+  try {
+    const data = await apiFetch('/api/test-all-models', { method: 'POST' });
+    const results = data.results || data || [];
+    (Array.isArray(results) ? results : []).forEach(r => {
+      const name = r.model || r.name || '';
+      const ok = r.status === 'ok' || r.success;
+      const latency = r.latency_ms || r.latency || 0;
+      const preview = (r.response || r.content || r.error || '').substring(0, 80);
+      const latEl = document.getElementById('test-all-lat-' + name);
+      const prevEl = document.getElementById('test-all-prev-' + name);
+      const rowEl = document.getElementById('test-all-' + name);
+      if (latEl) latEl.innerHTML = (ok ? '<span class="status-ok">&#x2713;</span>' : '<span class="status-fail">&#x2717;</span>') + ' ' + latency + 'ms';
+      if (prevEl) prevEl.textContent = preview || (ok ? 'OK' : 'Failed');
+      if (rowEl) rowEl.style.borderColor = ok ? 'var(--green)' : 'var(--red)';
+    });
+  } catch (e) {
+    const body = document.getElementById('test-modal-body');
+    if (body) body.innerHTML = '<div class="empty-state" style="color:var(--red)">Test failed: ' + escHtml(e.message) + '</div>';
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = '&#x1f9ea; Test All Models';
+}
+
+function closeTestModal() {
+  const modal = document.getElementById('test-modal');
+  if (modal) modal.remove();
+}
+
+// ── Usage ──
+async function loadUsage() {
+  try {
+    const data = await apiFetch('/api/stats');
+    const stats = data || {};
+
+    document.getElementById('usage-total').textContent = formatNum(stats.total_requests || stats.totalRequests || 0);
+    const successRate = stats.success_rate || stats.successRate || 0;
+    document.getElementById('usage-success').textContent = (typeof successRate === 'number' ? successRate.toFixed(1) : successRate) + '%';
+    const latency = stats.avg_latency || stats.avgLatency || 0;
+    document.getElementById('usage-latency').textContent = (typeof latency === 'number' ? latency.toFixed(0) : latency) + 'ms';
+
+    // Captcha stats
+    const captcha = stats.captcha || {};
+    document.getElementById('usage-captcha').textContent = captcha.solved || 0;
+    var captchaErr = document.getElementById('usage-captcha-err');
+    if (captchaErr) {
+      if (captcha.errors > 0) captchaErr.textContent = captcha.errors + ' errors';
+      else if (!captcha.has_key) captchaErr.textContent = 'No API key';
+      else captchaErr.textContent = '';
+    }
+
+    // Chart
+    const modelStats = stats.by_model || stats.byModel || stats.models || {};
+    renderUsageChart(modelStats);
+
+    // Recent requests
+    const recent = stats.recent_requests || stats.recentRequests || stats.recent || [];
+    renderRecentRequests(recent);
+  } catch (e) {
+    document.getElementById('usage-total').textContent = '0';
+    document.getElementById('usage-success').textContent = '—';
+    document.getElementById('usage-latency').textContent = '—';
+    document.getElementById('usage-chart').innerHTML = '<div class="empty-state">No usage data available</div>';
+    document.getElementById('usage-tbody').innerHTML = '<tr><td colspan="6" class="empty-state">No recent requests</td></tr>';
+  }
+}
+
+// ── Captcha API Key ──
+async function loadCaptchaKey() {
+  try {
+    const data = await apiFetch('/api/settings/captcha');
+    var input = document.getElementById('captcha-key-input');
+    var status = document.getElementById('captcha-key-status');
+    if (data.has_key) {
+      input.placeholder = data.key_preview || 'Key set';
+      input.value = '';
+      status.textContent = '✓ Key configured';
+      status.style.color = 'var(--green)';
+    } else {
+      input.placeholder = 'Enter 2Captcha API key...';
+      status.textContent = 'No key set';
+      status.style.color = 'var(--orange)';
+    }
+  } catch (e) {}
+}
+
+async function saveCaptchaKey() {
+  var input = document.getElementById('captcha-key-input');
+  var key = input.value.trim();
+  if (!key) { toast('Enter an API key', 'error'); return; }
+  try {
+    var data = await apiFetch('/api/settings/captcha', {
+      method: 'POST', body: JSON.stringify({ api_key: key })
+    });
+    input.value = '';
+    input.placeholder = data.key_preview || 'Key set';
+    document.getElementById('captcha-key-status').textContent = '✓ Key saved';
+    document.getElementById('captcha-key-status').style.color = 'var(--green)';
+    toast('Captcha API key saved', 'success');
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function clearCaptchaKey() {
+  if (!confirm('Clear captcha API key?')) return;
+  try {
+    await apiFetch('/api/settings/captcha', { method: 'DELETE' });
+    document.getElementById('captcha-key-input').placeholder = 'Enter 2Captcha API key...';
+    document.getElementById('captcha-key-input').value = '';
+    document.getElementById('captcha-key-status').textContent = 'No key set';
+    document.getElementById('captcha-key-status').style.color = 'var(--orange)';
+    toast('Captcha API key cleared', 'success');
+  } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+function formatNum(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
+}
+
+function renderUsageChart(modelStats) {
+  const chart = document.getElementById('usage-chart');
+  let entries = [];
+
+  if (typeof modelStats === 'object' && !Array.isArray(modelStats)) {
+    entries = Object.entries(modelStats).map(([name, count]) => ({
+      name,
+      count: typeof count === 'object' ? (count.count || count.requests || 0) : count
+    }));
+  } else if (Array.isArray(modelStats)) {
+    entries = modelStats.map(m => ({ name: m.model || m.name, count: m.count || m.requests || 0 }));
+  }
+
+  entries.sort((a, b) => b.count - a.count);
+  entries = entries.slice(0, 10);
+
+  if (entries.length === 0) {
+    chart.innerHTML = '<div class="empty-state">No model usage data yet</div>';
+    return;
+  }
+
+  const max = Math.max(...entries.map(e => e.count), 1);
+
+  chart.innerHTML = entries.map((e, i) => {
+    const pct = Math.round((e.count / max) * 100);
+    const isMax = loadedModels.max.some(m => m.name === e.name);
+    return '<div class="bar-row">' +
+      '<div class="bar-label">' + escHtml(e.name) + '</div>' +
+      '<div class="bar-track"><div class="bar-fill ' + (isMax ? 'purple' : 'accent') + '" style="width:' + pct + '%"></div></div>' +
+      '<div class="bar-count">' + formatNum(e.count) + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderRecentRequests(requests) {
+  const tbody = document.getElementById('usage-tbody');
+  if (!requests || requests.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No recent requests</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = requests.slice(0, 50).map(r => {
+    const time = r.created_at || r.timestamp || r.time || '';
+    const model = r.model || '—';
+    const tier = (r.tier || '').toLowerCase();
+    const account = r.account_email || r.account || r.email || '—';
+    const statusCode = r.status_code || r.status || 0;
+    const statusOk = (typeof statusCode === 'number') ? (statusCode >= 200 && statusCode < 400) : (statusCode === 'success');
+    const statusLabel = statusOk ? 'success' : 'error';
+    const latency = r.latency_ms || r.latency || r.duration || 0;
+    const tierBadge = tier === 'max' ? 'badge-max' : 'badge-standard';
+    const statusBadge = statusOk ? 'badge-success' : 'badge-error';
+
+    return '<tr>' +
+      '<td class="text-dim text-sm">' + relativeTime(time) + '</td>' +
+      '<td class="mono text-sm">' + escHtml(model) + '</td>' +
+      '<td><span class="badge ' + tierBadge + '">' + escHtml(tier) + '</span></td>' +
+      '<td class="text-dim text-sm">' + escHtml(account) + '</td>' +
+      '<td><span class="badge ' + statusBadge + '">' + statusLabel + '</span></td>' +
+      '<td class="mono text-sm">' + (typeof latency === 'number' ? Math.round(latency) : latency) + 'ms</td>' +
+    '</tr>';
+  }).join('');
+}
+
+// ── Logs ──
+// logsTimer and logsData declared at top of script
+var logsPage = 1;
+var logsPerPage = 50;
+
+async function loadLogs(page) {
+  if (page !== undefined) logsPage = page;
+  try {
+    const data = await apiFetch('/api/logs?limit=500');
+    logsData = (data && data.logs) ? data.logs : (Array.isArray(data) ? data : []);
+    renderLogs();
+  } catch (e) {
+    document.getElementById('logs-tbody').innerHTML =
+      '<tr><td colspan="7" class="empty-state">Failed to load logs: ' + escHtml(e.message) + '</td></tr>';
+  }
+}
+
+function truncateProxy(url, maxLen) {
+  if (!url) return 'Direct';
+  if (url.length <= (maxLen || 30)) return url;
+  return url.substring(0, maxLen || 30) + '\u2026';
+}
+
+function renderLogs() {
+  const tbody = document.getElementById('logs-tbody');
+  if (!logsData || logsData.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No logs yet</td></tr>';
+    renderLogsPagination(0);
+    return;
+  }
+
+  // Paginate
+  const totalPages = Math.ceil(logsData.length / logsPerPage);
+  if (logsPage > totalPages) logsPage = totalPages;
+  if (logsPage < 1) logsPage = 1;
+  const start = (logsPage - 1) * logsPerPage;
+  const pageData = logsData.slice(start, start + logsPerPage);
+  renderLogsPagination(totalPages);
+
+  tbody.innerHTML = pageData.map((log, i) => {
+    const idx = start + i;
+    const time = log.created_at || log.timestamp || '';
+    const model = log.model || '—';
+    const tier = (log.tier || '').toLowerCase();
+    const statusCode = log.status_code || log.status || 0;
+    const latency = log.latency_ms || log.latency || 0;
+    const account = log.account_email || log.account || log.email || '—';
+    const proxyUrl = log.proxy_url || '';
+    const tierBadge = tier === 'max' ? 'badge-max' : 'badge-standard';
+    const statusOk = statusCode >= 200 && statusCode < 400;
+    const statusBadge = statusOk ? 'badge-success' : 'badge-error';
+
+    return '<tr onclick="showLogModal(' + idx + ')" style="cursor:pointer">' +
+      '<td class="text-dim text-sm">' + relativeTime(time) + '</td>' +
+      '<td class="mono text-sm">' + escHtml(model) + '</td>' +
+      '<td><span class="badge ' + tierBadge + '">' + escHtml(tier || 'std') + '</span></td>' +
+      '<td><span class="badge ' + statusBadge + '">' + statusCode + '</span></td>' +
+      '<td class="mono text-sm">' + latency + 'ms</td>' +
+      '<td class="text-dim text-sm">' + escHtml(account) + '</td>' +
+      '<td class="mono text-sm text-dim" title="' + escHtml(proxyUrl) + '">' + escHtml(truncateProxy(proxyUrl, 30)) + '</td>' +
+    '</tr>';
+  }).join('');
+}
+
+function renderLogsPagination(totalPages) {
+  var container = document.getElementById('logs-pagination');
+  if (!container) return;
+  if (totalPages <= 1) { container.innerHTML = ''; return; }
+  var html = '<div style="display:flex;align-items:center;gap:.4rem;justify-content:center;padding:.75rem;font-size:.8rem">';
+  html += '<button class="btn btn-sm" onclick="loadLogs(1)" ' + (logsPage <= 1 ? 'disabled' : '') + '>&laquo;</button>';
+  html += '<button class="btn btn-sm" onclick="loadLogs(' + (logsPage - 1) + ')" ' + (logsPage <= 1 ? 'disabled' : '') + '>&lsaquo;</button>';
+  // Show page numbers around current
+  var start = Math.max(1, logsPage - 2);
+  var end = Math.min(totalPages, logsPage + 2);
+  for (var p = start; p <= end; p++) {
+    if (p === logsPage) {
+      html += '<span style="padding:.3rem .6rem;background:var(--accent);color:#fff;border-radius:var(--radius-sm);font-weight:600">' + p + '</span>';
+    } else {
+      html += '<button class="btn btn-sm" onclick="loadLogs(' + p + ')">' + p + '</button>';
+    }
+  }
+  html += '<button class="btn btn-sm" onclick="loadLogs(' + (logsPage + 1) + ')" ' + (logsPage >= totalPages ? 'disabled' : '') + '>&rsaquo;</button>';
+  html += '<button class="btn btn-sm" onclick="loadLogs(' + totalPages + ')" ' + (logsPage >= totalPages ? 'disabled' : '') + '>&raquo;</button>';
+  html += '<span class="text-muted" style="margin-left:.5rem">' + logsData.length + ' total</span>';
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function showLogModal(idx) {
+  const log = logsData[idx];
+  if (!log) return;
+
+  const model = log.model || '—';
+  const time = log.created_at || '';
+  const timeStr = time ? new Date(time + 'Z').toLocaleTimeString('en-GB', {hour12:true}) : '';
+  const statusCode = log.status_code || 0;
+  const latency = log.latency_ms || 0;
+  const tier = (log.tier || '').toLowerCase();
+  const account = log.account_email || log.account || log.email || '—';
+  const statusOk = statusCode >= 200 && statusCode < 400;
+  const errMsg = log.error_message || '';
+
+  // Parse token counts from response body
+  let promptTokens = 0, completionTokens = 0, totalTokens = 0, credit = 0;
+  try {
+    const resBody = log.response_body || '';
+    if (resBody) {
+      const parsed = JSON.parse(resBody);
+      // Try direct usage field (our custom format: {content, usage})
+      let u = parsed.usage || {};
+      // Also try OpenAI format: {choices, usage}
+      if (!u.total_tokens && parsed.choices) u = parsed.usage || {};
+      promptTokens = u.prompt_tokens || 0;
+      completionTokens = u.completion_tokens || 0;
+      totalTokens = u.total_tokens || 0;
+      credit = u.credit || u.cost || 0;
+    }
+  } catch(e) {
+    // If JSON parse fails, try regex extraction from raw text
+    try {
+      const raw = log.response_body || '';
+      const ptMatch = raw.match(/"prompt_tokens":\s*(\d+)/);
+      const ctMatch = raw.match(/"completion_tokens":\s*(\d+)/);
+      const ttMatch = raw.match(/"total_tokens":\s*(\d+)/);
+      const crMatch = raw.match(/"credit":\s*([\d.]+)/) || raw.match(/"cost":\s*([\d.]+)/);
+      if (ptMatch) promptTokens = parseInt(ptMatch[1]);
+      if (ctMatch) completionTokens = parseInt(ctMatch[1]);
+      if (ttMatch) totalTokens = parseInt(ttMatch[1]);
+      if (crMatch) credit = parseFloat(crMatch[1]);
+    } catch(e2) {}
+  }
+
+  const reqBody = log.request_body || '(empty)';
+  const resBody = log.response_body || '(empty)';
+
+  // Format JSON bodies
+  let reqBodyFormatted = reqBody;
+  let resBodyFormatted = resBody;
+  try { reqBodyFormatted = JSON.stringify(JSON.parse(reqBody), null, 2); } catch(e) {}
+  try { resBodyFormatted = JSON.stringify(JSON.parse(resBody), null, 2); } catch(e) {}
+
+  const statusLabel = statusOk ? 'success' : 'error';
+  const statusColor = statusOk ? 'var(--green)' : 'var(--red)';
+  const tierLabel = tier === 'max' ? 'codebuddy' : tier === 'wavespeed' ? 'wavespeed' : 'kiro';
+
+  // Remove existing modal
+  const old = document.getElementById('log-modal-overlay');
+  if (old) old.remove();
+
+  const overlay = document.createElement('div');
+  overlay.id = 'log-modal-overlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;display:flex;align-items:center;justify-content:center;padding:20px';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  overlay.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;width:100%;max-width:560px;max-height:90vh;overflow-y:auto;padding:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border)">
+        <div>
+          <span class="mono" style="font-size:1.1rem;font-weight:700">${escHtml(model)}</span>
+          <span class="text-dim text-sm" style="margin-left:8px">${timeStr}</span>
+        </div>
+        <button onclick="this.closest('#log-modal-overlay').remove()" style="background:none;border:none;color:var(--muted);font-size:1.2rem;cursor:pointer">&times;</button>
+      </div>
+
+      <div style="padding:16px 20px">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px">
+          <span class="badge" style="background:${statusColor}20;color:${statusColor}">${statusLabel}</span>
+          <span class="text-dim text-sm">HTTP ${statusCode}</span>
+          <span class="text-dim text-sm">${(latency/1000).toFixed(1)}s</span>
+          <span class="text-dim text-sm">${tierLabel}</span>
+        </div>
+
+        ${errMsg ? `<div style="background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.3);border-radius:8px;padding:10px;margin-bottom:16px;color:var(--red);font-size:.85rem">${escHtml(errMsg)}</div>` : ''}
+
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px">
+          <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Total</div>
+            <div style="font-size:1.1rem;font-weight:700;color:var(--text)">${totalTokens.toLocaleString()}</div>
+          </div>
+          <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Prompt</div>
+            <div style="font-size:1.1rem;font-weight:700;color:var(--accent)">&#8593; ${promptTokens.toLocaleString()}</div>
+          </div>
+          <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Completion</div>
+            <div style="font-size:1.1rem;font-weight:700;color:var(--green)">&#8595; ${completionTokens.toLocaleString()}</div>
+          </div>
+          <div style="background:var(--surface2);border-radius:8px;padding:10px;text-align:center">
+            <div style="font-size:.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Credit</div>
+            <div style="font-size:1.1rem;font-weight:700;color:#fbbf24">&#x1f4b0; ${credit > 0 ? (tier === 'wavespeed' ? '$' + credit.toFixed(4) : credit.toFixed(2)) : '—'}</div>
+          </div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Account</div>
+          <div class="mono text-sm">${escHtml(account)}</div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Proxy</div>
+          <div class="mono text-sm">${escHtml(log.proxy_url || 'Direct (no proxy)')}</div>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Request Body</span>
+            <button onclick="copyToClipboard(this.closest('div').querySelector('pre').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1000)})" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.7rem;padding:2px 8px;cursor:pointer">Copy</button>
+          </div>
+          <pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.75rem;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0">${escHtml(reqBodyFormatted)}</pre>
+        </div>
+
+        <div style="margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+            <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Response Body</span>
+            <button onclick="copyToClipboard(this.closest('div').querySelector('pre').textContent).then(()=>{this.textContent='Copied!';setTimeout(()=>this.textContent='Copy',1000)})" style="background:none;border:1px solid var(--border);border-radius:4px;color:var(--muted);font-size:.7rem;padding:2px 8px;cursor:pointer">Copy</button>
+          </div>
+          <pre style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:.75rem;max-height:250px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:0">${escHtml(resBodyFormatted)}</pre>
+        </div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+}
+
+function startLogsAutoRefresh() {
+  if (logsTimer) clearInterval(logsTimer);
+  logsTimer = setInterval(loadLogs, 10000);
+}
+
+function stopLogsAutoRefresh() {
+  if (logsTimer) { clearInterval(logsTimer); logsTimer = null; }
+}
+
+// ── Batch Login ──
+async function startBatch() {
+  const textarea = document.getElementById('batch-textarea');
+  const lines = textarea.value.trim().split('\n').filter(l => l.includes(':'));
+  if (lines.length === 0) {
+    toast('Enter at least one email:password pair', 'error');
+    return;
+  }
+
+  const providers = [];
+    if (document.getElementById('chk-kiro').checked) providers.push('kiro');
+    if (document.getElementById('chk-codebuddy').checked) providers.push('codebuddy');
+    if (document.getElementById('chk-wavespeed').checked) providers.push('wavespeed');
+    if (document.getElementById('chk-gumloop').checked) providers.push('gumloop');
+  if (providers.length === 0) {
+    toast('Select at least one provider', 'error');
+    return;
+  }
+
+  state.batchRunning = true;
+  document.getElementById('batch-start-btn').disabled = true;
+  document.getElementById('batch-cancel-btn').disabled = false;
+
+  // Init jobs
+  state.batchJobs = lines.map(line => {
+    const [email] = line.split(':');
+    return { email: email.trim(), status: 'queued', message: '' };
+  });
+  renderBatchJobs();
+  clearLog();
+  addLog('Starting batch login for ' + lines.length + ' accounts...', 'info');
+
+  // Connect SSE BEFORE starting batch (avoid race condition with fast-failing jobs)
+  connectBatchSSE();
+
+  try {
+    await apiFetch('/api/batch/start', {
+      method: 'POST',
+      body: JSON.stringify({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1 })
+    });
+  } catch (e) {
+    toast('Batch start failed: ' + e.message, 'error');
+    state.batchRunning = false;
+    document.getElementById('batch-start-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').disabled = true;
+    addLog('Error: ' + e.message, 'err');
+  }
+}
+
+function connectBatchSSE() {
+  if (state.batchEventSource) {
+    state.batchEventSource.close();
+  }
+
+  const url = '/api/events?token=' + encodeURIComponent(getAdminPassword());
+  const es = new EventSource(url);
+  state.batchEventSource = es;
+
+  es.onmessage = function(event) {
+    try {
+      const data = JSON.parse(event.data);
+      handleBatchEvent(data);
+    } catch (e) {
+      // Plain text message
+      addLog(event.data, 'info');
+    }
+  };
+
+  es.addEventListener('account_status', function(event) {
+    try {
+      const data = JSON.parse(event.data);
+      handleBatchEvent(data);
+    } catch (e) {}
+  });
+
+  es.addEventListener('batch_complete', function(event) {
+    addLog('Batch login complete!', 'ok');
+    state.batchRunning = false;
+    document.getElementById('batch-start-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').disabled = true;
+    es.close();
+    state.batchEventSource = null;
+    loadAccounts();
+  });
+
+  es.addEventListener('log', function(event) {
+    try {
+      const data = JSON.parse(event.data);
+      const level = data.level || 'info';
+      addLog(data.message || event.data, level);
+    } catch (e) {
+      addLog(event.data, 'info');
+    }
+  });
+
+  es.onerror = function() {
+    if (state.batchRunning) {
+      addLog('SSE connection lost. Reconnecting...', 'warn');
+    }
+  };
+}
+
+function handleBatchEvent(data) {
+  const evType = data.type || '';
+
+  // Handle batch-level events
+  if (evType === 'batch_done') {
+    addLog('Batch complete! Success: ' + (data.success||0) + ', Failed: ' + (data.failed||0), 'ok');
+    state.batchRunning = false;
+    document.getElementById('batch-start-btn').disabled = false;
+    document.getElementById('batch-cancel-btn').disabled = true;
+    renderBatchResults();
+    loadAccounts();
+    return;
+  }
+
+  const email = data.email || data.account || '';
+  const status = (data.status || '').toLowerCase();
+  const message = data.message || data.error || '';
+  const proxyUsed = data.proxy_used || '';
+
+  // Update job
+  const job = state.batchJobs.find(j => j.email === email);
+  if (job) {
+    job.status = status === 'success' || status === 'ok' ? 'success' :
+                 status === 'failed' || status === 'error' ? 'failed' :
+                 status === 'running' || status === 'processing' ? 'running' : job.status;
+    job.message = message;
+    if (proxyUsed) job.proxy_used = proxyUsed;
+    if (data.in_db !== undefined) job.in_db = data.in_db;
+    if (data.errors) job.errors = data.errors;
+    if (data.kiro !== undefined) job.kiro = data.kiro;
+    if (data.codebuddy !== undefined) job.codebuddy = data.codebuddy;
+    if (data.wavespeed !== undefined) job.wavespeed = data.wavespeed;
+    if (data.gumloop !== undefined) job.gumloop = data.gumloop;
+    if (job.status === 'failed' && !data.in_db) job.in_db = false;
+    renderBatchJobs();
+  }
+
+  // Handle per-provider completion (provider_done event)
+  if (data.type === 'provider_done' && job) {
+    var prov = data.provider;
+    if (prov === 'kiro') job.kiro = data.success;
+    else if (prov === 'codebuddy') job.codebuddy = data.success;
+    else if (prov === 'wavespeed') job.wavespeed = data.success;
+    else if (prov === 'gumloop') job.gumloop = data.success;
+    renderBatchJobs();
+    renderBatchResults();
+  }
+
+  // Log
+  const logLevel = status === 'success' || status === 'ok' ? 'ok' :
+                   status === 'failed' || status === 'error' ? 'err' : 'info';
+  addLog('[' + email + '] ' + (message || status), logLevel);
+}
+
+async function cancelBatch() {
+  try {
+    await apiFetch('/api/batch/cancel', { method: 'POST' });
+    toast('Batch cancelled', 'success');
+    addLog('Batch cancelled by user', 'warn');
+  } catch (e) {
+    toast('Cancel failed: ' + e.message, 'error');
+  }
+  state.batchRunning = false;
+  document.getElementById('batch-start-btn').disabled = false;
+  document.getElementById('batch-cancel-btn').disabled = true;
+  if (state.batchEventSource) {
+    state.batchEventSource.close();
+    state.batchEventSource = null;
+  }
+}
+
+async function loadBatchStatus() {
+  try {
+    const data = await apiFetch('/api/batch/status');
+    if (data) {
+      if (data.jobs) {
+        state.batchJobs = data.jobs;
+        renderBatchJobs();
+      }
+      if (data.running) {
+        state.batchRunning = true;
+        document.getElementById('batch-start-btn').disabled = true;
+        document.getElementById('batch-cancel-btn').disabled = false;
+        connectBatchSSE();
+      }
+    }
+  } catch (e) {
+    // No active batch
+  }
+}
+
+function renderBatchJobs() {
+  var container = document.getElementById('job-list');
+  var jobs = state.batchJobs;
+
+  if (jobs.length === 0) {
+    container.innerHTML = '<div class="empty-state">No batch jobs yet</div>';
+    updateBatchStats();
+    return;
+  }
+
+  container.innerHTML = jobs.map(function(j) {
+    var badgeClass = j.status === 'success' ? 'badge-success' :
+                     j.status === 'failed' ? 'badge-failed' :
+                     j.status === 'running' ? 'badge-running' : 'badge-queued';
+    var proxyTag = '';
+    if (j.proxy_used) {
+      var short = j.proxy_used.replace(/^socks5?:\/\//, '').replace(/^https?:\/\//, '');
+      if (short.length > 20) short = short.substring(0, 20) + '\u2026';
+      proxyTag = ' <span style="font-size:10px;color:#888" title="' + escHtml(j.proxy_used) + '">[' + escHtml(short) + ']</span>';
+    }
+    return '<div class="job-item" style="padding:1px 6px;display:flex;align-items:center;gap:6px">' +
+      '<span class="job-email" style="font-size:11px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + escHtml(j.email) + proxyTag + '</span>' +
+      '<span class="badge ' + badgeClass + '" style="font-size:9px;padding:1px 5px">' + j.status + '</span>' +
+    '</div>';
+  }).join('');
+
+  container.scrollTop = container.scrollHeight;
+  updateBatchStats();
+  renderBatchResults();
+}
+
+function getActiveProviders() {
+  var provs = [];
+  if (document.getElementById('chk-kiro').checked) provs.push('kiro');
+  if (document.getElementById('chk-codebuddy').checked) provs.push('codebuddy');
+  if (document.getElementById('chk-wavespeed').checked) provs.push('wavespeed');
+  if (document.getElementById('chk-gumloop').checked) provs.push('gumloop');
+  return provs;
+}
+
+function renderBatchResults() {
+  var jobs = state.batchJobs;
+  var provs = getActiveProviders();
+  // Show jobs with ANY provider result (not just completed jobs)
+  var successJobs = jobs.filter(function(j) {
+    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop));
+  });
+  var failedJobs = jobs.filter(function(j) { return j.status === 'failed'; });
+  var resultsDiv = document.getElementById('batch-results');
+
+  if (successJobs.length === 0 && failedJobs.length === 0) {
+    resultsDiv.style.display = 'none';
+    return;
+  }
+  resultsDiv.style.display = 'block';
+
+  // Headers
+  var headerHtml = provs.map(function(p) {
+    var name = p === 'codebuddy' ? 'CodeBuddy' : p === 'wavespeed' ? 'WaveSpeed' : p === 'gumloop' ? 'Gumloop' : 'Kiro';
+    return '<span class="br-header">' + name + '</span>';
+  }).join('');
+  document.getElementById('batch-res-ok-headers').innerHTML = '<span class="br-header" style="min-width:180px">Email</span>' + headerHtml;
+  document.getElementById('batch-res-fail-headers').innerHTML = '<span class="br-header" style="min-width:180px">Email</span>' + headerHtml + '<span class="br-header">Reason</span>';
+
+  // Success list
+  var okCount = document.getElementById('batch-res-ok-count');
+  okCount.textContent = '(' + successJobs.length + ')';
+  var okDiv = document.getElementById('batch-res-ok');
+  if (successJobs.length > 0) {
+    okDiv.innerHTML = successJobs.map(function(j) {
+      var cols = provs.map(function(p) {
+        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : j.wavespeed;
+        if (val === true) return '<span class="br-provider br-ok">\u2713</span>';
+        if (val === false) return '<span class="br-provider br-fail">\u2717</span>';
+        // undefined = still pending
+        if (j.status === 'running') return '<span class="br-provider" style="color:var(--text-muted)">\u2022</span>';
+        return '<span class="br-provider br-fail">\u2717</span>';
+      }).join('');
+      return '<div class="br-row">' +
+        '<span class="br-email" title="' + escHtml(j.email) + '">' + escHtml(j.email) + '</span>' +
+        cols + '</div>';
+    }).join('');
+    document.getElementById('btn-copy-success').style.display = 'inline-block';
+  } else {
+    okDiv.innerHTML = '<div style="color:var(--text-muted);padding:8px">None</div>';
+    document.getElementById('btn-copy-success').style.display = 'none';
+  }
+
+  // Failed list
+  var failCount = document.getElementById('batch-res-fail-count');
+  failCount.textContent = '(' + failedJobs.length + ')';
+  var failDiv = document.getElementById('batch-res-fail');
+  if (failedJobs.length > 0) {
+    failDiv.innerHTML = failedJobs.map(function(j) {
+      var cols = provs.map(function(p) {
+        return '<span class="br-provider br-fail">\u2717</span>';
+      }).join('');
+      var reason = '';
+      if (j.errors) {
+        reason = Object.values(j.errors).join('; ');
+      }
+      if (!reason && j.message) reason = j.message;
+      if (!reason) reason = 'Login failed';
+      var truncReason = reason.length > 60 ? reason.substring(0, 60) + '...' : reason;
+      return '<div class="br-row">' +
+        '<span class="br-email" title="' + escHtml(j.email) + '">' + escHtml(j.email) + '</span>' +
+        cols +
+        '<span class="br-reason" title="' + escHtml(reason) + '">' + escHtml(truncReason) + '</span>' +
+      '</div>';
+    }).join('');
+    document.getElementById('btn-copy-failed').style.display = 'inline-block';
+  } else {
+    failDiv.innerHTML = '<div style="color:var(--text-muted);padding:8px">None</div>';
+    document.getElementById('btn-copy-failed').style.display = 'none';
+  }
+}
+
+function copyBatchResults(type) {
+  var jobs = state.batchJobs;
+  var filtered = type === 'success'
+    ? jobs.filter(function(j) { return j.status === 'success'; })
+    : jobs.filter(function(j) { return j.status === 'failed'; });
+  // Find password from original textarea
+  var textareaLines = (document.getElementById('batch-textarea').value || '').split('\n');
+  var emailPassMap = {};
+  textareaLines.forEach(function(line) {
+    var parts = line.trim().split(':');
+    if (parts.length >= 2) emailPassMap[parts[0].trim().toLowerCase()] = line.trim();
+  });
+  var lines = filtered.map(function(j) {
+    return emailPassMap[j.email.toLowerCase()] || j.email;
+  });
+  navigator.clipboard.writeText(lines.join('\n')).then(function() {
+    toast(lines.length + ' email:pass copied', 'success');
+  });
+}
+
+function updateBatchStats() {
+  var jobs = state.batchJobs;
+  var ok = jobs.filter(function(j) { return j.status === 'success'; }).length;
+  var fail = jobs.filter(function(j) { return j.status === 'failed'; }).length;
+  var run = jobs.filter(function(j) { return j.status === 'running'; }).length;
+  var queue = jobs.filter(function(j) { return j.status === 'queued'; }).length;
+  document.getElementById('bs-ok').textContent = ok;
+  document.getElementById('bs-fail').textContent = fail;
+  document.getElementById('bs-run').textContent = run;
+  document.getElementById('bs-queue').textContent = queue;
+
+  // Toggle cancel button appearance
+  var cancelBtn = document.getElementById('batch-cancel-btn');
+  var isRunning = run > 0 || queue > 0;
+  cancelBtn.disabled = !isRunning;
+  cancelBtn.style.opacity = isRunning ? '1' : '.4';
+
+  // Clear textarea when all done
+  if (jobs.length > 0 && run === 0 && queue === 0) {
+    document.getElementById('batch-textarea').value = '';
+  }
+}
+
+function clearLog() {
+  document.getElementById('log-viewer').innerHTML = '';
+}
+
+function cleanLogMessage(msg) {
+  // Truncate JSON blobs — {"type":"result",...} → {result: success/fail}
+  msg = msg.replace(/\{"type":\s*"result"[^}]*"success":\s*(true|false)[^}]*"provider":\s*"([^"]*)"[^]*?\}/g, function(m, success, provider) {
+    return '[' + provider + '] ' + (success === 'true' ? 'success' : 'failed');
+  });
+  // Truncate any remaining long JSON
+  msg = msg.replace(/\{[^}]{100,}\}/g, function(m) {
+    return m.substring(0, 80) + '...}';
+  });
+  // Strip long URLs
+  msg = msg.replace(/https?:\/\/[^\s]{60,}/g, function(url) {
+    try {
+      var u = new URL(url);
+      return u.origin + u.pathname.substring(0, 20) + '...';
+    } catch(e) { return url.substring(0, 50) + '...'; }
+  });
+  // Clean up verbose patterns
+  msg = msg.replace(/target=https?:\/\/[^\s]+/g, '');
+  msg = msg.replace(/value='[^']{30,}'/g, function(m) { return m.substring(0, 30) + "...'"; });
+  msg = msg.replace(/\[(\w+)-auth\]\s*/g, '[$1] ');
+  // Strip Python warnings
+  msg = msg.replace(/C:\\[^\s]*\.py:\d+:\s*\w+Warning:[^\n]*/g, '');
+  msg = msg.replace(/If this is intentional[^\n]*/g, '');
+  // Remove excessive whitespace
+  msg = msg.replace(/\s{2,}/g, ' ').trim();
+  // Final max length
+  if (msg.length > 200) msg = msg.substring(0, 200) + '...';
+  return msg;
+}
+
+function addLog(msg, level) {
+  const viewer = document.getElementById('log-viewer');
+  const line = document.createElement('div');
+  line.className = 'log-line log-' + (level || 'info');
+  const ts = new Date().toLocaleTimeString();
+  var clean = cleanLogMessage(msg);
+  line.textContent = '[' + ts + '] ' + clean;
+  line.title = msg; // Full message on hover
+  viewer.appendChild(line);
+  viewer.scrollTop = viewer.scrollHeight;
+}
+
+// ── Docs ──
+function setupDocsHost() {
+  document.getElementById('docs-host').textContent = location.hostname || 'localhost';
+}
+
+// ── Copy code blocks ──
+function copyCode(btn) {
+  const block = btn.parentElement;
+  const text = block.textContent.replace('Copy', '').trim();
+  copyToClipboard(text).then(() => {
+    btn.textContent = 'Copied!';
+    setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+  });
+}
+
+// Make functions globally accessible
+window.retryAccount = retryAccount;
+window.trashAccount = trashAccount;
+window.restoreAccount = restoreAccount;
+window.deleteAccount = deleteAccount;
+window.copyCode = copyCode;
+window.testSingleModel = testSingleModel;
+window.testAllModels = testAllModels;
+window.closeTestModal = closeTestModal;
+window.toggleLogDetail = toggleLogDetail;
+window.loadLogs = loadLogs;
+window.loadProxies = loadProxies;
+window.addProxy = addProxy;
+window.deleteProxy = deleteProxy;
+window.testProxy = testProxy;
+window.testAllProxies = testAllProxies;
+window.toggleProxyMode = toggleProxyMode;
+window.toggleProxyActive = toggleProxyActive;
+window.onProxyRowCheck = onProxyRowCheck;
+window.setProxyEnabled = setProxyEnabled;
+window.applyProxyMode = applyProxyMode;
+window.selectAllProxies = selectAllProxies;
+window.deselectAllProxies = deselectAllProxies;
+window.deleteFailedProxies = deleteFailedProxies;
+window.deleteSelectedProxies = deleteSelectedProxies;
+window.testAllProxiesPurpose = testAllProxiesPurpose;
+window.editAllProxies = editAllProxies;
+window.closeEditModal = closeEditModal;
+window.saveEditProxies = saveEditProxies;
+window.closeProxyModal = closeProxyModal;
+window.copyBatchResults = copyBatchResults;
+window.showLogModal = showLogModal;
+window.testBatchAccounts = testBatchAccounts;
+window.approveAccount = approveAccount;
+window.approveAllAccounts = approveAllAccounts;
+window.deleteFixAccounts = deleteFixAccounts;
+</script>
+</body>
+</html>

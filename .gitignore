@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Data
+unified/data/
+data/
+*.sqlite3
+*.db
+cookies/
+
+# Logs
+logs/
+*.log
+server.pid
+
+# Environment
+.env
+.env.local
+
+# Test/debug scripts
+_test_*.py
+_check_*.py
+_fix_*.py
+_reset_*.py
+_seed_*.py
+_setup_*.py
+_parse_*.py
+_intercept_*.py
+_verify_*.py
+response.har
+
+# Session
+SESSION_LOG.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
