@@ -16,6 +16,7 @@ WARN="${YELLOW}[WARN]${NC}"
 REPO="https://github.com/mryanafrizki/unifiedme-ai.git"
 INSTALL_DIR="$HOME/unifiedme-ai"
 MIN_PYTHON="3.10"
+CMD_NAME="unifiedme"
 
 echo ""
 echo -e "  ${CYAN}+======================================+${NC}"
@@ -26,19 +27,15 @@ echo ""
 # ─── Detect OS ───────────────────────────────────────────────────────────────
 
 IS_WINDOWS=false
-VENV_BIN="bin"
-PIP_CMD="pip"
-PYTHON_CMD=""
-
 case "$OSTYPE" in
-    msys*|mingw*|cygwin*) IS_WINDOWS=true; VENV_BIN="Scripts" ;;
+    msys*|mingw*|cygwin*) IS_WINDOWS=true ;;
 esac
 
 # ─── Check dependencies ─────────────────────────────────────────────────────
 
 ERRORS=0
+PYTHON_CMD=""
 
-# Python 3.10+
 for cmd in python3 python; do
     if command -v "$cmd" &>/dev/null; then
         PY=$("$cmd" --version 2>&1 | awk '{print $2}')
@@ -56,7 +53,6 @@ if [ -z "$PYTHON_CMD" ]; then
     ERRORS=$((ERRORS + 1))
 fi
 
-# Git
 if command -v git &>/dev/null; then
     echo -e "  $CHECK git"
 else
@@ -64,7 +60,6 @@ else
     ERRORS=$((ERRORS + 1))
 fi
 
-# curl
 if command -v curl &>/dev/null; then
     echo -e "  $CHECK curl"
 else
@@ -99,19 +94,16 @@ if [ -d "$INSTALL_DIR/.git" ]; then
 else
     echo -e "  Cloning repository..."
     if ! git clone "$REPO" "$INSTALL_DIR" 2>&1; then
-        echo -e "  ${RED}Failed to clone. Check git access.${NC}"
-        echo "  If private repo, run: gh auth login"
+        echo -e "  ${RED}Failed to clone. If private repo, run: gh auth login${NC}"
         exit 1
     fi
     cd "$INSTALL_DIR"
     echo -e "  $CHECK Repository cloned to $INSTALL_DIR"
 fi
 
-# ─── Create venv ─────────────────────────────────────────────────────────────
+# ─── Create venv + find python/pip ───────────────────────────────────────────
 
 VENV_DIR="$INSTALL_DIR/.venv"
-VENV_PIP="$VENV_DIR/$VENV_BIN/pip"
-VENV_PYTHON="$VENV_DIR/$VENV_BIN/python"
 
 if [ ! -d "$VENV_DIR" ]; then
     echo -e "  Creating virtual environment..."
@@ -121,20 +113,22 @@ else
     echo -e "  $CHECK Virtual environment exists"
 fi
 
-# Verify venv python exists
-if [ ! -f "$VENV_PYTHON" ]; then
-    # Try alternate path (some systems)
-    if [ -f "$VENV_DIR/bin/python" ]; then
-        VENV_PYTHON="$VENV_DIR/bin/python"
-        VENV_PIP="$VENV_DIR/bin/pip"
-    elif [ -f "$VENV_DIR/Scripts/python.exe" ]; then
-        VENV_PYTHON="$VENV_DIR/Scripts/python.exe"
-        VENV_PIP="$VENV_DIR/Scripts/pip.exe"
-    else
-        echo -e "  ${RED}Cannot find python in venv. Delete .venv and retry.${NC}"
-        exit 1
-    fi
+# Find python/pip in venv (handles Windows Scripts/ vs Linux bin/)
+VENV_PYTHON=""
+VENV_PIP=""
+for p in "$VENV_DIR/Scripts/python.exe" "$VENV_DIR/Scripts/python" "$VENV_DIR/bin/python3" "$VENV_DIR/bin/python"; do
+    if [ -f "$p" ]; then VENV_PYTHON="$p"; break; fi
+done
+for p in "$VENV_DIR/Scripts/pip.exe" "$VENV_DIR/Scripts/pip" "$VENV_DIR/bin/pip3" "$VENV_DIR/bin/pip"; do
+    if [ -f "$p" ]; then VENV_PIP="$p"; break; fi
+done
+
+if [ -z "$VENV_PYTHON" ] || [ -z "$VENV_PIP" ]; then
+    echo -e "  ${RED}Cannot find python/pip in venv. Try: rm -rf $VENV_DIR${NC}"
+    exit 1
 fi
+
+echo -e "  $CHECK venv: $VENV_PYTHON"
 
 # ─── Install dependencies ───────────────────────────────────────────────────
 
@@ -145,7 +139,6 @@ if ! "$VENV_PIP" install -r requirements.txt 2>&1 | tail -5; then
     exit 1
 fi
 
-# Verify critical packages
 echo ""
 MISSING_PKGS=0
 for pkg in fastapi uvicorn httpx pydantic aiosqlite aiohttp; do
@@ -163,49 +156,56 @@ if [ "$MISSING_PKGS" -gt 0 ]; then
     exit 1
 fi
 
-# ─── Fetch Camoufox (optional) ───────────────────────────────────────────────
+# ─── Camoufox (optional, ask user) ──────────────────────────────────────────
 
 echo ""
-echo -e "  Fetching Camoufox browser (optional, for batch login)..."
-"$VENV_PYTHON" -m camoufox fetch 2>&1 | tail -1 && echo -e "  $CHECK Camoufox" || echo -e "  $WARN Camoufox skipped (install later with: $VENV_PYTHON -m camoufox fetch)"
+echo -e "  ${CYAN}Camoufox is needed for batch login (browser automation, ~65MB).${NC}"
+echo -n "  Install Camoufox now? [y/N]: "
+read -r INSTALL_CAMOUFOX </dev/tty 2>/dev/null || INSTALL_CAMOUFOX="n"
+if [[ "$INSTALL_CAMOUFOX" =~ ^[Yy]$ ]]; then
+    echo -e "  Downloading Camoufox..."
+    "$VENV_PYTHON" -m camoufox fetch 2>&1 | tail -3
+    echo -e "  $CHECK Camoufox installed"
+else
+    echo -e "  $WARN Skipped. Install later: $VENV_PYTHON -m camoufox fetch"
+fi
 
 # ─── Create data directory ───────────────────────────────────────────────────
 
 mkdir -p "$INSTALL_DIR/unified/data"
 
-# ─── Create unified command wrapper ─────────────────────────────────────────
+# ─── Create command wrapper ──────────────────────────────────────────────────
+# Named "unifiedme" to avoid conflict with "unified/" package directory
 
-# Create wrapper script in install dir
-cat > "$INSTALL_DIR/unified" << WRAPPER
+cat > "$INSTALL_DIR/$CMD_NAME" << WRAPPER
 #!/usr/bin/env bash
-cd "$INSTALL_DIR" || { echo "Install dir not found: $INSTALL_DIR"; exit 1; }
+cd "$INSTALL_DIR" || { echo "Not found: $INSTALL_DIR"; exit 1; }
 exec "$VENV_PYTHON" -m unified.cli "\$@"
 WRAPPER
-chmod +x "$INSTALL_DIR/unified"
+chmod +x "$INSTALL_DIR/$CMD_NAME"
 
-# Try to symlink/copy to a PATH location
+# Install to PATH
 INSTALLED_TO=""
-for BIN_DIR in "$HOME/.local/bin" "$HOME/bin" "/usr/local/bin"; do
-    if [ -d "$BIN_DIR" ] || mkdir -p "$BIN_DIR" 2>/dev/null; then
-        cp "$INSTALL_DIR/unified" "$BIN_DIR/unified" 2>/dev/null && chmod +x "$BIN_DIR/unified" 2>/dev/null
-        if [ $? -eq 0 ]; then
-            INSTALLED_TO="$BIN_DIR"
-            break
-        fi
+for BIN_DIR in "$HOME/.local/bin" "$HOME/bin"; do
+    mkdir -p "$BIN_DIR" 2>/dev/null || continue
+    if cp "$INSTALL_DIR/$CMD_NAME" "$BIN_DIR/$CMD_NAME" 2>/dev/null; then
+        chmod +x "$BIN_DIR/$CMD_NAME"
+        INSTALLED_TO="$BIN_DIR"
+        break
     fi
 done
 
 echo ""
 if [ -n "$INSTALLED_TO" ]; then
-    echo -e "  $CHECK Command 'unified' installed to $INSTALLED_TO/unified"
-    # Check if it's in PATH
-    if ! command -v unified &>/dev/null; then
-        echo -e "  $WARN Not in PATH. Add this to your shell profile:"
-        echo -e "    ${CYAN}export PATH=\"$INSTALLED_TO:\$PATH\"${NC}"
+    echo -e "  $CHECK Command '$CMD_NAME' installed to $INSTALLED_TO/$CMD_NAME"
+    if ! command -v "$CMD_NAME" &>/dev/null; then
+        echo ""
+        echo -e "  ${YELLOW}Not in PATH yet. Run this, then restart terminal:${NC}"
+        echo -e "    ${CYAN}echo 'export PATH=\"$INSTALLED_TO:\$PATH\"' >> ~/.bashrc && source ~/.bashrc${NC}"
     fi
 else
     echo -e "  $WARN Could not install to PATH. Use directly:"
-    echo -e "    ${CYAN}$INSTALL_DIR/unified run${NC}"
+    echo -e "    ${CYAN}$INSTALL_DIR/$CMD_NAME run${NC}"
 fi
 
 # ─── Done ────────────────────────────────────────────────────────────────────
@@ -214,20 +214,20 @@ echo ""
 echo -e "  ${GREEN}Installation complete!${NC}"
 echo ""
 echo -e "  ${CYAN}Commands:${NC}"
-echo "    unified run          # Start proxy (foreground)"
-echo "    unified start        # Start proxy (background)"
-echo "    unified stop         # Stop proxy"
-echo "    unified status       # Check status"
-echo "    unified kill-port    # Free port 1430 if stuck"
-echo "    unified logout       # Switch license key"
+echo "    $CMD_NAME run          # Start proxy (foreground)"
+echo "    $CMD_NAME start        # Start proxy (background)"
+echo "    $CMD_NAME stop         # Stop proxy"
+echo "    $CMD_NAME status       # Check status"
+echo "    $CMD_NAME kill-port    # Free port 1430 if stuck"
+echo "    $CMD_NAME logout       # Switch license key"
 echo ""
-echo -e "  ${CYAN}First time?${NC}"
-echo "    1. Run: unified run"
+echo -e "  ${CYAN}First time:${NC}"
+echo "    1. $CMD_NAME run"
 echo "    2. Enter your license key"
 echo "    3. Open http://localhost:1430/dashboard"
 echo "    4. Set your admin password"
 echo "    5. Get your API key"
 echo ""
 echo -e "  ${CYAN}Or run directly:${NC}"
-echo "    cd $INSTALL_DIR && .venv/$VENV_BIN/python -m unified.cli run"
+echo "    cd $INSTALL_DIR && $VENV_PYTHON -m unified.cli run"
 echo ""
