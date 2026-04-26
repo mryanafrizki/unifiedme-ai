@@ -4,8 +4,9 @@ Usage:
     unifiedme start       Start proxy in background
     unifiedme stop        Stop background proxy
     unifiedme run         Start proxy in foreground (interactive)
-    unifiedme kill-port   Kill process using port 1430
     unifiedme status      Show proxy status
+    unifiedme update      Pull latest code + reinstall deps
+    unifiedme kill-port   Kill process using port 1430
     unifiedme logout      Clear license key (switch license)
     unifiedme help        Show this help
 """
@@ -292,6 +293,83 @@ def cmd_run():
     main()
 
 
+def cmd_update():
+    """Pull latest code from GitHub and reinstall dependencies."""
+    install_dir = Path(__file__).resolve().parent.parent
+    venv_dir = install_dir / ".venv"
+
+    # Find venv python/pip
+    venv_python = None
+    venv_pip = None
+    for p in [venv_dir / "Scripts" / "python.exe", venv_dir / "Scripts" / "python", venv_dir / "bin" / "python"]:
+        if p.exists():
+            venv_python = str(p)
+            break
+    for p in [venv_dir / "Scripts" / "pip.exe", venv_dir / "Scripts" / "pip", venv_dir / "bin" / "pip"]:
+        if p.exists():
+            venv_pip = str(p)
+            break
+
+    # Check if proxy is running — warn user
+    pid = _get_pid()
+    was_running = False
+    if pid and _is_running(pid):
+        was_running = True
+        print(f"  Proxy is running (PID {pid}). Stopping for update...")
+        cmd_stop()
+        time.sleep(1)
+
+    # Git pull
+    print("  Pulling latest code...")
+    result = subprocess.run(
+        ["git", "pull", "--ff-only"],
+        capture_output=True, text=True, timeout=30,
+        cwd=str(install_dir),
+    )
+    if result.returncode != 0:
+        # Try regular pull
+        result = subprocess.run(
+            ["git", "pull"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(install_dir),
+        )
+
+    if result.returncode == 0:
+        output = result.stdout.strip()
+        if "Already up to date" in output or "Already up-to-date" in output:
+            print("  Already up to date.")
+        else:
+            print(f"  Updated: {output.split(chr(10))[-1]}")
+    else:
+        print(f"  Git pull failed: {result.stderr.strip()}")
+        return
+
+    # Reinstall dependencies
+    if venv_pip:
+        print("  Installing dependencies...")
+        result = subprocess.run(
+            [venv_pip, "install", "-r", "requirements.txt"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(install_dir),
+        )
+        if result.returncode == 0:
+            print("  Dependencies updated.")
+        else:
+            last_lines = result.stdout.strip().split("\n")[-3:]
+            print("  Dep install output:")
+            for line in last_lines:
+                print(f"    {line}")
+    else:
+        print("  Warning: pip not found in venv, skip dependency install.")
+
+    print("  Update complete!")
+
+    # Restart if was running
+    if was_running:
+        print("  Restarting proxy...")
+        cmd_start()
+
+
 def cmd_logout():
     """Clear saved license key. Next run will prompt for new one."""
     from .main import LICENSE_FILE
@@ -311,8 +389,9 @@ def cli_main():
         "start": cmd_start,
         "stop": cmd_stop,
         "run": cmd_run,
-        "kill-port": cmd_kill_port,
         "status": cmd_status,
+        "update": cmd_update,
+        "kill-port": cmd_kill_port,
         "logout": cmd_logout,
     }
 
