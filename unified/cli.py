@@ -21,11 +21,25 @@ import sys
 import time
 from pathlib import Path
 
-from .config import LISTEN_PORT, DATA_DIR
+from .config import LISTEN_PORT, DATA_DIR, VERSION, CENTRAL_API_URL
 
 PID_FILE = DATA_DIR / "proxy.pid"
 UPTIME_FILE = DATA_DIR / ".uptime"
 CMD = "unifiedme"
+
+
+def _check_for_updates() -> str | None:
+    """Check if a newer version is available. Returns latest version or None."""
+    try:
+        import httpx
+        resp = httpx.get(f"{CENTRAL_API_URL}/api/version", timeout=5)
+        data = resp.json()
+        latest = data.get("version", "")
+        if latest and latest != VERSION:
+            return latest
+    except Exception:
+        pass
+    return None
 
 
 def _is_windows() -> bool:
@@ -253,6 +267,13 @@ def cmd_kill_port():
 
 def cmd_status():
     """Show proxy status."""
+    print(f"  Version:   {VERSION}")
+
+    # Check for updates
+    latest = _check_for_updates()
+    if latest:
+        print(f"  Update:    {latest} available! Run: {CMD} update")
+
     pid = _get_pid()
     if pid and _is_running(pid):
         uptime = get_uptime_seconds()
@@ -295,6 +316,7 @@ def cmd_run():
 
 def cmd_update():
     """Pull latest code from GitHub and reinstall dependencies."""
+    print(f"  Current version: {VERSION}")
     install_dir = Path(__file__).resolve().parent.parent
     venv_dir = install_dir / ".venv"
 
@@ -362,6 +384,13 @@ def cmd_update():
     else:
         print("  Warning: pip not found in venv, skip dependency install.")
 
+    # Read new version
+    version_file = install_dir / "VERSION"
+    new_version = version_file.read_text().strip() if version_file.exists() else "?"
+    if new_version != VERSION:
+        print(f"  Updated: v{VERSION} -> v{new_version}")
+    else:
+        print(f"  Version: v{new_version} (no change)")
     print("  Update complete!")
 
     # Restart if was running

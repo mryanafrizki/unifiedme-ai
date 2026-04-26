@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 
 from . import database as db
-from .config import LISTEN_HOST, LISTEN_PORT, BASE_DIR, DATA_DIR
+from .config import LISTEN_HOST, LISTEN_PORT, BASE_DIR, DATA_DIR, VERSION, CENTRAL_API_URL
 from .router_proxy import router as proxy_router
 from .router_admin import router as admin_router
 from .proxy_kiro import close_all_clients as close_kiro
@@ -63,9 +63,23 @@ _LICENSE_PATTERN = re.compile(r'^UNIF-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-
 def _print_banner():
     print()
     print("  +======================================+")
-    print("  |     Unified AI Proxy v1.0.0          |")
+    print(f"  |     Unified AI Proxy v{VERSION:<14s}|")
     print("  +======================================+")
     print()
+
+    # Non-blocking update check
+    try:
+        import httpx
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+        resp = httpx.get(f"{CENTRAL_API_URL}/api/version", timeout=3)
+        data = resp.json()
+        latest = data.get("version", "")
+        if latest and latest != VERSION:
+            print(f"  ** New version available: v{latest} **")
+            print(f"  ** Run: unifiedme update **")
+            print()
+    except Exception:
+        pass
 
 
 def _load_saved_license() -> str:
@@ -274,7 +288,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Unified AI Proxy",
     description="Merged Kiro + CodeBuddy proxy with account management",
-    version="1.0.0",
+    version=VERSION,
     lifespan=lifespan,
     docs_url="/docs",
     redoc_url="/redoc",
@@ -318,7 +332,7 @@ async def root():
     """Health check / info endpoint."""
     return {
         "service": "Unified AI Proxy",
-        "version": "1.0.0",
+        "version": VERSION,
         "endpoints": {
             "proxy": "/v1/chat/completions, /v1/messages, /v1/models",
             "admin": "/api/accounts, /api/keys, /api/stats, /api/batch/*",
@@ -366,11 +380,12 @@ async def setup_status():
 
 @app.get("/api/uptime")
 async def get_uptime():
-    """Return server uptime."""
+    """Return server uptime + version."""
     from .cli import get_uptime_seconds
     uptime = get_uptime_seconds()
     h, m, s = uptime // 3600, (uptime % 3600) // 60, uptime % 60
     return {
+        "version": VERSION,
         "uptime_seconds": uptime,
         "uptime_human": f"{h}h {m}m {s}s",
     }

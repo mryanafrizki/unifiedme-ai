@@ -35,9 +35,17 @@ CB_DEFAULT_CREDITS = 250.0
 WS_DEFAULT_CREDITS = 1.0  # $1 trial credit
 
 # ---------------------------------------------------------------------------
-# Database
+# Version
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
+_VERSION_FILE = BASE_DIR.parent / "VERSION"
+VERSION = _VERSION_FILE.read_text().strip() if _VERSION_FILE.exists() else "0.0.0"
+
+# Central API for version check
+CENTRAL_API_URL = os.getenv("CENTRAL_API_URL", "https://unified-api.roubot71.workers.dev")
+
+# Database
+# ---------------------------------------------------------------------------
 DATA_DIR = BASE_DIR / "data"
 DB_PATH = str(DATA_DIR / "unified.db")
 
