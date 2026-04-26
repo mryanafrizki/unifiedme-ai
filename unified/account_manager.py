@@ -58,6 +58,16 @@ async def mark_account_error(account_id: int, tier: Tier, error: str) -> None:
     # Clear sticky pointer so next request picks the next oldest account
     await db.clear_sticky_account(tier.value)
 
+    # Instant push to D1 on auto-fail (critical change)
+    if new_count >= MAX_CONSECUTIVE_ERRORS:
+        try:
+            from . import license_client
+            updated = await db.get_account(account_id)
+            if updated:
+                await license_client.push_account_now(updated)
+        except Exception:
+            pass
+
 
 async def mark_account_success(account_id: int, tier: Tier) -> None:
     """Reset error count on successful request."""

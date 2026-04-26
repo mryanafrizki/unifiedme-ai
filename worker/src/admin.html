@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Unified AI Proxy — Super Admin</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#222636;--surface3:#2a2f3f;
+  --border:#2e3348;--border-hover:#3d4460;
+  --text:#e4e6f0;--text-dim:#8b90a8;--text-muted:#5c6180;
+  --accent:#6c8aff;--accent-dim:#4a65d4;--accent-glow:rgba(108,138,255,.15);
+  --green:#34d399;--green-dim:rgba(52,211,153,.12);
+  --red:#f87171;--red-dim:rgba(248,113,113,.12);
+  --orange:#fbbf24;--orange-dim:rgba(251,191,36,.12);
+  --purple:#a78bfa;--purple-dim:rgba(167,139,250,.12);
+  --cyan:#22d3ee;--cyan-dim:rgba(34,211,238,.12);
+  --radius:8px;--radius-lg:12px;--radius-sm:6px;
+  --shadow:0 2px 8px rgba(0,0,0,.3);--transition:180ms ease;
+}
+html{font-size:14px}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;line-height:1.5;-webkit-font-smoothing:antialiased}
+code,pre,.mono{font-family:'JetBrains Mono',monospace}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Auth */
+#auth-overlay{position:fixed;inset:0;z-index:9999;background:var(--bg);display:flex;align-items:center;justify-content:center}
+.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2.5rem;width:380px;text-align:center}
+.auth-box h2{font-size:1.5rem;font-weight:600;margin-bottom:.25rem}
+.auth-box .accent{color:var(--accent)}
+.auth-box p{color:var(--text-dim);font-size:.9rem;margin-bottom:1.5rem}
+.auth-input{width:100%;padding:.75rem 1rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.95rem;outline:none;font-family:'Outfit',sans-serif;transition:border var(--transition)}
+.auth-input:focus{border-color:var(--accent)}
+.auth-input::placeholder{color:var(--text-muted)}
+.auth-btn{width:100%;margin-top:1rem;padding:.75rem;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:.95rem;font-weight:500;cursor:pointer;font-family:'Outfit',sans-serif;transition:all var(--transition)}
+.auth-btn:hover{background:var(--accent-dim)}
+.auth-error{color:var(--red);font-size:.85rem;margin-top:.75rem;display:none}
+
+/* Layout */
+.topbar{display:flex;align-items:center;gap:1rem;padding:.75rem 1.5rem;background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.brand{font-size:1.25rem;font-weight:700;letter-spacing:-.03em;display:flex;align-items:center;gap:.5rem}
+.brand span{color:var(--accent)}
+.brand-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.topbar-spacer{flex:1}
+.topbar-info{color:var(--text-dim);font-size:.85rem}
+
+.tabs{display:flex;gap:2px;padding:0 1.5rem;background:var(--surface);border-bottom:1px solid var(--border)}
+.tab{padding:.6rem 1.2rem;cursor:pointer;color:var(--text-dim);font-size:.9rem;font-weight:500;border-bottom:2px solid transparent;transition:all var(--transition)}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+.content{padding:1.5rem;max-width:1400px;margin:0 auto;width:100%}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+/* Cards */
+.stats-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:1rem;margin-bottom:1.5rem}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:1.2rem;text-align:center}
+.stat-card .value{font-size:1.8rem;font-weight:700;letter-spacing:-.03em}
+.stat-card .label{font-size:.8rem;color:var(--text-dim);margin-top:.25rem}
+.stat-card.green .value{color:var(--green)}
+.stat-card.red .value{color:var(--red)}
+.stat-card.accent .value{color:var(--accent)}
+.stat-card.orange .value{color:var(--orange)}
+.stat-card.purple .value{color:var(--purple)}
+.stat-card.cyan .value{color:var(--cyan)}
+
+/* Tables */
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);overflow:hidden;margin-bottom:1.5rem}
+.panel-header{display:flex;align-items:center;justify-content:space-between;padding:1rem 1.2rem;border-bottom:1px solid var(--border)}
+.panel-title{font-size:1rem;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:.85rem}
+th{text-align:left;padding:.6rem 1rem;color:var(--text-dim);font-weight:500;border-bottom:1px solid var(--border);background:var(--surface2)}
+td{padding:.6rem 1rem;border-bottom:1px solid var(--border);vertical-align:top}
+tr:last-child td{border-bottom:none}
+tr:hover td{background:var(--surface2)}
+
+/* Badges */
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:.75rem;font-weight:500}
+.badge-green{background:var(--green-dim);color:var(--green)}
+.badge-red{background:var(--red-dim);color:var(--red)}
+.badge-orange{background:var(--orange-dim);color:var(--orange)}
+.badge-purple{background:var(--purple-dim);color:var(--purple)}
+.badge-cyan{background:var(--cyan-dim);color:var(--cyan)}
+.badge-gray{background:rgba(107,114,128,.12);color:#6b7280}
+
+/* Buttons */
+.btn{padding:.45rem .9rem;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);font-size:.8rem;cursor:pointer;font-family:'Outfit',sans-serif;transition:all var(--transition)}
+.btn:hover{border-color:var(--border-hover);background:var(--surface3)}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-accent:hover{background:var(--accent-dim)}
+.btn-red{background:transparent;border-color:var(--red);color:var(--red)}
+.btn-red:hover{background:var(--red-dim)}
+.btn-sm{padding:.3rem .6rem;font-size:.75rem}
+
+/* Forms */
+.form-row{display:flex;gap:.75rem;margin-bottom:.75rem;flex-wrap:wrap}
+.form-row input,.form-row select{padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem;outline:none;font-family:'Outfit',sans-serif}
+.form-row input:focus,.form-row select:focus{border-color:var(--accent)}
+.form-row input::placeholder{color:var(--text-muted)}
+
+/* Modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1000;display:none;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;width:500px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.modal h3{font-size:1.1rem;font-weight:600;margin-bottom:1rem}
+.modal label{display:block;font-size:.85rem;color:var(--text-dim);margin-bottom:.3rem;margin-top:.75rem}
+.modal input,.modal select,.modal textarea{width:100%;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem;outline:none;font-family:'Outfit',sans-serif}
+.modal textarea{min-height:80px;resize:vertical}
+.modal-actions{display:flex;gap:.75rem;justify-content:flex-end;margin-top:1.5rem}
+
+/* Pagination */
+.pagination{display:flex;align-items:center;gap:.5rem;justify-content:center;padding:1rem}
+.pagination .btn{min-width:32px;text-align:center}
+.pagination .btn.active{background:var(--accent);border-color:var(--accent);color:#fff}
+
+/* Severity */
+.sev-critical{color:var(--red)}
+.sev-warning{color:var(--orange)}
+.sev-info{color:var(--cyan)}
+
+/* Bar chart */
+.bar-row{display:flex;align-items:center;gap:.75rem;margin-bottom:.5rem}
+.bar-label{width:180px;font-size:.8rem;text-align:right;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bar-track{flex:1;height:20px;background:var(--surface2);border-radius:3px;overflow:hidden}
+.bar-fill{height:100%;border-radius:3px;background:var(--accent);transition:width .3s ease}
+.bar-value{width:100px;font-size:.8rem;color:var(--text-dim)}
+
+/* Responsive */
+@media(max-width:768px){
+  .stats-row{grid-template-columns:repeat(2,1fr)}
+  .form-row{flex-direction:column}
+  .bar-label{width:120px}
+}
+</style>
+</head>
+<body>
+
+<!-- Auth -->
+<div id="auth-overlay">
+  <div class="auth-box">
+    <h2>Unified <span class="accent">Admin</span></h2>
+    <p>Super Admin Panel</p>
+    <input type="password" id="auth-pw" class="auth-input" placeholder="Admin password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="auth-btn" onclick="doLogin()">Login</button>
+    <div id="auth-err" class="auth-error"></div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app" style="display:none">
+  <div class="topbar">
+    <div class="brand"><span class="brand-dot"></span> Unified <span>Admin</span></div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-info" id="topbar-info"></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="overview" onclick="switchTab('overview')">Overview</div>
+    <div class="tab" data-tab="licenses" onclick="switchTab('licenses')">Licenses</div>
+    <div class="tab" data-tab="accounts" onclick="switchTab('accounts')">Accounts</div>
+    <div class="tab" data-tab="logs" onclick="switchTab('logs')">Logs</div>
+    <div class="tab" data-tab="alerts" onclick="switchTab('alerts')">Alerts</div>
+    <div class="tab" data-tab="watchwords" onclick="switchTab('watchwords')">Watchwords</div>
+  </div>
+
+  <div class="content">
+    <!-- Overview -->
+    <div class="tab-panel active" id="panel-overview">
+      <div class="stats-row" id="global-stats"></div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Top Models (Lifetime)</div></div>
+        <div id="top-models" style="padding:1rem"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Top Licenses by Usage</div></div>
+        <div style="overflow-x:auto"><table id="top-licenses-table"><thead><tr><th>License</th><th>Owner</th><th>Tier</th><th>Requests</th><th>Success</th><th>Accounts</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- Licenses -->
+    <div class="tab-panel" id="panel-licenses">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Licenses</div>
+          <button class="btn btn-accent" onclick="showCreateLicense()">+ New License</button>
+        </div>
+        <div style="overflow-x:auto"><table id="licenses-table"><thead><tr><th>Key</th><th>Owner</th><th>Tier</th><th>Devices</th><th>Accounts</th><th>Requests</th><th>Last Seen</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- Accounts -->
+    <div class="tab-panel" id="panel-accounts">
+      <div class="form-row" style="margin-bottom:1rem">
+        <select id="acc-license-filter" onchange="loadAccounts()"><option value="">All Licenses</option></select>
+        <input id="acc-search" placeholder="Search email..." oninput="renderAccountCards()" style="padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem;outline:none;width:250px">
+      </div>
+      <div id="acc-summary" class="stats-row" style="margin-bottom:1rem"></div>
+      <div id="acc-cards"></div>
+      <div class="pagination" id="acc-pagination"></div>
+    </div>
+
+    <!-- Logs -->
+    <div class="tab-panel" id="panel-logs">
+      <div class="form-row" style="margin-bottom:1rem">
+        <select id="log-license-filter" onchange="loadLogs()"><option value="">All Licenses</option></select>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Usage Logs (7 days)</div><div id="log-count" class="topbar-info"></div></div>
+        <div style="overflow-x:auto"><table id="logs-table"><thead><tr><th>Time</th><th>License</th><th>Model</th><th>Status</th><th>Latency</th><th>Proxy</th><th>Account</th><th>Error</th></tr></thead><tbody></tbody></table></div>
+        <div class="pagination" id="log-pagination"></div>
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div class="tab-panel" id="panel-alerts">
+      <div class="stats-row" id="alert-stats"></div>
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Watchword Alerts</div></div>
+        <div style="overflow-x:auto"><table id="alerts-table"><thead><tr><th>Time</th><th>Severity</th><th>License</th><th>Keyword</th><th>Snippet</th><th>Model</th><th></th></tr></thead><tbody></tbody></table></div>
+        <div class="pagination" id="alert-pagination"></div>
+      </div>
+    </div>
+
+    <!-- Watchwords -->
+    <div class="tab-panel" id="panel-watchwords">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Watchword Rules</div>
+          <button class="btn btn-accent" onclick="showCreateWatchword()">+ Add Rule</button>
+        </div>
+        <div style="overflow-x:auto"><table id="watchwords-table"><thead><tr><th>Keyword</th><th>Regex</th><th>Severity</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create License Modal -->
+<div class="modal-overlay" id="modal-license">
+  <div class="modal">
+    <h3>Create License</h3>
+    <label>Owner Name *</label><input id="lic-name" placeholder="Ryan">
+    <label>Owner Email *</label><input id="lic-email" placeholder="ryan@email.com">
+    <label>Tier</label>
+    <select id="lic-tier"><option value="basic">Basic</option><option value="pro" selected>Pro</option><option value="enterprise">Enterprise</option></select>
+    <label>Max Devices</label><input id="lic-devices" type="number" value="2">
+    <label>Max Accounts</label><input id="lic-accounts" type="number" value="50">
+    <label>Expires At (optional)</label><input id="lic-expires" type="date">
+    <div class="modal-actions">
+      <button class="btn" onclick="hideModal('modal-license')">Cancel</button>
+      <button class="btn btn-accent" onclick="createLicense()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Watchword Modal -->
+<div class="modal-overlay" id="modal-watchword">
+  <div class="modal">
+    <h3>Add Watchword Rule</h3>
+    <label>Keyword *</label><input id="ww-keyword" placeholder="unified">
+    <label>Severity</label>
+    <select id="ww-severity"><option value="info">Info</option><option value="warning" selected>Warning</option><option value="critical">Critical</option></select>
+    <label>Description</label><input id="ww-desc" placeholder="Detect proxy name mention">
+    <label><input type="checkbox" id="ww-regex"> Regex pattern</label>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideModal('modal-watchword')">Cancel</button>
+      <button class="btn btn-accent" onclick="createWatchword()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- License Detail Modal -->
+<div class="modal-overlay" id="modal-license-detail">
+  <div class="modal" style="width:700px">
+    <h3 id="lic-detail-title">License Detail</h3>
+    <div id="lic-detail-body"></div>
+    <div class="modal-actions"><button class="btn" onclick="hideModal('modal-license-detail')">Close</button></div>
+  </div>
+</div>
+
+<script>
+const API = location.origin;
+let PW = '';
+let currentTab = 'overview';
+let licenseList = [];
+
+// ── Auth ──
+function doLogin() {
+  PW = document.getElementById('auth-pw').value;
+  fetch(`${API}/api/admin/stats?password=${encodeURIComponent(PW)}`)
+    .then(r => { if (!r.ok) throw new Error('Invalid password'); return r.json(); })
+    .then(() => {
+      document.getElementById('auth-overlay').style.display = 'none';
+      document.getElementById('app').style.display = 'block';
+      localStorage.setItem('admin_pw', PW);
+      loadAll();
+    })
+    .catch(e => { const el = document.getElementById('auth-err'); el.textContent = e.message; el.style.display = 'block'; });
+}
+(function autoLogin() {
+  const saved = localStorage.getItem('admin_pw');
+  if (saved) { document.getElementById('auth-pw').value = saved; doLogin(); }
+})();
+
+// ── Tabs ──
+function switchTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tab));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + tab));
+  if (tab === 'overview') loadOverview();
+  if (tab === 'licenses') loadLicenses();
+  if (tab === 'accounts') loadAccounts();
+  if (tab === 'logs') loadLogs();
+  if (tab === 'alerts') loadAlerts();
+  if (tab === 'watchwords') loadWatchwords();
+}
+
+function loadAll() { loadOverview(); loadLicenseFilter(); }
+
+// ── API helper ──
+function api(path, opts = {}) {
+  const headers = { 'X-Admin-Password': PW, ...(opts.headers || {}) };
+  if (opts.body && typeof opts.body === 'object') {
+    headers['Content-Type'] = 'application/json';
+    opts.body = JSON.stringify(opts.body);
+  }
+  return fetch(`${API}${path}`, { ...opts, headers }).then(r => r.json());
+}
+
+// ── Overview ──
+async function loadOverview() {
+  const data = await api('/api/admin/stats');
+  const t = data.totals || {};
+  const rate = t.total_requests > 0 ? ((t.total_success / t.total_requests) * 100).toFixed(1) : '0';
+  document.getElementById('global-stats').innerHTML = `
+    <div class="stat-card accent"><div class="value">${fmt(t.total_requests||0)}</div><div class="label">Total Requests</div></div>
+    <div class="stat-card green"><div class="value">${rate}%</div><div class="label">Success Rate</div></div>
+    <div class="stat-card purple"><div class="value">${fmt(t.total_accounts_added||0)}</div><div class="label">Accounts Ever</div></div>
+    <div class="stat-card cyan"><div class="value">${data.active_licenses||0}</div><div class="label">Active Licenses</div></div>
+    <div class="stat-card orange"><div class="value">${data.total_devices||0}</div><div class="label">Total Devices</div></div>
+    <div class="stat-card green"><div class="value">${data.active_devices||0}</div><div class="label">Online Now</div></div>
+  `;
+  // Top models bar chart
+  const models = data.top_models || [];
+  const maxReq = models.length > 0 ? models[0].requests : 1;
+  document.getElementById('top-models').innerHTML = models.map(m => `
+    <div class="bar-row">
+      <div class="bar-label mono">${m.model}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${(m.requests/maxReq*100).toFixed(1)}%"></div></div>
+      <div class="bar-value">${fmt(m.requests)} (${m.requests>0?((m.success/m.requests)*100).toFixed(0):'0'}%)</div>
+    </div>
+  `).join('') || '<div style="color:var(--text-muted);padding:.5rem">No data yet</div>';
+
+  // Top licenses
+  const tbody = document.querySelector('#top-licenses-table tbody');
+  tbody.innerHTML = (data.top_licenses || []).map(l => `<tr>
+    <td class="mono" style="font-size:.8rem">${l.license_id}</td>
+    <td>${l.owner_name||''}</td>
+    <td><span class="badge badge-${tierColor(l.tier)}">${l.tier||'basic'}</span></td>
+    <td>${fmt(l.total_requests||0)}</td>
+    <td>${l.total_requests>0?((l.total_success/l.total_requests)*100).toFixed(1):'0'}%</td>
+    <td>${l.account_count||0}</td>
+  </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">No data</td></tr>';
+
+  document.getElementById('topbar-info').textContent = `${fmt(t.total_requests||0)} requests total`;
+}
+
+// ── Licenses ──
+async function loadLicenses() {
+  const data = await api('/api/admin/licenses?limit=200');
+  licenseList = data.licenses || [];
+  const tbody = document.querySelector('#licenses-table tbody');
+  tbody.innerHTML = licenseList.map(l => `<tr>
+    <td><a href="#" onclick="showLicenseDetail('${l.id}');return false" class="mono" style="color:var(--accent);font-size:.8rem">${l.id}</a></td>
+    <td>${l.owner_name} <span style="color:var(--text-muted);font-size:.75rem">${l.owner_email||''}</span></td>
+    <td><span class="badge badge-${tierColor(l.tier)}">${l.tier}</span></td>
+    <td>${l.device_count||0}/${l.max_devices}</td>
+    <td>${l.account_count||0}/${l.max_accounts}</td>
+    <td>${fmt(l.total_requests||0)}</td>
+    <td style="font-size:.8rem">${timeAgo(l.last_device_seen)}</td>
+    <td>${l.active ? '<span class="badge badge-green">Active</span>' : '<span class="badge badge-red">Inactive</span>'}</td>
+    <td><button class="btn btn-sm btn-red" onclick="deactivateLicense('${l.id}')">Revoke</button></td>
+  </tr>`).join('') || '<tr><td colspan="9" style="color:var(--text-muted)">No licenses</td></tr>';
+}
+
+async function loadLicenseFilter() {
+  const data = await api('/api/admin/licenses?limit=200');
+  licenseList = data.licenses || [];
+  const opts = '<option value="">All Licenses</option>' + licenseList.map(l => `<option value="${l.id}">${l.id} (${l.owner_name})</option>`).join('');
+  document.getElementById('acc-license-filter').innerHTML = opts;
+  document.getElementById('log-license-filter').innerHTML = opts;
+}
+
+function showCreateLicense() { document.getElementById('modal-license').classList.add('show'); }
+function hideModal(id) { document.getElementById(id).classList.remove('show'); }
+
+async function createLicense() {
+  const body = {
+    owner_name: document.getElementById('lic-name').value,
+    owner_email: document.getElementById('lic-email').value,
+    tier: document.getElementById('lic-tier').value,
+    max_devices: parseInt(document.getElementById('lic-devices').value) || 2,
+    max_accounts: parseInt(document.getElementById('lic-accounts').value) || 50,
+    expires_at: document.getElementById('lic-expires').value || null,
+  };
+  const res = await api('/api/admin/licenses', { method: 'POST', body });
+  if (res.ok) {
+    hideModal('modal-license');
+    alert(`License created: ${res.license_key}`);
+    loadLicenses();
+    loadLicenseFilter();
+  } else {
+    alert(res.error || 'Failed');
+  }
+}
+
+async function deactivateLicense(id) {
+  if (!confirm(`Revoke license ${id}?`)) return;
+  await api(`/api/admin/licenses/${id}`, { method: 'DELETE' });
+  loadLicenses();
+}
+
+async function showLicenseDetail(id) {
+  const data = await api(`/api/admin/licenses/${id}`);
+  const l = data.license;
+  const s = data.stats || {};
+  const ac = data.account_counts || {};
+  const rate = s.total_requests > 0 ? ((s.total_success / s.total_requests) * 100).toFixed(1) : '0';
+
+  document.getElementById('lic-detail-title').textContent = `License: ${l.id}`;
+  document.getElementById('lic-detail-body').innerHTML = `
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:1rem">
+      <div><span style="color:var(--text-dim)">Owner:</span> ${l.owner_name}</div>
+      <div><span style="color:var(--text-dim)">Email:</span> ${l.owner_email}</div>
+      <div><span style="color:var(--text-dim)">Tier:</span> <span class="badge badge-${tierColor(l.tier)}">${l.tier}</span></div>
+      <div><span style="color:var(--text-dim)">Status:</span> ${l.active?'Active':'Inactive'}</div>
+      <div><span style="color:var(--text-dim)">Expires:</span> ${l.expires_at||'Never'}</div>
+      <div><span style="color:var(--text-dim)">Created:</span> ${l.created_at}</div>
+    </div>
+    <div class="stats-row" style="margin-bottom:1rem">
+      <div class="stat-card accent"><div class="value">${fmt(s.total_requests||0)}</div><div class="label">Requests</div></div>
+      <div class="stat-card green"><div class="value">${rate}%</div><div class="label">Success</div></div>
+      <div class="stat-card purple"><div class="value">${ac.total||0}</div><div class="label">Accounts</div></div>
+    </div>
+    <h4 style="margin-bottom:.5rem;font-size:.9rem">Accounts by Provider</h4>
+    <table style="margin-bottom:1rem"><thead><tr><th>Provider</th><th>OK</th><th>Failed</th><th>None</th></tr></thead><tbody>
+      <tr><td>Kiro</td><td class="badge-green">${ac.kiro_ok||0}</td><td>${ac.kiro_failed||0}</td><td style="color:var(--text-muted)">${ac.kiro_none||0}</td></tr>
+      <tr><td>CodeBuddy</td><td class="badge-green">${ac.cb_ok||0}</td><td>${ac.cb_failed||0}</td><td style="color:var(--text-muted)">${ac.cb_none||0}</td></tr>
+      <tr><td>WaveSpeed</td><td class="badge-green">${ac.ws_ok||0}</td><td>${ac.ws_failed||0}</td><td style="color:var(--text-muted)">${ac.ws_none||0}</td></tr>
+      <tr><td>Gumloop</td><td class="badge-green">${ac.gl_ok||0}</td><td>${ac.gl_failed||0}</td><td style="color:var(--text-muted)">${ac.gl_none||0}</td></tr>
+    </tbody></table>
+    <h4 style="margin-bottom:.5rem;font-size:.9rem">Devices (${(data.devices||[]).length}/${l.max_devices})</h4>
+    <table><thead><tr><th>PC Name</th><th>OS</th><th>IP Address</th><th>Machine ID</th><th>Last Seen</th><th>Created</th><th></th></tr></thead><tbody>
+      ${(data.devices||[]).map(d => `<tr>
+        <td>${d.pc_name||d.device_name||'(unnamed)'}</td>
+        <td style="font-size:.8rem">${d.os||'-'}</td>
+        <td class="mono" style="font-size:.8rem">${d.ip_address||'-'}</td>
+        <td class="mono" style="font-size:.8rem">${d.machine_id||d.device_fingerprint||'-'}</td>
+        <td>${timeAgo(d.last_seen)}</td>
+        <td style="font-size:.8rem">${d.created_at}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-sm btn-red" onclick="banDevice(${d.id},'${d.pc_name||d.device_name||"unknown"}')">Ban</button>
+          <button class="btn btn-sm" onclick="deleteDevice(${d.id},'${l.id}')">Delete</button>
+        </td>
+      </tr>`).join('')}
+    </tbody></table>
+    ${(data.model_stats||[]).length > 0 ? `
+    <h4 style="margin:.75rem 0 .5rem;font-size:.9rem">Model Usage</h4>
+    <table><thead><tr><th>Model</th><th>Requests</th><th>Success</th><th>Avg Latency</th></tr></thead><tbody>
+      ${(data.model_stats||[]).map(m => `<tr><td class="mono" style="font-size:.8rem">${m.model}</td><td>${fmt(m.total_requests)}</td><td>${m.total_requests>0?((m.total_success/m.total_requests)*100).toFixed(1):'0'}%</td><td>${m.total_requests>0?Math.round(m.total_latency_ms/m.total_requests):0}ms</td></tr>`).join('')}
+    </tbody></table>` : ''}
+  `;
+  document.getElementById('modal-license-detail').classList.add('show');
+}
+
+// ── Accounts ──
+let accPage = 1;
+let accData = [];
+async function loadAccounts(page) {
+  accPage = page || 1;
+  const licId = document.getElementById('acc-license-filter').value;
+  const q = licId ? `&license_id=${licId}` : '';
+  const data = await api(`/api/admin/accounts?page=${accPage}&limit=200${q}`);
+  accData = data.accounts || [];
+
+  // Summary counts
+  const total = data.total || accData.length;
+  const kiroOk = accData.filter(a => a.kiro_status === 'ok').length;
+  const cbOk = accData.filter(a => a.cb_status === 'ok').length;
+  const wsOk = accData.filter(a => a.ws_status === 'ok').length;
+  const glOk = accData.filter(a => a.gl_status === 'ok').length;
+  const active = accData.filter(a => a.status === 'active').length;
+  document.getElementById('acc-summary').innerHTML = `
+    <div class="stat-card accent"><div class="value">${total}</div><div class="label">Total Accounts</div></div>
+    <div class="stat-card green"><div class="value">${active}</div><div class="label">Active</div></div>
+    <div class="stat-card green"><div class="value">${kiroOk}</div><div class="label">Kiro OK</div></div>
+    <div class="stat-card green"><div class="value">${cbOk}</div><div class="label">CB OK</div></div>
+    <div class="stat-card green"><div class="value">${wsOk}</div><div class="label">WS OK</div></div>
+    <div class="stat-card green"><div class="value">${glOk}</div><div class="label">GL OK</div></div>
+  `;
+  renderAccountCards();
+  renderPagination('acc-pagination', data.total, accPage, 200, p => loadAccounts(p));
+}
+
+function renderAccountCards() {
+  const search = (document.getElementById('acc-search').value || '').toLowerCase();
+  let filtered = accData;
+  if (search) filtered = accData.filter(a => a.email.toLowerCase().includes(search));
+
+  // Group by license
+  const groups = {};
+  for (const a of filtered) {
+    if (!groups[a.license_id]) groups[a.license_id] = { owner: a.owner_name || '', accounts: [] };
+    groups[a.license_id].accounts.push(a);
+  }
+
+  let html = '';
+  for (const [licId, group] of Object.entries(groups)) {
+    const accs = group.accounts;
+    const kOk = accs.filter(a => a.kiro_status === 'ok').length;
+    const cOk = accs.filter(a => a.cb_status === 'ok').length;
+    const wOk = accs.filter(a => a.ws_status === 'ok').length;
+    const gOk = accs.filter(a => a.gl_status === 'ok').length;
+
+    html += `<div class="panel" style="margin-bottom:1rem">
+      <div class="panel-header">
+        <div>
+          <span class="panel-title mono" style="font-size:.85rem;color:var(--accent)">${licId}</span>
+          <span style="color:var(--text-dim);margin-left:.5rem">${group.owner}</span>
+        </div>
+        <div style="display:flex;gap:1rem;font-size:.8rem;color:var(--text-dim)">
+          <span>${accs.length} accounts</span>
+          <span style="color:var(--green)">K:${kOk}</span>
+          <span style="color:var(--green)">C:${cOk}</span>
+          <span style="color:var(--green)">W:${wOk}</span>
+          <span style="color:var(--green)">G:${gOk}</span>
+        </div>
+      </div>
+      <div style="overflow-x:auto"><table><thead><tr>
+        <th style="width:250px">Email</th><th>Status</th>
+        <th>Kiro</th><th>Kiro Credits</th>
+        <th>CB</th><th>CB Credits</th>
+        <th>WS</th><th>WS Credits</th>
+        <th>GL</th><th>GL Credits</th>
+      </tr></thead><tbody>
+        ${accs.map(a => `<tr>
+          <td style="font-size:.85rem">${a.email}</td>
+          <td>${statusBadge(a.status)}</td>
+          <td>${provBadge(a.kiro_status)}</td>
+          <td style="font-size:.8rem;color:var(--text-dim)">${a.kiro_status==='ok'?(a.kiro_credits||0).toFixed(0):''}</td>
+          <td>${provBadge(a.cb_status)}</td>
+          <td style="font-size:.8rem;color:var(--text-dim)">${a.cb_status==='ok'?(a.cb_credits||0).toFixed(0):''}</td>
+          <td>${provBadge(a.ws_status)}</td>
+          <td style="font-size:.8rem;color:var(--text-dim)">${a.ws_status==='ok'?'$'+(a.ws_credits||0).toFixed(2):''}</td>
+          <td>${provBadge(a.gl_status)}</td>
+          <td style="font-size:.8rem;color:var(--text-dim)">${a.gl_status==='ok'?(a.gl_credits||0).toFixed(0):''}</td>
+        </tr>`).join('')}
+      </tbody></table></div>
+    </div>`;
+  }
+
+  document.getElementById('acc-cards').innerHTML = html || '<div style="color:var(--text-muted);padding:2rem;text-align:center">No accounts found</div>';
+}
+
+// ── Logs ──
+let logPage = 1;
+async function loadLogs(page) {
+  logPage = page || 1;
+  const licId = document.getElementById('log-license-filter').value;
+  const q = licId ? `&license_id=${licId}` : '';
+  const data = await api(`/api/admin/logs?page=${logPage}&limit=50${q}`);
+  document.getElementById('log-count').textContent = `${data.total} total`;
+  const tbody = document.querySelector('#logs-table tbody');
+  tbody.innerHTML = (data.logs||[]).map(l => `<tr>
+    <td style="font-size:.8rem;white-space:nowrap">${l.created_at||''}</td>
+    <td class="mono" style="font-size:.75rem">${l.license_id}</td>
+    <td class="mono" style="font-size:.8rem">${l.model}</td>
+    <td>${l.status_code < 400 ? `<span class="badge badge-green">${l.status_code}</span>` : `<span class="badge badge-red">${l.status_code}</span>`}</td>
+    <td>${l.latency_ms}ms</td>
+    <td style="font-size:.75rem;max-width:150px;overflow:hidden;text-overflow:ellipsis">${l.proxy_url||'direct'}</td>
+    <td style="font-size:.8rem">${l.account_email||''}</td>
+    <td style="font-size:.8rem;color:var(--red);max-width:200px;overflow:hidden;text-overflow:ellipsis">${l.error_message||''}</td>
+  </tr>`).join('') || '<tr><td colspan="8" style="color:var(--text-muted)">No logs</td></tr>';
+  renderPagination('log-pagination', data.total, logPage, 50, p => loadLogs(p));
+}
+
+// ── Alerts ──
+let alertPage = 1;
+async function loadAlerts(page) {
+  alertPage = page || 1;
+  const data = await api(`/api/admin/alerts?page=${alertPage}&limit=50`);
+  const alerts = data.alerts || [];
+  const crit = alerts.filter(a => a.severity === 'critical' && !a.acknowledged).length;
+  const warn = alerts.filter(a => a.severity === 'warning' && !a.acknowledged).length;
+  document.getElementById('alert-stats').innerHTML = `
+    <div class="stat-card red"><div class="value">${crit}</div><div class="label">Critical (unack)</div></div>
+    <div class="stat-card orange"><div class="value">${warn}</div><div class="label">Warning (unack)</div></div>
+    <div class="stat-card accent"><div class="value">${data.total||0}</div><div class="label">Total Alerts</div></div>
+  `;
+  const tbody = document.querySelector('#alerts-table tbody');
+  tbody.innerHTML = alerts.map(a => `<tr style="${a.acknowledged?'opacity:.5':''}">
+    <td style="font-size:.8rem;white-space:nowrap">${a.created_at||''}</td>
+    <td><span class="sev-${a.severity}">${a.severity === 'critical' ? '🔴' : a.severity === 'warning' ? '🟡' : '🔵'} ${a.severity}</span></td>
+    <td class="mono" style="font-size:.75rem">${a.license_id} <span style="color:var(--text-muted)">${a.owner_name||''}</span></td>
+    <td class="mono" style="font-size:.85rem;color:var(--orange)">${a.keyword_matched}</td>
+    <td style="font-size:.8rem;max-width:250px;overflow:hidden;text-overflow:ellipsis">"${a.message_snippet}"</td>
+    <td class="mono" style="font-size:.8rem">${a.model||''}</td>
+    <td>${a.acknowledged ? '<span class="badge badge-gray">ack</span>' : `<button class="btn btn-sm" onclick="ackAlert(${a.id})">✓ Ack</button>`}</td>
+  </tr>`).join('') || '<tr><td colspan="7" style="color:var(--text-muted)">No alerts</td></tr>';
+  renderPagination('alert-pagination', data.total, alertPage, 50, p => loadAlerts(p));
+}
+
+async function ackAlert(id) {
+  await api(`/api/admin/alerts/${id}/ack`, { method: 'POST' });
+  loadAlerts(alertPage);
+}
+
+// ── Watchwords ──
+async function loadWatchwords() {
+  const data = await api('/api/admin/watchwords');
+  const tbody = document.querySelector('#watchwords-table tbody');
+  tbody.innerHTML = (data.watchwords||[]).map(w => `<tr>
+    <td class="mono" style="font-size:.9rem;color:var(--orange)">${w.keyword}</td>
+    <td>${w.is_regex ? '<span class="badge badge-purple">regex</span>' : ''}</td>
+    <td><span class="sev-${w.severity}">${w.severity}</span></td>
+    <td style="color:var(--text-dim)">${w.description||''}</td>
+    <td>${w.enabled ? '<span class="badge badge-green">enabled</span>' : '<span class="badge badge-gray">disabled</span>'}</td>
+    <td><button class="btn btn-sm btn-red" onclick="deleteWatchword(${w.id})">Delete</button></td>
+  </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">No watchword rules</td></tr>';
+}
+
+function showCreateWatchword() { document.getElementById('modal-watchword').classList.add('show'); }
+
+async function createWatchword() {
+  const body = {
+    keyword: document.getElementById('ww-keyword').value,
+    severity: document.getElementById('ww-severity').value,
+    description: document.getElementById('ww-desc').value,
+    is_regex: document.getElementById('ww-regex').checked,
+  };
+  const res = await api('/api/admin/watchwords', { method: 'POST', body });
+  if (res.ok) { hideModal('modal-watchword'); loadWatchwords(); }
+  else alert(res.error || 'Failed');
+}
+
+async function deleteWatchword(id) {
+  if (!confirm('Delete this watchword rule?')) return;
+  await api(`/api/admin/watchwords/${id}`, { method: 'DELETE' });
+  loadWatchwords();
+}
+
+// ── Device Management ──
+async function banDevice(deviceId, deviceName) {
+  const reason = prompt('Ban reason for device "' + deviceName + '":', 'Policy violation');
+  if (reason === null) return;
+  await api('/api/admin/devices/' + deviceId + '/ban', { method: 'POST', body: { reason } });
+  alert('Device banned globally (by machine ID). They cannot use any license.');
+  hideModal('modal-license-detail');
+}
+
+async function deleteDevice(deviceId, licenseId) {
+  if (!confirm('Delete this device binding? (does NOT ban)')) return;
+  await api('/api/admin/devices/' + deviceId, { method: 'DELETE' });
+  showLicenseDetail(licenseId);
+}
+
+// ── Helpers ──
+function fmt(n) { return n >= 1e6 ? (n/1e6).toFixed(1)+'M' : n >= 1e3 ? (n/1e3).toFixed(1)+'K' : String(n); }
+function tierColor(t) { return t==='enterprise'?'purple':t==='pro'?'cyan':'gray'; }
+function statusBadge(s) { return s==='active'?'<span class="badge badge-green">active</span>':s==='failed'?'<span class="badge badge-red">failed</span>':`<span class="badge badge-gray">${s}</span>`; }
+function provBadge(s) {
+  if (s==='ok') return '<span class="badge badge-green">ok</span>';
+  if (s==='failed'||s==='banned') return '<span class="badge badge-red">'+s+'</span>';
+  if (s==='exhausted'||s==='rate_limited') return '<span class="badge badge-orange">'+s+'</span>';
+  if (s==='none'||s==='pending') return '<span style="color:var(--text-muted)">'+s+'</span>';
+  return s||'';
+}
+function timeAgo(ts) {
+  if (!ts) return '<span style="color:var(--text-muted)">never</span>';
+  const diff = (Date.now() - new Date(ts+'Z').getTime()) / 1000;
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+function renderPagination(elId, total, current, perPage, onClick) {
+  const pages = Math.ceil(total / perPage);
+  if (pages <= 1) { document.getElementById(elId).innerHTML = ''; return; }
+  let html = '';
+  if (current > 1) html += `<button class="btn btn-sm" onclick="(${onClick.toString()})(${current-1})">‹</button>`;
+  for (let i = 1; i <= Math.min(pages, 7); i++) {
+    const p = pages <= 7 ? i : (i <= 3 ? i : i <= 5 ? current - 3 + i : pages - (7 - i));
+    if (p < 1 || p > pages) continue;
+    html += `<button class="btn btn-sm ${p===current?'active':''}" onclick="(${onClick.toString()})(${p})">${p}</button>`;
+  }
+  if (current < pages) html += `<button class="btn btn-sm" onclick="(${onClick.toString()})(${current+1})">›</button>`;
+  document.getElementById(elId).innerHTML = html;
+}
+</script>
+</body>
+</html>

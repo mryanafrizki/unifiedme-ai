@@ -4,8 +4,9 @@ Usage:
     unifiedme start       Start proxy in background
     unifiedme stop        Stop background proxy
     unifiedme run         Start proxy in foreground (interactive)
-    unifiedme status      Show proxy status
+    unifiedme status      Show proxy status + version
     unifiedme update      Pull latest code + reinstall deps
+    unifiedme fix         Check environment, auto-install missing deps
     unifiedme kill-port   Kill process using port 1430
     unifiedme logout      Clear license key (switch license)
     unifiedme help        Show this help
@@ -216,8 +217,18 @@ def cmd_start():
         print(f"  Dashboard: http://localhost:{LISTEN_PORT}/dashboard")
         print(f"  Log file:  {DATA_DIR / 'proxy.log'}")
     else:
-        print("  Failed to start. Check log:")
-        print(f"  {DATA_DIR / 'proxy.log'}")
+        print("  Failed to start!")
+        # Show last error lines from log
+        log_path = DATA_DIR / "proxy.log"
+        if log_path.exists():
+            lines = log_path.read_text(errors="replace").strip().split("\n")
+            error_lines = [l for l in lines[-20:] if "ERROR" in l or "Traceback" in l or "Exception" in l or "Error" in l]
+            if error_lines:
+                print("  Recent errors:")
+                for line in error_lines[-5:]:
+                    print(f"    \033[0;31m{line.strip()[:150]}\033[0m")
+            else:
+                print(f"  Check log: {log_path}")
 
 
 def cmd_stop():
@@ -399,6 +410,142 @@ def cmd_update():
         cmd_start()
 
 
+def cmd_fix():
+    """Check environment, auto-install missing deps, check for updates."""
+    install_dir = Path(__file__).resolve().parent.parent
+    venv_dir = install_dir / ".venv"
+
+    RED = "\033[0;31m"
+    GREEN = "\033[0;32m"
+    YELLOW = "\033[1;33m"
+    NC = "\033[0m"
+    OK = f"{GREEN}[OK]{NC}"
+    FAIL = f"{RED}[MISSING]{NC}"
+    WARN = f"{YELLOW}[WARN]{NC}"
+
+    print(f"  Version: {VERSION}")
+    print()
+    issues = 0
+
+    # 1. Check Python version
+    import sys as _sys
+    py_ver = f"{_sys.version_info.major}.{_sys.version_info.minor}.{_sys.version_info.micro}"
+    if _sys.version_info >= (3, 10):
+        print(f"  {OK} Python {py_ver}")
+    else:
+        print(f"  {FAIL} Python {py_ver} (need >= 3.10)")
+        issues += 1
+
+    # 2. Check venv
+    if venv_dir.exists():
+        print(f"  {OK} Virtual environment")
+    else:
+        print(f"  {FAIL} Virtual environment (.venv not found)")
+        print(f"       Fix: python -m venv .venv")
+        issues += 1
+
+    # 3. Find venv python/pip
+    venv_python = None
+    venv_pip = None
+    for p in [venv_dir / "Scripts" / "python.exe", venv_dir / "Scripts" / "python", venv_dir / "bin" / "python"]:
+        if p.exists():
+            venv_python = str(p)
+            break
+    for p in [venv_dir / "Scripts" / "pip.exe", venv_dir / "Scripts" / "pip", venv_dir / "bin" / "pip"]:
+        if p.exists():
+            venv_pip = str(p)
+            break
+
+    # 4. Check critical Python packages
+    required = ["fastapi", "uvicorn", "httpx", "pydantic", "aiosqlite", "aiohttp", "websockets"]
+    missing_pkgs = []
+    for pkg in required:
+        try:
+            result = subprocess.run(
+                [venv_python or "python", "-c", f"import {pkg}"],
+                capture_output=True, timeout=10,
+            )
+            if result.returncode == 0:
+                print(f"  {OK} {pkg}")
+            else:
+                print(f"  {FAIL} {pkg}")
+                missing_pkgs.append(pkg)
+                issues += 1
+        except Exception:
+            print(f"  {FAIL} {pkg} (check failed)")
+            missing_pkgs.append(pkg)
+            issues += 1
+
+    # 5. Check license
+    from .main import LICENSE_FILE
+    if LICENSE_FILE.exists():
+        key = LICENSE_FILE.read_text().strip()
+        print(f"  {OK} License: {key[:15]}...")
+    else:
+        env_key = os.environ.get("LICENSE_KEY", "")
+        if env_key:
+            print(f"  {OK} License: {env_key[:15]}... (env)")
+        else:
+            print(f"  {WARN} No license key saved (run: {CMD} run)")
+
+    # 6. Check data directory
+    data_dir = install_dir / "unified" / "data"
+    if data_dir.exists():
+        print(f"  {OK} Data directory")
+    else:
+        print(f"  {WARN} Data directory missing (will be created on first run)")
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+    # 7. Check for updates
+    print()
+    latest = _check_for_updates()
+    if latest:
+        print(f"  {WARN} Update available: v{VERSION} -> v{latest}")
+        try:
+            answer = input(f"  Install update now? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        if answer == "y":
+            cmd_update()
+            return
+    else:
+        print(f"  {OK} Up to date (v{VERSION})")
+
+    # 8. Auto-install missing packages
+    if missing_pkgs and venv_pip:
+        print()
+        print(f"  {WARN} {len(missing_pkgs)} missing packages. Installing...")
+        result = subprocess.run(
+            [venv_pip, "install", "-r", "requirements.txt"],
+            capture_output=True, text=True, timeout=120,
+            cwd=str(install_dir),
+        )
+        if result.returncode == 0:
+            print(f"  {OK} Dependencies installed")
+            issues -= len(missing_pkgs)
+        else:
+            print(f"  {FAIL} Install failed:")
+            for line in result.stderr.strip().split("\n")[-3:]:
+                print(f"       {line}")
+
+    # 9. Show recent error logs
+    log_file = data_dir / "proxy.log"
+    if log_file.exists():
+        log_content = log_file.read_text(errors="replace")
+        error_lines = [l for l in log_content.split("\n") if "ERROR" in l or "Traceback" in l or "Exception" in l]
+        if error_lines:
+            print()
+            print(f"  {WARN} Recent errors in proxy.log:")
+            for line in error_lines[-5:]:
+                print(f"    {RED}{line.strip()[:120]}{NC}")
+
+    print()
+    if issues == 0:
+        print(f"  {GREEN}All checks passed!{NC}")
+    else:
+        print(f"  {RED}{issues} issue(s) found.{NC}")
+
+
 def cmd_logout():
     """Clear saved license key. Next run will prompt for new one."""
     from .main import LICENSE_FILE
@@ -420,6 +567,7 @@ def cli_main():
         "run": cmd_run,
         "status": cmd_status,
         "update": cmd_update,
+        "fix": cmd_fix,
         "kill-port": cmd_kill_port,
         "logout": cmd_logout,
     }

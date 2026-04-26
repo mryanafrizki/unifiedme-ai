@@ -41,6 +41,11 @@ SESSION_LOG.md
 .vscode/
 *.swp
 
+# Worker build artifacts
+worker/node_modules/
+worker/dist/
+worker/package-lock.json
+
 # OS
 .DS_Store
 Thumbs.db

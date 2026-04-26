@@ -405,6 +405,23 @@ async def push_sync(
 
 # ─── Usage Log Buffer ────────────────────────────────────────────────────────
 
+async def push_account_now(account: dict) -> None:
+    """Immediately push a single account change to D1 (don't wait for sync interval).
+
+    Call this on critical changes: account added, exhausted, banned, credentials updated.
+    """
+    if not is_licensed():
+        return
+    try:
+        await _api_post("/api/sync/push", {
+            "license_key": LICENSE_KEY,
+            "device_fingerprint": _device_fingerprint,
+            "accounts": [account],
+        }, timeout=10)
+    except Exception as e:
+        log.warning("Instant account push failed (will retry on next sync): %s", e)
+
+
 def buffer_usage_log(
     model: str,
     tier: str,
