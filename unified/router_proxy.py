@@ -220,13 +220,21 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         error_msg = ""
 
         if status in (401, 403):
-            error_msg = f"WaveSpeed auth error HTTP {status}"
+            error_msg = f"WaveSpeed HTTP {status} banned (account: {account['email']})"
             await db.update_account(account["id"], ws_status="banned", ws_error=error_msg)
+            try:
+                updated = await db.get_account(account["id"])
+                if updated: await license_client.push_account_now(updated)
+            except Exception: pass
         elif status == 402 or status == 429:
-            error_msg = f"WaveSpeed HTTP {status}"
+            error_msg = f"WaveSpeed HTTP {status} exhausted (account: {account['email']})"
             await db.update_account(account["id"], ws_status="exhausted", ws_error=error_msg)
+            try:
+                updated = await db.get_account(account["id"])
+                if updated: await license_client.push_account_now(updated)
+            except Exception: pass
         elif status >= 400:
-            error_msg = f"WaveSpeed HTTP {status}"
+            error_msg = f"WaveSpeed HTTP {status} (account: {account['email']})"
         else:
             await mark_account_success(account["id"], tier)
             if cost > 0:
@@ -311,16 +319,26 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             error_msg = ""
 
             if status in (401, 403):
-                error_msg = f"Gumloop auth error HTTP {status}"
+                error_msg = f"Gumloop HTTP {status} banned (account: {account['email']})"
                 await db.update_account(account["id"], gl_status="banned", gl_error=error_msg)
-                log.warning("Account %s GL banned (HTTP %d), trying next", account["email"], status)
+                await db.log_usage(key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "")
+                log.warning("GL %s banned (HTTP %d), trying next", account["email"], status)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
                 continue
             elif status == 429:
-                error_msg = f"Gumloop rate limited HTTP {status}"
+                error_msg = f"Gumloop HTTP 429 rate limited (account: {account['email']})"
                 await db.update_account(account["id"], gl_status="rate_limited", gl_error=error_msg)
+                await db.log_usage(key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "")
                 continue
             elif status >= 500:
-                error_msg = f"Gumloop HTTP {status}"
+                error_msg = f"Gumloop HTTP {status} (account: {account['email']})"
                 await mark_account_error(account["id"], tier, error_msg)
             else:
                 await mark_account_success(account["id"], tier)

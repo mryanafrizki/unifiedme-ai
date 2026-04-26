@@ -2614,6 +2614,53 @@ async function setStickyAccount(accountId, provider) {
   }
 }
 
+async function forceUseAccount(accountId, provider, providerApiName) {
+  // Temporarily restore account status to 'ok' and set as sticky
+  var tier = getTierForProvider(provider);
+  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : 'gl_status';
+  var errorCol = providerApiName === 'kiro' ? 'kiro_error' : providerApiName === 'codebuddy' ? 'cb_error' : providerApiName === 'wavespeed' ? 'ws_error' : 'gl_error';
+  var errorCountCol = providerApiName === 'kiro' ? 'kiro_error_count' : providerApiName === 'codebuddy' ? 'cb_error_count' : providerApiName === 'wavespeed' ? 'ws_error_count' : 'gl_error_count';
+  try {
+    // Reset status to ok temporarily
+    var body = {};
+    body[statusCol] = 'ok';
+    body[errorCol] = '';
+    body[errorCountCol] = 0;
+    await apiFetch('/api/accounts/' + accountId, { method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } });
+    // Set as sticky
+    await apiFetch('/api/accounts/' + accountId + '/sticky/' + tier, { method: 'POST' });
+    toast('Force-set ' + providerApiName + ' account as active. Next request will use this account.', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function testAccount(accountId, providerApiName) {
+  toast('Testing ' + providerApiName + ' account...', 'info');
+  try {
+    var res = await apiFetch('/api/accounts/test-batch', {
+      method: 'POST',
+      body: JSON.stringify({ providers: [providerApiName], account_ids: [accountId] }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    var results = res.results || [];
+    if (results.length > 0) {
+      var r = results[0];
+      if (r.test_ok) {
+        toast(providerApiName + ' account restored! Status: OK', 'success');
+      } else if (r.auto_approved) {
+        toast(providerApiName + ' confirmed exhausted. Auto-approved as fix.', 'warning');
+      } else {
+        toast(providerApiName + ' test failed: ' + (r.error || 'unknown'), 'error');
+      }
+    }
+    await loadAccounts();
+  } catch (e) {
+    toast('Test failed: ' + e.message, 'error');
+  }
+}
+
 function formatCreatedAt(dateStr) {
   if (!dateStr) return '';
   try {
@@ -2767,6 +2814,9 @@ function renderAccountColumn(provider) {
       btns += '<button class="btn btn-sm" onclick="event.stopPropagation();setStickyAccount(\'' + id + '\',\'' + provider + '\')">&#x1f4cc; Use</button>';
     }
     if (isBad) {
+      // Use button for exhausted/temporary — force set as sticky for manual testing
+      btns += '<button class="btn btn-sm" onclick="event.stopPropagation();forceUseAccount(\'' + id + '\',\'' + provider + '\',\'' + getProviderApiName(provider) + '\')">&#x1f4cc; Use</button>';
+      btns += '<button class="btn btn-sm" onclick="event.stopPropagation();testAccount(\'' + id + '\',\'' + getProviderApiName(provider) + '\')">&#x1f9ea; Test</button>';
       if (verified === 0) {
         btns += '<button class="btn btn-sm" onclick="event.stopPropagation();approveAccount(\'' + id + '\',\'' + getProviderApiName(provider) + '\')">&#x2705; Approve</button>';
       }

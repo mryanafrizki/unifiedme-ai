@@ -327,6 +327,25 @@ async def retry_login(account_id: int, request: Request, _: bool = Depends(verif
     return result
 
 
+@router.put("/accounts/{account_id}")
+async def update_account_fields(account_id: int, request: Request, _: bool = Depends(verify_admin)):
+    """Update account fields directly (for manual status changes)."""
+    body = await request.json()
+    allowed = {
+        "status", "kiro_status", "kiro_error", "kiro_error_count",
+        "cb_status", "cb_error", "cb_error_count",
+        "ws_status", "ws_error", "ws_error_count",
+        "gl_status", "gl_error", "gl_error_count",
+    }
+    fields = {k: v for k, v in body.items() if k in allowed}
+    if not fields:
+        return JSONResponse({"error": "No valid fields"}, status_code=400)
+    ok = await db.update_account(account_id, **fields)
+    if not ok:
+        return JSONResponse({"error": "Account not found"}, status_code=404)
+    return {"ok": True}
+
+
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: int, request: Request, _: bool = Depends(verify_admin)):
     """Permanently delete an account."""
