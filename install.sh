@@ -16,6 +16,7 @@ WARN="${YELLOW}[WARN]${NC}"
 REPO="https://github.com/mryanafrizki/unifiedme-ai.git"
 INSTALL_DIR="$HOME/unifiedme-ai"
 MIN_PYTHON="3.10"
+MAX_PYTHON="3.13"
 CMD_NAME="unifiedme"
 
 echo ""
@@ -27,30 +28,127 @@ echo ""
 # ─── Detect OS ───────────────────────────────────────────────────────────────
 
 IS_WINDOWS=false
+IS_LINUX=false
+IS_MAC=false
 case "$OSTYPE" in
     msys*|mingw*|cygwin*) IS_WINDOWS=true ;;
+    linux-gnu*)           IS_LINUX=true ;;
+    darwin*)              IS_MAC=true ;;
 esac
+
+# ─── Install native build dependencies ───────────────────────────────────────
+
+echo -e "  ${CYAN}Checking native dependencies...${NC}"
+
+if [ "$IS_WINDOWS" = true ]; then
+    # VC++ Redistributable — required for greenlet, orjson, pydantic-core DLLs
+    echo -e "  Checking VC++ Redistributable..."
+    VC_INSTALLED=$(powershell.exe -NoProfile -Command "
+        \$r = Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\X64' -ErrorAction SilentlyContinue
+        if (\$r) { Write-Output 'YES' } else { Write-Output 'NO' }
+    " 2>/dev/null | tr -d '\r')
+
+    if [ "$VC_INSTALLED" = "YES" ]; then
+        echo -e "  $CHECK VC++ Redistributable"
+    else
+        echo -e "  ${YELLOW}Installing VC++ Redistributable...${NC}"
+        powershell.exe -NoProfile -Command "
+            \$url = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
+            \$out = \"\$env:TEMP\\vc_redist.x64.exe\"
+            Invoke-WebRequest -Uri \$url -OutFile \$out -UseBasicParsing
+            Start-Process \$out -ArgumentList '/install /quiet /norestart' -Wait
+        " 2>/dev/null
+        echo -e "  $CHECK VC++ Redistributable installed"
+    fi
+
+elif [ "$IS_LINUX" = true ]; then
+    # build-essential — required for compiling node-pty, greenlet, etc.
+    NEED_BUILD=false
+    for pkg in gcc make; do
+        if ! command -v "$pkg" &>/dev/null; then
+            NEED_BUILD=true
+            break
+        fi
+    done
+
+    if [ "$NEED_BUILD" = true ]; then
+        echo -e "  ${YELLOW}Installing build-essential...${NC}"
+        if command -v apt-get &>/dev/null; then
+            sudo apt-get update -qq 2>/dev/null
+            sudo apt-get install -y -qq build-essential python3-dev 2>/dev/null
+        elif command -v yum &>/dev/null; then
+            sudo yum groupinstall -y "Development Tools" 2>/dev/null
+            sudo yum install -y python3-devel 2>/dev/null
+        elif command -v dnf &>/dev/null; then
+            sudo dnf groupinstall -y "Development Tools" 2>/dev/null
+            sudo dnf install -y python3-devel 2>/dev/null
+        fi
+        echo -e "  $CHECK build-essential"
+    else
+        echo -e "  $CHECK build-essential"
+    fi
+
+elif [ "$IS_MAC" = true ]; then
+    if ! xcode-select -p &>/dev/null; then
+        echo -e "  ${YELLOW}Installing Xcode CLI tools...${NC}"
+        xcode-select --install 2>/dev/null || true
+        echo -e "  $WARN Xcode CLI tools — follow the popup to install, then re-run this script"
+    else
+        echo -e "  $CHECK Xcode CLI tools"
+    fi
+fi
+
+echo ""
 
 # ─── Check dependencies ─────────────────────────────────────────────────────
 
 ERRORS=0
 PYTHON_CMD=""
 
-for cmd in python3 python; do
+# Find suitable Python (3.10 - 3.13, reject 3.14+)
+for cmd in python3.12 python3.11 python3.10 python3.13 python3 python; do
     if command -v "$cmd" &>/dev/null; then
         PY=$("$cmd" --version 2>&1 | awk '{print $2}')
         PY_MAJOR=$(echo "$PY" | cut -d. -f1)
         PY_MINOR=$(echo "$PY" | cut -d. -f2)
-        if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 10 ]; then
+        if [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 10 ] && [ "$PY_MINOR" -le 13 ]; then
             PYTHON_CMD="$cmd"
             echo -e "  $CHECK Python $PY ($cmd)"
             break
+        elif [ "$PY_MAJOR" -ge 3 ] && [ "$PY_MINOR" -ge 14 ]; then
+            echo -e "  $WARN Python $PY found but too new (max $MAX_PYTHON)"
         fi
     fi
 done
+
+# Windows: also check py launcher for 3.12
+if [ -z "$PYTHON_CMD" ] && [ "$IS_WINDOWS" = true ]; then
+    if command -v py &>/dev/null; then
+        for minor in 12 11 10 13; do
+            if py -3.$minor --version &>/dev/null 2>&1; then
+                PY=$(py -3.$minor --version 2>&1 | awk '{print $2}')
+                PYTHON_CMD="py -3.$minor"
+                echo -e "  $CHECK Python $PY (py -3.$minor)"
+                break
+            fi
+        done
+    fi
+fi
+
 if [ -z "$PYTHON_CMD" ]; then
-    echo -e "  $CROSS Python >= $MIN_PYTHON not found"
-    ERRORS=$((ERRORS + 1))
+    echo -e "  $CROSS Python >= $MIN_PYTHON, <= $MAX_PYTHON not found"
+    echo ""
+    echo -e "  ${RED}Python 3.14+ is NOT supported (greenlet/camoufox incompatible).${NC}"
+    echo -e "  ${YELLOW}Install Python 3.12 (recommended):${NC}"
+    if [ "$IS_WINDOWS" = true ]; then
+        echo "    https://www.python.org/downloads/release/python-3129/"
+    elif [ "$IS_LINUX" = true ]; then
+        echo "    sudo apt install -y python3.12 python3.12-venv"
+    elif [ "$IS_MAC" = true ]; then
+        echo "    brew install python@3.12"
+    fi
+    echo ""
+    exit 1
 fi
 
 if command -v git &>/dev/null; then
@@ -73,12 +171,11 @@ if [ "$ERRORS" -gt 0 ]; then
     echo -e "  ${RED}$ERRORS missing dependencies. Install them first:${NC}"
     echo ""
     if [ "$IS_WINDOWS" = true ]; then
-        echo "    Install Python: https://www.python.org/downloads/"
         echo "    Install Git:    https://git-scm.com/downloads"
-    elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        echo "    sudo apt update && sudo apt install -y python3 python3-pip python3-venv git curl"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        echo "    brew install python3 git curl"
+    elif [ "$IS_LINUX" = true ]; then
+        echo "    sudo apt update && sudo apt install -y git curl"
+    elif [ "$IS_MAC" = true ]; then
+        echo "    brew install git curl"
     fi
     echo ""
     exit 1
@@ -104,6 +201,22 @@ fi
 # ─── Create venv + find python/pip ───────────────────────────────────────────
 
 VENV_DIR="$INSTALL_DIR/.venv"
+
+# Check existing venv Python version — recreate if wrong version
+if [ -d "$VENV_DIR" ]; then
+    VENV_PY_CHECK=""
+    for p in "$VENV_DIR/Scripts/python.exe" "$VENV_DIR/bin/python3" "$VENV_DIR/bin/python"; do
+        if [ -f "$p" ]; then
+            VENV_PY_CHECK=$("$p" --version 2>&1 | awk '{print $2}')
+            VENV_PY_MINOR=$(echo "$VENV_PY_CHECK" | cut -d. -f2)
+            if [ "$VENV_PY_MINOR" -ge 14 ]; then
+                echo -e "  $WARN Existing venv uses Python $VENV_PY_CHECK (too new), recreating..."
+                rm -rf "$VENV_DIR"
+            fi
+            break
+        fi
+    done
+fi
 
 if [ ! -d "$VENV_DIR" ]; then
     echo -e "  Creating virtual environment..."
@@ -141,7 +254,7 @@ fi
 
 echo ""
 MISSING_PKGS=0
-for pkg in fastapi uvicorn httpx pydantic aiosqlite aiohttp; do
+for pkg in fastapi uvicorn httpx pydantic aiosqlite aiohttp greenlet; do
     if "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
         echo -e "  $CHECK $pkg"
     else
@@ -149,6 +262,43 @@ for pkg in fastapi uvicorn httpx pydantic aiosqlite aiohttp; do
         MISSING_PKGS=$((MISSING_PKGS + 1))
     fi
 done
+
+# Verify native C extensions (the ones that break on wrong Python/missing VC++)
+NATIVE_OK=true
+for pkg in greenlet orjson pydantic_core; do
+    if ! "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
+        echo -e "  $CROSS $pkg (native extension failed)"
+        NATIVE_OK=false
+    fi
+done
+
+if [ "$NATIVE_OK" = false ]; then
+    echo ""
+    echo -e "  ${YELLOW}Native extensions failed. Attempting force reinstall...${NC}"
+    "$VENV_PIP" install --force-reinstall greenlet orjson pydantic-core 2>&1 | tail -3
+
+    # Re-check
+    STILL_BROKEN=false
+    for pkg in greenlet orjson pydantic_core; do
+        if ! "$VENV_PYTHON" -c "import $pkg" 2>/dev/null; then
+            STILL_BROKEN=true
+            echo -e "  $CROSS $pkg still broken"
+        fi
+    done
+
+    if [ "$STILL_BROKEN" = true ]; then
+        echo ""
+        echo -e "  ${RED}Native extensions still failing.${NC}"
+        if [ "$IS_WINDOWS" = true ]; then
+            echo -e "  ${YELLOW}Try: restart terminal/RDP, then re-run this script.${NC}"
+            echo -e "  ${YELLOW}VC++ Redistributable may need a reboot to take effect.${NC}"
+        else
+            echo -e "  ${YELLOW}Try: sudo apt install -y python3-dev build-essential${NC}"
+        fi
+        exit 1
+    fi
+    echo -e "  $CHECK Native extensions fixed"
+fi
 
 if [ "$MISSING_PKGS" -gt 0 ]; then
     echo -e "\n  ${RED}$MISSING_PKGS packages failed. Run manually:${NC}"
