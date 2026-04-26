@@ -267,7 +267,84 @@ async def pull_sync() -> dict:
              len(_watchwords),
              len(result.get("proxies", [])))
 
+    # Write pulled data to local SQLite
+    await _write_to_local_db(result)
+
     return result
+
+
+async def _write_to_local_db(data: dict) -> None:
+    """Write pulled D1 data to local SQLite database."""
+    from . import database as db
+
+    # Upsert accounts
+    accounts = data.get("accounts", [])
+    for acc in accounts:
+        email = acc.get("email", "")
+        if not email:
+            continue
+        existing = await db.get_account_by_email(email)
+        if existing:
+            # Update existing account with D1 data
+            fields = {}
+            for key in [
+                "password", "status",
+                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+                "kiro_error", "kiro_error_count", "kiro_expires_at",
+                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+                "gl_credits", "gl_error", "gl_error_count",
+            ]:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                await db.update_account(existing["id"], **fields)
+        else:
+            # Create new account
+            account_id = await db.create_account(email, acc.get("password", ""))
+            fields = {}
+            for key in [
+                "status",
+                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+                "kiro_error", "kiro_error_count", "kiro_expires_at",
+                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+                "gl_credits", "gl_error", "gl_error_count",
+            ]:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                await db.update_account(account_id, **fields)
+
+    # Upsert settings
+    settings = data.get("settings", {})
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            await db.set_setting(key, str(value))
+
+    # Sync filters (replace local with D1 filters)
+    filters = data.get("filters", [])
+    if filters:
+        # Clear local filters and re-insert from D1
+        local_filters = await db.get_filters()
+        for lf in local_filters:
+            await db.delete_filter(lf["id"])
+        for f in filters:
+            await db.create_filter(
+                find_text=f.get("find_text", ""),
+                replace_text=f.get("replace_text", ""),
+                is_regex=bool(f.get("is_regex", 0)),
+                description=f.get("description", ""),
+            )
+        from .message_filter import invalidate_cache
+        invalidate_cache()
+
+    if accounts:
+        log.info("Synced %d accounts to local DB", len(accounts))
 
 
 # ─── Sync: Push ──────────────────────────────────────────────────────────────
@@ -472,18 +549,13 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push buffered data
-            await push_sync()
+            # Push buffered usage logs + local account changes to D1
+            from . import database as db
+            local_accounts = await db.get_accounts()
+            await push_sync(accounts=local_accounts)
 
-            # Pull latest watchwords (accounts/settings pulled on demand by database.py)
-            result = await _api_get("/api/sync/pull", {
-                "license_key": LICENSE_KEY,
-                "device_fingerprint": _device_fingerprint,
-            })
-            if result.get("ok"):
-                global _watchwords, _watchword_cache_ts
-                _watchwords = result.get("watchwords", [])
-                _watchword_cache_ts = time.monotonic()
+            # Pull latest data from D1 (accounts, settings, filters, watchwords)
+            await pull_sync()
 
         except asyncio.CancelledError:
             break
