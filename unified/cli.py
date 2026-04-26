@@ -1,11 +1,13 @@
 """Unified AI Proxy — CLI commands.
 
 Usage:
-    unified start       Start proxy in background
-    unified stop        Stop background proxy
-    unified run         Start proxy in foreground (interactive)
-    unified kill-port   Kill process using port 1430
-    unified status      Show proxy status
+    unifiedme start       Start proxy in background
+    unifiedme stop        Stop background proxy
+    unifiedme run         Start proxy in foreground (interactive)
+    unifiedme kill-port   Kill process using port 1430
+    unifiedme status      Show proxy status
+    unifiedme logout      Clear license key (switch license)
+    unifiedme help        Show this help
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from .config import LISTEN_PORT, DATA_DIR
 
 PID_FILE = DATA_DIR / "proxy.pid"
 UPTIME_FILE = DATA_DIR / ".uptime"
+CMD = "unifiedme"
 
 
 def _is_windows() -> bool:
@@ -29,18 +32,15 @@ def _is_windows() -> bool:
 
 
 def _get_pid() -> int | None:
-    """Read PID from file."""
     if PID_FILE.exists():
         try:
-            pid = int(PID_FILE.read_text().strip())
-            return pid
+            return int(PID_FILE.read_text().strip())
         except (ValueError, OSError):
             pass
     return None
 
 
 def _is_running(pid: int) -> bool:
-    """Check if a process with given PID is running."""
     try:
         if _is_windows():
             result = subprocess.run(
@@ -55,8 +55,8 @@ def _is_running(pid: int) -> bool:
         return False
 
 
-def _kill_port(port: int) -> bool:
-    """Kill process using a specific port."""
+def _port_in_use(port: int) -> int | None:
+    """Check if port is in use. Returns PID or None."""
     try:
         if _is_windows():
             result = subprocess.run(
@@ -66,35 +66,48 @@ def _kill_port(port: int) -> bool:
             for line in result.stdout.split("\n"):
                 if f":{port}" in line and "LISTENING" in line:
                     parts = line.strip().split()
-                    pid = int(parts[-1])
-                    print(f"  Killing PID {pid} on port {port}...")
-                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], timeout=5)
-                    return True
+                    return int(parts[-1])
         else:
             result = subprocess.run(
                 ["lsof", "-ti", f":{port}"],
                 capture_output=True, text=True, timeout=5
             )
-            pids = result.stdout.strip().split("\n")
-            for pid_str in pids:
-                if pid_str.strip():
-                    pid = int(pid_str.strip())
-                    print(f"  Killing PID {pid} on port {port}...")
-                    os.kill(pid, signal.SIGKILL)
-                    return True
-    except Exception as e:
-        print(f"  Error: {e}")
+            pid_str = result.stdout.strip().split("\n")[0].strip()
+            if pid_str:
+                return int(pid_str)
+    except Exception:
+        pass
+    return None
+
+
+def _kill_pid(pid: int) -> bool:
+    try:
+        if _is_windows():
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, timeout=10)
+        else:
+            os.kill(pid, signal.SIGKILL)
+        return True
+    except Exception:
+        return False
+
+
+def _kill_port(port: int) -> bool:
+    pid = _port_in_use(port)
+    if pid:
+        print(f"  Killing PID {pid} on port {port}...")
+        _kill_pid(pid)
+        time.sleep(1)
+        return True
     return False
 
 
 def _save_uptime():
-    """Save startup timestamp."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     UPTIME_FILE.write_text(str(int(time.time())))
 
 
 def get_uptime_seconds() -> int:
-    """Get proxy uptime in seconds. Returns 0 if not running."""
     if UPTIME_FILE.exists():
         try:
             start = int(UPTIME_FILE.read_text().strip())
@@ -104,14 +117,49 @@ def get_uptime_seconds() -> int:
     return 0
 
 
+def _find_pythonw() -> str | None:
+    """Find pythonw.exe (windowless Python) for background mode on Windows."""
+    python = sys.executable
+    pythonw = python.replace("python.exe", "pythonw.exe")
+    if os.path.exists(pythonw):
+        return pythonw
+    # Check in same directory
+    d = os.path.dirname(python)
+    pw = os.path.join(d, "pythonw.exe")
+    if os.path.exists(pw):
+        return pw
+    return None
+
+
+# ─── Commands ────────────────────────────────────────────────────────────────
+
 def cmd_start():
     """Start proxy in background."""
     pid = _get_pid()
     if pid and _is_running(pid):
         print(f"  Proxy already running (PID {pid})")
+        print(f"  Dashboard: http://localhost:{LISTEN_PORT}/dashboard")
         return
 
-    # Import and run license check first
+    # Check if port is already in use by something else
+    port_pid = _port_in_use(LISTEN_PORT)
+    if port_pid:
+        print(f"  Port {LISTEN_PORT} is already in use (PID {port_pid}).")
+        try:
+            answer = input("  Kill it and continue? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Aborted.")
+            return
+        if answer == "y":
+            _kill_pid(port_pid)
+            time.sleep(1)
+            print(f"  Killed PID {port_pid}.")
+        else:
+            print("  Aborted. Free the port first:")
+            print(f"    {CMD} kill-port")
+            return
+
+    # License check
     from .main import cli_license_flow
     license_key = cli_license_flow()
     os.environ["LICENSE_KEY"] = license_key
@@ -119,34 +167,39 @@ def cmd_start():
     print("  Starting proxy in background...")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-    python = sys.executable
+    log_file = open(DATA_DIR / "proxy.log", "a")
+
     if _is_windows():
-        # Windows: use pythonw or START /B
+        # Use pythonw.exe for truly windowless background process
+        pythonw = _find_pythonw()
+        exe = pythonw or sys.executable
         proc = subprocess.Popen(
-            [python, "-m", "unified.main"],
-            stdout=open(DATA_DIR / "proxy.log", "a"),
+            [exe, "-m", "unified.main"],
+            stdout=log_file,
             stderr=subprocess.STDOUT,
             creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
             env={**os.environ, "LICENSE_KEY": license_key},
+            close_fds=True,
         )
     else:
         proc = subprocess.Popen(
-            [python, "-m", "unified.main"],
-            stdout=open(DATA_DIR / "proxy.log", "a"),
+            [sys.executable, "-m", "unified.main"],
+            stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             env={**os.environ, "LICENSE_KEY": license_key},
+            close_fds=True,
         )
 
     PID_FILE.write_text(str(proc.pid))
     _save_uptime()
 
-    # Wait a moment and check if it started
-    time.sleep(2)
+    # Detach from child — don't wait
+    time.sleep(3)
     if _is_running(proc.pid):
         print(f"  Proxy started (PID {proc.pid})")
-        print(f"  Dashboard:  http://localhost:{LISTEN_PORT}/dashboard")
-        print(f"  Log file:   {DATA_DIR / 'proxy.log'}")
+        print(f"  Dashboard: http://localhost:{LISTEN_PORT}/dashboard")
+        print(f"  Log file:  {DATA_DIR / 'proxy.log'}")
     else:
         print("  Failed to start. Check log:")
         print(f"  {DATA_DIR / 'proxy.log'}")
@@ -160,7 +213,7 @@ def cmd_stop():
         return
 
     if not _is_running(pid):
-        print(f"  PID {pid} not running (stale PID file)")
+        print(f"  PID {pid} not running (stale PID file, cleaning up)")
         PID_FILE.unlink(missing_ok=True)
         UPTIME_FILE.unlink(missing_ok=True)
         return
@@ -168,10 +221,10 @@ def cmd_stop():
     print(f"  Stopping proxy (PID {pid})...")
     try:
         if _is_windows():
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)], timeout=10)
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)],
+                           capture_output=True, timeout=10)
         else:
             os.kill(pid, signal.SIGTERM)
-            # Wait for graceful shutdown
             for _ in range(10):
                 time.sleep(1)
                 if not _is_running(pid):
@@ -203,13 +256,13 @@ def cmd_status():
     if pid and _is_running(pid):
         uptime = get_uptime_seconds()
         h, m, s = uptime // 3600, (uptime % 3600) // 60, uptime % 60
-        print(f"  Status:   RUNNING")
-        print(f"  PID:      {pid}")
-        print(f"  Port:     {LISTEN_PORT}")
-        print(f"  Uptime:   {h}h {m}m {s}s")
+        print(f"  Status:    RUNNING")
+        print(f"  PID:       {pid}")
+        print(f"  Port:      {LISTEN_PORT}")
+        print(f"  Uptime:    {h}h {m}m {s}s")
         print(f"  Dashboard: http://localhost:{LISTEN_PORT}/dashboard")
     else:
-        print("  Status:   STOPPED")
+        print("  Status:    STOPPED")
         if pid:
             print(f"  (stale PID {pid})")
             PID_FILE.unlink(missing_ok=True)
@@ -217,6 +270,23 @@ def cmd_status():
 
 def cmd_run():
     """Start proxy in foreground (interactive)."""
+    # Check port first
+    port_pid = _port_in_use(LISTEN_PORT)
+    if port_pid:
+        print(f"  Port {LISTEN_PORT} is already in use (PID {port_pid}).")
+        try:
+            answer = input("  Kill it and continue? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Aborted.")
+            return
+        if answer == "y":
+            _kill_pid(port_pid)
+            time.sleep(1)
+            print(f"  Killed PID {port_pid}.")
+        else:
+            print("  Aborted.")
+            return
+
     from .main import main
     _save_uptime()
     main()
@@ -227,7 +297,7 @@ def cmd_logout():
     from .main import LICENSE_FILE
     if LICENSE_FILE.exists():
         LICENSE_FILE.unlink()
-        print("  License cleared. Run 'unified run' to enter a new license key.")
+        print(f"  License cleared. Run '{CMD} run' to enter a new license key.")
     else:
         print("  No saved license found.")
 
