@@ -222,6 +222,16 @@ def cmd_run():
     main()
 
 
+def cmd_logout():
+    """Clear saved license key. Next run will prompt for new one."""
+    from .main import LICENSE_FILE
+    if LICENSE_FILE.exists():
+        LICENSE_FILE.unlink()
+        print("  License cleared. Run 'unified run' to enter a new license key.")
+    else:
+        print("  No saved license found.")
+
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -233,6 +243,7 @@ def cli_main():
         "run": cmd_run,
         "kill-port": cmd_kill_port,
         "status": cmd_status,
+        "logout": cmd_logout,
     }
 
     if cmd in ("-h", "--help", "help"):
