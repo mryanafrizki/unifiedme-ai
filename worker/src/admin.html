@@ -167,6 +167,7 @@ tr:hover td{background:var(--surface2)}
     <div class="tab" data-tab="logs" onclick="switchTab('logs')">Logs</div>
     <div class="tab" data-tab="alerts" onclick="switchTab('alerts')">Alerts</div>
     <div class="tab" data-tab="watchwords" onclick="switchTab('watchwords')">Watchwords</div>
+    <div class="tab" data-tab="gfilters" onclick="switchTab('gfilters')">Global Filters</div>
   </div>
 
   <div class="content">
@@ -236,6 +237,35 @@ tr:hover td{background:var(--surface2)}
         </div>
         <div style="overflow-x:auto"><table id="watchwords-table"><thead><tr><th>Keyword</th><th>Regex</th><th>Severity</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
       </div>
+    </div>
+
+    <!-- Global Filters -->
+    <div class="tab-panel" id="panel-gfilters">
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">Global Filter Rules</div>
+          <div style="display:flex;gap:.5rem">
+            <button class="btn btn-accent" onclick="showCreateGlobalFilter()">+ Add Rule</button>
+          </div>
+        </div>
+        <p style="padding:.75rem 1.2rem;color:var(--text-dim);font-size:.85rem">These filters are available to all users. Users can download them from their dashboard.</p>
+        <div style="overflow-x:auto"><table id="gfilters-table"><thead><tr><th>Find</th><th>Replace</th><th>Regex</th><th>Description</th><th>Status</th><th></th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Create Global Filter Modal -->
+<div class="modal-overlay" id="modal-gfilter">
+  <div class="modal">
+    <h3>Add Global Filter Rule</h3>
+    <label>Find Text *</label><input id="gf-find" placeholder="Text to find">
+    <label>Replace With</label><input id="gf-replace" placeholder="Replacement (empty = remove)">
+    <label>Description</label><input id="gf-desc" placeholder="Optional note">
+    <label><input type="checkbox" id="gf-regex"> Regex pattern</label>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideModal('modal-gfilter')">Cancel</button>
+      <button class="btn btn-accent" onclick="createGlobalFilter()">Create</button>
     </div>
   </div>
 </div>
@@ -318,6 +348,7 @@ function switchTab(tab) {
   if (tab === 'logs') loadLogs();
   if (tab === 'alerts') loadAlerts();
   if (tab === 'watchwords') loadWatchwords();
+  if (tab === 'gfilters') loadGlobalFilters();
 }
 
 function loadAll() { loadOverview(); loadLicenseFilter(); }
@@ -652,6 +683,40 @@ async function deleteWatchword(id) {
   if (!confirm('Delete this watchword rule?')) return;
   await api(`/api/admin/watchwords/${id}`, { method: 'DELETE' });
   loadWatchwords();
+}
+
+// ── Global Filters ──
+async function loadGlobalFilters() {
+  const data = await api('/api/admin/global-filters');
+  const tbody = document.querySelector('#gfilters-table tbody');
+  tbody.innerHTML = (data.global_filters||[]).map(f => `<tr>
+    <td class="mono" style="font-size:.85rem">${f.find_text}</td>
+    <td class="mono" style="font-size:.85rem;color:var(--green)">${f.replace_text || '<em style="color:var(--text-muted)">(remove)</em>'}</td>
+    <td>${f.is_regex ? '<span class="badge badge-purple">regex</span>' : ''}</td>
+    <td style="color:var(--text-dim)">${f.description||''}</td>
+    <td>${f.enabled ? '<span class="badge badge-green">enabled</span>' : '<span class="badge badge-gray">disabled</span>'}</td>
+    <td><button class="btn btn-sm btn-red" onclick="deleteGlobalFilter(${f.id})">Delete</button></td>
+  </tr>`).join('') || '<tr><td colspan="6" style="color:var(--text-muted)">No global filter rules</td></tr>';
+}
+
+function showCreateGlobalFilter() { document.getElementById('modal-gfilter').classList.add('show'); }
+
+async function createGlobalFilter() {
+  const body = {
+    find_text: document.getElementById('gf-find').value,
+    replace_text: document.getElementById('gf-replace').value,
+    description: document.getElementById('gf-desc').value,
+    is_regex: document.getElementById('gf-regex').checked,
+  };
+  const res = await api('/api/admin/global-filters', { method: 'POST', body });
+  if (res.ok) { hideModal('modal-gfilter'); loadGlobalFilters(); document.getElementById('gf-find').value=''; document.getElementById('gf-replace').value=''; document.getElementById('gf-desc').value=''; }
+  else alert(res.error || 'Failed');
+}
+
+async function deleteGlobalFilter(id) {
+  if (!confirm('Delete this global filter rule?')) return;
+  await api(`/api/admin/global-filters/${id}`, { method: 'DELETE' });
+  loadGlobalFilters();
 }
 
 // ── Device Management ──

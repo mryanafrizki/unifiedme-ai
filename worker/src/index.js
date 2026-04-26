@@ -135,6 +135,15 @@ async function handleRequest(request, env) {
       if (method === 'DELETE') return adminDeleteWatchword(db, parseInt(wwMatch[1]));
     }
 
+    // Global Filters
+    if (path === '/api/admin/global-filters' && method === 'GET') return adminListGlobalFilters(db);
+    if (path === '/api/admin/global-filters' && method === 'POST') return adminCreateGlobalFilter(db, request);
+    const gfMatch = path.match(/^\/api\/admin\/global-filters\/(\d+)$/);
+    if (gfMatch) {
+      if (method === 'PUT') return adminUpdateGlobalFilter(db, parseInt(gfMatch[1]), request);
+      if (method === 'DELETE') return adminDeleteGlobalFilter(db, parseInt(gfMatch[1]));
+    }
+
     // Alerts
     if (path === '/api/admin/alerts' && method === 'GET') return adminListAlerts(db, url);
     const ackMatch = path.match(/^\/api\/admin\/alerts\/(\d+)\/ack$/);
@@ -268,6 +277,9 @@ async function syncPull(db, url) {
   // Watchwords (global)
   const watchwords = await db.prepare('SELECT * FROM watchwords WHERE enabled = 1 ORDER BY id ASC').all();
 
+  // Global filters (admin-managed, users can download)
+  const globalFilters = await db.prepare('SELECT * FROM global_filters WHERE enabled = 1 ORDER BY id ASC').all();
+
   // Proxies (per device)
   let proxies = { results: [] };
   if (device) {
@@ -280,6 +292,7 @@ async function syncPull(db, url) {
     settings: Object.fromEntries((settings.results || []).map(r => [r.key, r.value])),
     filters: filters.results,
     watchwords: watchwords.results,
+    global_filters: globalFilters.results,
     proxies: proxies.results,
   });
 }
@@ -669,6 +682,43 @@ async function adminUpdateWatchword(db, id, request) {
 
 async function adminDeleteWatchword(db, id) {
   await db.prepare('DELETE FROM watchwords WHERE id = ?').bind(id).run();
+  return json({ ok: true });
+}
+
+// ─── Admin: Global Filters ──────────────────────────────────────────────────
+
+async function adminListGlobalFilters(db) {
+  const rows = await db.prepare('SELECT * FROM global_filters ORDER BY id ASC').all();
+  return json({ global_filters: rows.results });
+}
+
+async function adminCreateGlobalFilter(db, request) {
+  const body = await request.json();
+  if (!body.find_text) return err('find_text required');
+  const result = await db.prepare(
+    'INSERT INTO global_filters (find_text, replace_text, is_regex, enabled, description) VALUES (?,?,?,?,?)'
+  ).bind(body.find_text, body.replace_text || '', body.is_regex ? 1 : 0, 1, body.description || '').run();
+  return json({ ok: true, id: result.meta.last_row_id }, 201);
+}
+
+async function adminUpdateGlobalFilter(db, id, request) {
+  const body = await request.json();
+  const fields = [];
+  const vals = [];
+  for (const key of ['find_text', 'replace_text', 'is_regex', 'enabled', 'description']) {
+    if (body[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      vals.push(key === 'is_regex' || key === 'enabled' ? (body[key] ? 1 : 0) : body[key]);
+    }
+  }
+  if (fields.length === 0) return err('No fields to update');
+  vals.push(id);
+  await db.prepare(`UPDATE global_filters SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+  return json({ ok: true });
+}
+
+async function adminDeleteGlobalFilter(db, id) {
+  await db.prepare('DELETE FROM global_filters WHERE id = ?').bind(id).run();
   return json({ ok: true });
 }
 

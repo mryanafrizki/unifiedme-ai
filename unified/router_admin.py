@@ -1321,6 +1321,15 @@ async def approve_all_accounts(request: Request, _: bool = Depends(verify_admin)
 # Filter rules
 # ---------------------------------------------------------------------------
 
+@router.get("/global-filters")
+async def list_global_filters(_: bool = Depends(verify_admin)):
+    """List global filter rules from central admin (cached from last sync)."""
+    from . import license_client
+    # Return cached global filters from last sync pull
+    gf = getattr(license_client, '_global_filters', [])
+    return {"global_filters": gf, "count": len(gf)}
+
+
 @router.get("/filters")
 async def list_filters(_: bool = Depends(verify_admin)):
     """List all filter rules."""

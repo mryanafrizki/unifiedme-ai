@@ -1182,6 +1182,33 @@ a:hover{text-decoration:underline}
         </tbody>
       </table>
     </div>
+
+    <!-- Global Filters (from admin) -->
+    <div class="flex-between mb-1" style="margin-top:2rem">
+      <div class="section-title" style="margin-bottom:0">Global Filters (from Admin)</div>
+      <div class="inline-flex" style="gap:.5rem">
+        <button class="btn btn-sm btn-accent" onclick="downloadAllGlobalFilters()">&#x2b07; Download All</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteAllLocalFilters()">&#x1f5d1; Delete All My Filters</button>
+        <button class="btn btn-sm" onclick="loadGlobalFilters()">&#x21bb; Refresh</button>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Find</th>
+            <th>Replace</th>
+            <th>Type</th>
+            <th>Description</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="global-filter-tbody">
+          <tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:1rem">Loading global filters...</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- ═══════════════════════════════════════════ -->
@@ -1724,7 +1751,7 @@ function initTabs() {
       document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
       // Load proxy data when proxy tab is activated
       if (btn.dataset.tab === 'proxy') { loadProxies('api'); loadProxies('batch'); }
-      if (btn.dataset.tab === 'filter') loadFilters();
+      if (btn.dataset.tab === 'filter') { loadFilters(); loadGlobalFilters(); }
     });
   });
 }
@@ -2417,6 +2444,91 @@ async function seedFilters() {
     toast('Seeded ' + count + ' default rule(s)', count > 0 ? 'success' : 'info');
     loadFilters();
   } catch(e) { toast('Seed failed: ' + e.message, 'error'); }
+}
+
+// ── Global Filters (from admin) ──
+var globalFilterData = [];
+
+async function loadGlobalFilters() {
+  try {
+    // Fetch from central API via license_client sync endpoint
+    var data = await apiFetch('/api/global-filters');
+    globalFilterData = (data && data.global_filters) ? data.global_filters : [];
+    renderGlobalFilters();
+  } catch(e) {
+    document.getElementById('global-filter-tbody').innerHTML =
+      '<tr><td colspan="5" style="color:var(--text-muted);text-align:center">Failed to load: ' + escHtml(e.message) + '</td></tr>';
+  }
+}
+
+function renderGlobalFilters() {
+  var tbody = document.getElementById('global-filter-tbody');
+  if (!tbody) return;
+  if (globalFilterData.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" style="color:var(--text-muted);text-align:center;padding:1rem">No global filters from admin</td></tr>';
+    return;
+  }
+  tbody.innerHTML = globalFilterData.map(function(f) {
+    var findDisplay = escHtml(f.find_text || '');
+    var replaceDisplay = f.replace_text ? escHtml(f.replace_text) : '<span style="color:var(--text-muted);font-style:italic">(remove)</span>';
+    var typeBadge = f.is_regex
+      ? '<span class="badge" style="background:var(--purple-dim);color:var(--purple)">Regex</span>'
+      : '<span class="badge badge-standard">Text</span>';
+    return '<tr>' +
+      '<td class="mono" style="font-size:.8rem">' + findDisplay + '</td>' +
+      '<td class="mono" style="font-size:.8rem;color:var(--green)">' + replaceDisplay + '</td>' +
+      '<td>' + typeBadge + '</td>' +
+      '<td class="text-dim text-sm">' + escHtml(f.description || '') + '</td>' +
+      '<td><button class="btn btn-sm btn-accent" onclick="downloadGlobalFilter(' + f.id + ')">&#x2b07; Download</button></td>' +
+    '</tr>';
+  }).join('');
+}
+
+async function downloadGlobalFilter(gfId) {
+  var gf = globalFilterData.find(function(f) { return f.id === gfId; });
+  if (!gf) return;
+  // Check if already exists locally
+  var exists = filterData.find(function(f) { return f.find_text === gf.find_text && f.replace_text === gf.replace_text; });
+  if (exists) { toast('Filter already exists locally', 'info'); return; }
+  try {
+    await apiFetch('/api/filters', {
+      method: 'POST',
+      body: JSON.stringify({ find_text: gf.find_text, replace_text: gf.replace_text, is_regex: !!gf.is_regex, description: gf.description || '' })
+    });
+    toast('Filter downloaded: ' + gf.find_text, 'success');
+    loadFilters();
+  } catch(e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function downloadAllGlobalFilters() {
+  var added = 0;
+  for (var i = 0; i < globalFilterData.length; i++) {
+    var gf = globalFilterData[i];
+    var exists = filterData.find(function(f) { return f.find_text === gf.find_text && f.replace_text === gf.replace_text; });
+    if (exists) continue;
+    try {
+      await apiFetch('/api/filters', {
+        method: 'POST',
+        body: JSON.stringify({ find_text: gf.find_text, replace_text: gf.replace_text, is_regex: !!gf.is_regex, description: gf.description || '' })
+      });
+      added++;
+    } catch(e) {}
+  }
+  toast('Downloaded ' + added + ' new filter(s)', added > 0 ? 'success' : 'info');
+  loadFilters();
+}
+
+async function deleteAllLocalFilters() {
+  if (!confirm('Delete ALL your local filter rules?')) return;
+  var deleted = 0;
+  for (var i = 0; i < filterData.length; i++) {
+    try {
+      await apiFetch('/api/filters/' + filterData[i].id, { method: 'DELETE' });
+      deleted++;
+    } catch(e) {}
+  }
+  toast('Deleted ' + deleted + ' filter(s)', 'success');
+  loadFilters();
 }
 
 async function refreshCredits() {

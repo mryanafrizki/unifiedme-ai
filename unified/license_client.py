@@ -37,6 +37,7 @@ _device_id: Optional[int] = None
 _device_fingerprint: str = ""
 _watchwords: list[dict] = []
 _watchword_cache_ts: float = 0
+_global_filters: list[dict] = []
 
 # Usage log buffer (accumulated between syncs)
 _usage_buffer: list[dict] = []
@@ -256,9 +257,11 @@ async def pull_sync() -> dict:
         log.warning("Sync pull failed: %s", result["error"])
         return result
 
-    # Update watchword cache
+    # Update watchword + global filter cache
     _watchwords = result.get("watchwords", [])
     _watchword_cache_ts = time.monotonic()
+    global _global_filters
+    _global_filters = result.get("global_filters", [])
 
     log.info("Sync pull: %d accounts, %d settings, %d filters, %d watchwords, %d proxies",
              len(result.get("accounts", [])),

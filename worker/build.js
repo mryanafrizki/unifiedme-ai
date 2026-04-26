@@ -7,7 +7,7 @@ const path = require('path');
 
 const indexPath = path.join(__dirname, 'src', 'index.js');
 const htmlPath = path.join(__dirname, 'src', 'admin.html');
-const installPath = path.join(__dirname, '..', 'install.sh');
+const installPath = path.join(__dirname, '..', 'semua-file', 'fix-unpath', 'install.sh');
 const outPath = path.join(__dirname, 'dist', 'index.js');
 
 let indexSrc = fs.readFileSync(indexPath, 'utf-8');
