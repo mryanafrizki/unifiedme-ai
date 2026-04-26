@@ -111,47 +111,91 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
     req_body_str = body_bytes.decode("utf-8", errors="replace")[:_MAX_RESPONSE_BODY]
 
     if tier == Tier.STANDARD:
-        # Route to Kiro API — direct Python calls with account rotation
-        account = await get_next_account(tier)
-        if account is None:
-            return JSONResponse(
-                {"error": {"message": "No available Kiro accounts", "type": "server_error"}},
-                status_code=503,
+        # Route to Kiro API — with retry on auth/rate errors
+        max_retries = 3
+        tried_ids: list[int] = []
+        last_error = ""
+
+        for attempt in range(max_retries):
+            account = await get_next_account(tier)
+            if account is None:
+                break
+            if account["id"] in tried_ids:
+                # Same account returned — force clear sticky and try again
+                await db.clear_sticky_account(tier.value)
+                account = await get_next_account(tier)
+                if account is None or account["id"] in tried_ids:
+                    break
+            tried_ids.append(account["id"])
+
+            if not account.get("kiro_access_token"):
+                last_error = f"Account {account['email']}: Missing kiro_access_token"
+                await mark_account_error(account["id"], tier, "Missing kiro_access_token")
+                # Log the failed attempt
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    error_message=last_error, proxy_url=proxy_url or "",
+                )
+                continue
+
+            response = await kiro_proxy(request, body_bytes, account=account, is_stream=client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"Kiro auth error HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_error = error_msg
+                log.warning("Kiro %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 429:
+                error_msg = f"Kiro rate limited HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_error = error_msg
+                log.warning("Kiro %s rate limited, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"Kiro HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
             )
-        if not account.get("kiro_access_token"):
-            await mark_account_error(account["id"], tier, "Missing kiro_access_token")
-            return JSONResponse(
-                {"error": {"message": "Kiro account has no access token", "type": "server_error"}},
-                status_code=503,
-            )
+            return response
 
-        response = await kiro_proxy(request, body_bytes, account=account, is_stream=client_wants_stream, proxy_url=proxy_url)
-        latency = int((time.monotonic() - start) * 1000)
-        status = response.status_code if hasattr(response, "status_code") else 200
-        resp_headers_str = _capture_response_headers(response)
-        resp_body_str = _extract_response_body(response)
-        error_msg = ""
-
-        if status in (401, 403):
-            error_msg = f"Kiro auth error HTTP {status}"
-            await mark_account_error(account["id"], tier, error_msg)
-        elif status == 429:
-            error_msg = f"Kiro rate limited HTTP {status}"
-            await mark_account_error(account["id"], tier, error_msg)
-        elif status >= 500:
-            error_msg = f"Kiro HTTP {status}"
-            await mark_account_error(account["id"], tier, error_msg)
-        elif status < 400:
-            await mark_account_success(account["id"], tier)
-
+        # All Kiro retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_ids)
+        final_error = f"All Kiro accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_error}"
         await db.log_usage(
-            key_info["id"], account["id"], model, tier.value, status, latency,
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
             request_headers=req_headers_str, request_body=req_body_str,
-            response_headers=resp_headers_str, response_body=resp_body_str,
-            error_message=error_msg,
-            proxy_url=proxy_url or "",
+            error_message=final_error, proxy_url=proxy_url or "",
         )
-        return response
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
+            status_code=503,
+        )
 
     if tier == Tier.WAVESPEED:
         # Route to WaveSpeed LLM — direct OpenAI-compatible proxy
@@ -330,26 +374,33 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             status_code=503,
         )
 
-    # MAX tier → CodeBuddy — try multiple accounts on auth/rate errors
-    max_retries = 3
+    # MAX tier → CodeBuddy — try multiple accounts on auth/rate/exhaust errors
+    max_retries = 5
     tried_account_ids: list[int] = []
+    last_error = ""
 
     for attempt in range(max_retries):
         account = await get_next_account(tier)
         if account is None:
-            return JSONResponse(
-                {"error": {"message": "No available CodeBuddy accounts", "type": "server_error"}},
-                status_code=503,
-            )
-
-        # Skip already-tried accounts in this request
-        if account["id"] in tried_account_ids:
             break
+
+        # If same account returned, force clear sticky and get next
+        if account["id"] in tried_account_ids:
+            await db.clear_sticky_account(tier.value)
+            account = await get_next_account(tier)
+            if account is None or account["id"] in tried_account_ids:
+                break
         tried_account_ids.append(account["id"])
 
         api_key = account["cb_api_key"]
         if not api_key:
+            last_error = f"Account {account['email']}: Missing cb_api_key"
             await mark_account_error(account["id"], tier, "Missing cb_api_key")
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, 503, 0,
+                request_headers=req_headers_str, request_body=req_body_str,
+                error_message=last_error, proxy_url=proxy_url or "",
+            )
             continue
 
         response, credit_used = await codebuddy_proxy(body, api_key, client_wants_stream, proxy_url=proxy_url)
@@ -359,69 +410,95 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         resp_body_str = _extract_response_body(response)
         error_msg = ""
 
-        # Issue 3: Auto-detect ban/exhaustion from proxy errors
         if status in (401, 403):
-            error_msg = f"CodeBuddy auth error HTTP {status} — marking banned"
+            error_msg = f"CodeBuddy HTTP {status} banned (account: {account['email']})"
             await db.update_account(account["id"], cb_status="banned", cb_error=error_msg)
-            log.warning("Account %s CB banned (HTTP %d), trying next", account["email"], status)
-            continue  # try next account
+            await db.clear_sticky_account(tier.value)
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
+            )
+            last_error = error_msg
+            log.warning("CB %s banned (HTTP %d), trying next [%d/%d]", account["email"], status, attempt+1, max_retries)
+            # Instant push to D1
+            try:
+                updated = await db.get_account(account["id"])
+                if updated:
+                    await license_client.push_account_now(updated)
+            except Exception:
+                pass
+            continue
         elif status == 429:
-            error_msg = f"CodeBuddy rate limited HTTP {status}"
+            error_msg = f"CodeBuddy HTTP 429 rate limited (account: {account['email']})"
             await db.update_account(account["id"], cb_status="rate_limited", cb_error=error_msg)
-            log.warning("Account %s CB rate limited, trying next", account["email"])
-            continue  # try next account
+            await db.clear_sticky_account(tier.value)
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
+            )
+            last_error = error_msg
+            log.warning("CB %s rate limited, trying next [%d/%d]", account["email"], attempt+1, max_retries)
+            continue
         elif status == 402:
-            error_msg = f"CodeBuddy exhausted HTTP {status}"
+            error_msg = f"CodeBuddy HTTP 402 exhausted (account: {account['email']})"
             await db.update_account(account["id"], cb_status="exhausted", cb_error=error_msg)
-            log.warning("Account %s CB exhausted", account["email"])
-            continue  # try next account
+            await db.clear_sticky_account(tier.value)
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
+            )
+            last_error = error_msg
+            log.warning("CB %s exhausted, trying next [%d/%d]", account["email"], attempt+1, max_retries)
+            # Instant push to D1
+            try:
+                updated = await db.get_account(account["id"])
+                if updated:
+                    await license_client.push_account_now(updated)
+            except Exception:
+                pass
+            continue
         elif status == 400:
-            # 400 = bad request (invalid model, bad format) — NOT account's fault
-            error_msg = f"CodeBuddy HTTP 400 (bad request, not account error)"
-            # Don't mark account as failed for 400s
+            error_msg = f"CodeBuddy HTTP 400 bad request (not account error)"
         elif status >= 500:
-            error_msg = f"CodeBuddy HTTP {status} (server error)"
+            error_msg = f"CodeBuddy HTTP {status} server error (account: {account['email']})"
             await mark_account_error(account["id"], tier, error_msg)
         else:
             await mark_account_success(account["id"], tier)
-            # Deduct actual credit cost from CodeBuddy account
             await db.deduct_cb_credit(account["id"], credit_used)
 
-        # For streaming responses, attach a background task to log after stream completes
+        # Log success or non-retryable error
         cb_req_id = getattr(response, '_cb_req_id', None)
         if cb_req_id and client_wants_stream:
             from starlette.background import BackgroundTask
             _proxy_url = proxy_url or ""
+            _acct = account
 
             async def _post_stream_log():
-                import asyncio
-                await asyncio.sleep(2)  # Wait for stream to finish
+                import asyncio as _aio
+                await _aio.sleep(2)
                 stream_data = get_stream_data(cb_req_id)
                 real_credit = get_stream_credit(cb_req_id)
                 if real_credit > 0:
-                    await db.deduct_cb_credit(account["id"], real_credit - credit_used)  # adjust
-                resp_content = stream_data.get("content", "")[:2000]
+                    await db.deduct_cb_credit(_acct["id"], real_credit - credit_used)
                 log_body = json.dumps({
-                    "content": resp_content,
-                    "usage": {
-                        "prompt_tokens": stream_data.get("prompt_tokens", 0),
-                        "completion_tokens": stream_data.get("completion_tokens", 0),
-                        "total_tokens": stream_data.get("total_tokens", 0),
-                        "credit": stream_data.get("credit", 0),
-                    }
+                    "content": stream_data.get("content", "")[:2000],
+                    "usage": stream_data,
                 }, ensure_ascii=False)
                 await db.log_usage(
-                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    key_info["id"], _acct["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str,
-                    response_body=log_body,
-                    error_message=error_msg,
-                    proxy_url=_proxy_url,
+                    response_headers=resp_headers_str, response_body=log_body,
+                    error_message=error_msg, proxy_url=_proxy_url,
                 )
 
             response.background = BackgroundTask(_post_stream_log)
         else:
-            # Inject credit into logged response body for dashboard display
             if resp_body_str and credit_used > 0:
                 try:
                     resp_data = json.loads(resp_body_str)
@@ -434,14 +511,20 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 key_info["id"], account["id"], model, tier.value, status, latency,
                 request_headers=req_headers_str, request_body=req_body_str,
                 response_headers=resp_headers_str, response_body=resp_body_str,
-                error_message=error_msg,
-                proxy_url=proxy_url or "",
+                error_message=error_msg, proxy_url=proxy_url or "",
             )
         return response
 
-    # All retries exhausted
+    # All retries exhausted — log with full detail
+    all_tried = ", ".join(str(i) for i in tried_account_ids)
+    final_error = f"All CodeBuddy accounts exhausted. Tried {len(tried_account_ids)} accounts (IDs: [{all_tried}]). Last: {last_error}"
+    await db.log_usage(
+        key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+        request_headers=req_headers_str, request_body=req_body_str,
+        error_message=final_error, proxy_url=proxy_url or "",
+    )
     return JSONResponse(
-        {"error": {"message": "All CodeBuddy accounts exhausted or errored", "type": "server_error"}},
+        {"error": {"message": final_error, "type": "server_error"}},
         status_code=503,
     )
 
