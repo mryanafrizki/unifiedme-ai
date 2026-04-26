@@ -683,7 +683,17 @@ a:hover{text-decoration:underline}
 
 <!-- Auth Overlay -->
 <div id="auth-overlay">
-  <div class="auth-box">
+  <!-- Setup mode (first time) -->
+  <div class="auth-box" id="setup-box" style="display:none">
+    <h2>enow<span class="brand-accent">XAI</span></h2>
+    <p>Welcome! Set your admin password to get started.</p>
+    <input type="password" class="auth-input" id="setup-password" placeholder="Choose a password (min 4 chars)" autocomplete="new-password">
+    <input type="password" class="auth-input" id="setup-confirm" placeholder="Confirm password" autocomplete="new-password" style="margin-top:.75rem">
+    <button class="auth-btn" id="setup-submit">Set Password</button>
+    <div class="auth-error" id="setup-error"></div>
+  </div>
+  <!-- Login mode (returning user) -->
+  <div class="auth-box" id="login-box" style="display:none">
     <h2>enow<span class="brand-accent">XAI</span></h2>
     <p>Enter admin password to continue</p>
     <input type="password" class="auth-input" id="auth-password" placeholder="Admin password" autocomplete="off">
@@ -1529,54 +1539,138 @@ function creditColor(pct) {
 }
 
 // ── Auth ──
-(function initAuth() {
+(async function initAuth() {
   const overlay = document.getElementById('auth-overlay');
   const app = document.getElementById('app');
-  const pw = localStorage.getItem('admin_pw');
+  const setupBox = document.getElementById('setup-box');
+  const loginBox = document.getElementById('login-box');
 
-  if (pw) {
-    overlay.style.display = 'none';
-    app.style.display = 'flex';
-    initDashboard();
-    return;
+  // Check if password is already set on server
+  let needsSetup = false;
+  try {
+    const statusRes = await fetch('/api/setup-status');
+    const status = await statusRes.json();
+    needsSetup = !status.password_set;
+  } catch (e) {
+    needsSetup = false; // assume set if can't check
+  }
+
+  // Try saved password first
+  const savedPw = localStorage.getItem('admin_pw');
+  if (savedPw && !needsSetup) {
+    try {
+      const res = await fetch('/api/accounts', { headers: { 'Authorization': 'Bearer ' + savedPw } });
+      if (res.ok) {
+        overlay.style.display = 'none';
+        app.style.display = 'flex';
+        initDashboard();
+        return;
+      }
+    } catch (e) {}
+    // Saved password invalid — clear and show login
+    localStorage.removeItem('admin_pw');
   }
 
   overlay.style.display = 'flex';
   app.style.display = 'none';
 
-  const input = document.getElementById('auth-password');
-  const btn = document.getElementById('auth-submit');
-  const err = document.getElementById('auth-error');
+  if (needsSetup) {
+    // First-time setup flow
+    setupBox.style.display = 'block';
+    loginBox.style.display = 'none';
 
-  async function tryAuth() {
-    const val = input.value.trim();
-    if (!val) return;
-    btn.disabled = true;
-    btn.textContent = 'Authenticating...';
-    err.style.display = 'none';
-    try {
-      const res = await fetch('/api/accounts', {
-        headers: { 'Authorization': 'Bearer ' + val }
-      });
-      if (res.ok || res.status === 200) {
-        localStorage.setItem('admin_pw', val);
-        overlay.style.display = 'none';
-        app.style.display = 'flex';
-        initDashboard();
-      } else {
-        throw new Error('bad');
+    const pw1 = document.getElementById('setup-password');
+    const pw2 = document.getElementById('setup-confirm');
+    const setupBtn = document.getElementById('setup-submit');
+    const setupErr = document.getElementById('setup-error');
+
+    async function doSetup() {
+      const val = pw1.value.trim();
+      const confirm = pw2.value.trim();
+      setupErr.style.display = 'none';
+
+      if (!val || val.length < 4) {
+        setupErr.textContent = 'Password must be at least 4 characters';
+        setupErr.style.display = 'block';
+        return;
       }
-    } catch (e) {
-      err.style.display = 'block';
-      btn.disabled = false;
-      btn.textContent = 'Authenticate';
-      input.focus();
-    }
-  }
+      if (val !== confirm) {
+        setupErr.textContent = 'Passwords do not match';
+        setupErr.style.display = 'block';
+        return;
+      }
 
-  btn.addEventListener('click', tryAuth);
-  input.addEventListener('keydown', e => { if (e.key === 'Enter') tryAuth(); });
-  input.focus();
+      setupBtn.disabled = true;
+      setupBtn.textContent = 'Setting up...';
+
+      try {
+        const res = await fetch('/api/setup-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: val }),
+        });
+        const data = await res.json();
+        if (data.ok) {
+          localStorage.setItem('admin_pw', val);
+          overlay.style.display = 'none';
+          app.style.display = 'flex';
+          initDashboard();
+        } else {
+          setupErr.textContent = data.error || 'Setup failed';
+          setupErr.style.display = 'block';
+          setupBtn.disabled = false;
+          setupBtn.textContent = 'Set Password';
+        }
+      } catch (e) {
+        setupErr.textContent = 'Connection error';
+        setupErr.style.display = 'block';
+        setupBtn.disabled = false;
+        setupBtn.textContent = 'Set Password';
+      }
+    }
+
+    setupBtn.addEventListener('click', doSetup);
+    pw2.addEventListener('keydown', e => { if (e.key === 'Enter') doSetup(); });
+    pw1.focus();
+  } else {
+    // Normal login flow
+    setupBox.style.display = 'none';
+    loginBox.style.display = 'block';
+
+    const input = document.getElementById('auth-password');
+    const btn = document.getElementById('auth-submit');
+    const err = document.getElementById('auth-error');
+
+    async function tryAuth() {
+      const val = input.value.trim();
+      if (!val) return;
+      btn.disabled = true;
+      btn.textContent = 'Authenticating...';
+      err.style.display = 'none';
+      try {
+        const res = await fetch('/api/accounts', {
+          headers: { 'Authorization': 'Bearer ' + val }
+        });
+        if (res.ok || res.status === 200) {
+          localStorage.setItem('admin_pw', val);
+          overlay.style.display = 'none';
+          app.style.display = 'flex';
+          initDashboard();
+        } else {
+          throw new Error('bad');
+        }
+      } catch (e) {
+        err.style.display = 'block';
+        btn.disabled = false;
+        btn.textContent = 'Authenticate';
+        input.focus();
+      }
+    }
+
+    btn.addEventListener('click', tryAuth);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') tryAuth(); });
+    input.focus();
+  }
 })();
 
 // ── Dashboard Init ──

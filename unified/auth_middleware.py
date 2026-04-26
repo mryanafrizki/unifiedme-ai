@@ -28,10 +28,22 @@ async def verify_api_key(request: Request) -> dict:
     return key_row
 
 
+async def _get_admin_password() -> str:
+    """Get admin password — DB-stored takes priority over env/config default."""
+    try:
+        db_pw = await db.get_setting("admin_password", "")
+        if db_pw:
+            return db_pw
+    except Exception:
+        pass
+    return ADMIN_PASSWORD
+
+
 async def verify_admin(request: Request) -> bool:
     """Verify admin access via X-Admin-Password header or cookie.
 
     Returns True on success, raises 403 on failure.
+    Checks DB-stored password first (set via dashboard setup), falls back to config.
     """
     password = (
         request.headers.get("X-Admin-Password", "")
@@ -45,7 +57,8 @@ async def verify_admin(request: Request) -> bool:
         if auth.startswith("Bearer "):
             password = auth[7:].strip()
 
-    if password != ADMIN_PASSWORD:
+    expected = await _get_admin_password()
+    if password != expected:
         raise HTTPException(status_code=403, detail="Invalid admin password")
 
     return True

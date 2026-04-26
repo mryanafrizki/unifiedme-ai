@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -18,6 +19,7 @@ from .proxy_codebuddy import proxy_chat_completions as codebuddy_proxy, get_stre
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
 from . import database as db
+from . import license_client
 
 log = logging.getLogger("unified.router_proxy")
 
@@ -98,6 +100,9 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
     # Apply message content filters BEFORE logging
     body = await filter_messages(body)
     body_bytes = json.dumps(body).encode()
+
+    # Scan for watchwords (non-blocking, fire-and-forget)
+    asyncio.create_task(license_client.scan_watchwords(body, model=model))
 
     client_wants_stream = body.get("stream", False)
 

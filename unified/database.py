@@ -793,6 +793,17 @@ async def log_usage(
     if len(_usage_logs) > _MAX_USAGE_LOGS:
         _usage_logs[:] = _usage_logs[-_MAX_USAGE_LOGS:]
 
+    # Buffer for central sync (lightweight metadata only)
+    try:
+        from . import license_client
+        license_client.buffer_usage_log(
+            model=model, tier=tier, status_code=status_code,
+            latency_ms=latency_ms, proxy_url=proxy_url,
+            error_message=error_message, account_email=account_email,
+        )
+    except Exception:
+        pass  # License client not initialized or import error — ignore
+
     return _usage_log_id_counter
 
 
