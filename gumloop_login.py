@@ -178,34 +178,112 @@ async def fill_google_password(page, password: str) -> bool:
         await locator.press_sequentially(password, delay=70)
         await asyncio.sleep(0.5)
 
+        # Remember URL before clicking Next
+        url_before = page.url
+
         # Click Next
         await page.evaluate("""() => {
             const btn = document.querySelector('#passwordNext button');
             if (btn) btn.click();
         }""")
-        await asyncio.sleep(3)
+
+        # Wait for navigation away from password page (consent, redirect, or error)
+        for _ in range(15):
+            await asyncio.sleep(1)
+            try:
+                current_url = page.url
+                # URL changed — password step is done
+                if current_url != url_before:
+                    emit({"type": "debug", "message": f"Password step navigated to: {current_url[:80]}"})
+                    await asyncio.sleep(1)
+                    return True
+                # Check for password error on same page
+                has_error = await page.evaluate("""() => {
+                    const err = document.querySelector('.LXRPh');
+                    return err && err.offsetParent !== null ? err.textContent : null;
+                }""")
+                if has_error:
+                    emit({"type": "debug", "message": f"Password error: {has_error}"})
+                    return False
+            except Exception:
+                pass
+
+        # Fallback: 15s passed, assume it worked (slow connection)
+        emit({"type": "debug", "message": "Password step: no navigation after 15s, proceeding anyway"})
         return True
     except Exception as exc:
         emit({"type": "debug", "message": f"fill_google_password error: {exc}"})
         return False
 
 
+async def _try_click_consent(page) -> str:
+    """Try to click Continue/Allow on a Google consent page. Returns click result string."""
+    try:
+        return str(await page.evaluate("""() => {
+            // Strategy 1: Find button by text content
+            for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"]')) {
+                const t = (btn.textContent||'').trim().toLowerCase();
+                if (!t || btn.offsetParent === null) continue;
+                if (t === 'continue' || t === 'allow' || t === 'lanjutkan' || t === 'lanjut'
+                    || t.includes('continue') || t.includes('allow')) {
+                    btn.click(); return 'text:' + t;
+                }
+            }
+            // Strategy 2: Find submit buttons/inputs
+            for (const el of document.querySelectorAll('input[type="submit"], input[type="button"]')) {
+                const v = (el.value||'').toLowerCase();
+                if (v.includes('continue') || v.includes('allow') || v.includes('next')) {
+                    el.click(); return 'input:' + v;
+                }
+            }
+            // Strategy 3: Find by ID patterns common in Google consent
+            const byId = document.querySelector('#submit_approve_access')
+                || document.querySelector('#submit_deny_access')?.parentElement?.querySelector('button:last-child')
+                || document.querySelector('[data-idom-class*="continue"]');
+            if (byId) { byId.click(); return 'id:' + (byId.id || 'found'); }
+            // Return debug info about visible buttons
+            const btns = [];
+            for (const btn of document.querySelectorAll('button')) {
+                if (btn.offsetParent !== null) btns.push(btn.textContent.trim().substring(0, 30));
+            }
+            return btns.length > 0 ? 'no_match:' + btns.join('|') : 'no_buttons';
+        }""") or "")
+    except Exception:
+        return ""
+
+
 async def handle_consent_and_redirect(google_page, main_page) -> bool:
     """Handle Google consent/gaplustos screens and wait for redirect.
 
-    Polls both the Google popup page and the main Gumloop page.
+    Polls BOTH the popup page AND the main page for consent screens.
+    Google may show consent in either location depending on the OAuth flow.
     Returns True if successfully redirected to Gumloop.
     """
     clicked_consent = False
     clicked_gaplustos = False
 
-    for _ in range(45):
+    for tick in range(60):
         await asyncio.sleep(1)
         try:
-            # Check Google popup page
-            gurl = google_page.url if not google_page.is_closed() else ""
+            # ── Gather URLs from both pages ─────────────────────────
+            gurl = ""
+            popup_closed = False
+            try:
+                popup_closed = google_page.is_closed()
+                if not popup_closed:
+                    gurl = google_page.url
+            except Exception:
+                popup_closed = True
 
-            # Gaplustos on popup
+            main_url = ""
+            try:
+                main_url = main_page.url if not main_page.is_closed() else ""
+            except Exception:
+                pass
+
+            emit({"type": "debug", "message": f"consent tick={tick} popup={'closed' if popup_closed else gurl[:60]} main={main_url[:60]} clicked={clicked_consent}"})
+
+            # ── Gaplustos on popup ──────────────────────────────────
             if "/speedbump/gaplustos" in gurl and not clicked_gaplustos:
                 await google_page.evaluate("""() => {
                     const el = document.querySelector('#confirm') || document.querySelector('input[type="submit"]');
@@ -220,31 +298,42 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                 await asyncio.sleep(3)
                 continue
 
-            # Consent page on popup — click Continue ONCE
-            if "accounts.google.com" in gurl and not clicked_consent:
-                did_click = await google_page.evaluate("""() => {
-                    for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                        const t = (btn.textContent||'').trim().toLowerCase();
-                        if ((t==='continue'||t.includes('allow')||t.includes('lanjut')) && btn.offsetParent!==null) {
-                            btn.click(); return true;
-                        }
-                    }
-                    return false;
-                }""")
-                if did_click:
+            # ── Try consent click on POPUP page ─────────────────────
+            if not popup_closed and "accounts.google.com" in gurl and not clicked_consent:
+                result = await _try_click_consent(google_page)
+                emit({"type": "debug", "message": f"consent click (popup): {result}"})
+                if result and not result.startswith("no_"):
                     clicked_consent = True
-                    emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Clicked Continue on consent"})
+                    emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": f"Clicked consent on popup: {result}"})
                     await asyncio.sleep(3)
                     continue
 
-            # Check main page for redirect back to Gumloop
-            main_url = main_page.url if not main_page.is_closed() else ""
-            if "gumloop.com" in main_url and "login" not in main_url:
-                emit({"type": "progress", "provider": "gumloop", "step": "redirect", "message": "Redirected to Gumloop"})
-                return True
+            # ── Try consent click on MAIN page ──────────────────────
+            # Google sometimes shows consent in the main page (not popup)
+            if "accounts.google.com" in main_url and not clicked_consent:
+                result = await _try_click_consent(main_page)
+                emit({"type": "debug", "message": f"consent click (main): {result}"})
+                if result and not result.startswith("no_"):
+                    clicked_consent = True
+                    emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": f"Clicked consent on main page: {result}"})
+                    await asyncio.sleep(3)
+                    continue
 
-        except Exception:
-            pass
+            # ── Check for successful redirect to Gumloop ────────────
+            # Only consider redirect AFTER consent was clicked or popup closed
+            if clicked_consent or popup_closed:
+                # Re-read main URL (may have changed after consent click)
+                try:
+                    main_url = main_page.url if not main_page.is_closed() else ""
+                except Exception:
+                    main_url = ""
+
+                if "gumloop.com" in main_url and "login" not in main_url and "accounts.google.com" not in main_url:
+                    emit({"type": "progress", "provider": "gumloop", "step": "redirect", "message": f"Redirected to Gumloop: {main_url[:60]}"})
+                    return True
+
+        except Exception as exc:
+            emit({"type": "debug", "message": f"consent loop error: {exc}"})
 
     return False
 

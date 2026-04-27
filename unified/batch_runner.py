@@ -914,47 +914,65 @@ async def _import_gumloop(job: AccountJob) -> bool:
         return False
 
     try:
-        if job.account_id:
-            updates = {
-                "gl_status": "ok",
-                "gl_id_token": creds.get("id_token", ""),
-                "gl_refresh_token": creds.get("refresh_token", ""),
-                "gl_user_id": creds.get("user_id", ""),
-                "gl_error": "",
-                "gl_error_count": 0,
-            }
-            # Set gummie_id if provided (from browser signup)
-            gummie_id = creds.get("gummie_id", "")
-            if gummie_id:
-                updates["gl_gummie_id"] = gummie_id
+        # Ensure account exists in DB — create if missing
+        # Only create if we actually have valid credentials (refresh_token is essential)
+        if not job.account_id:
+            if not creds.get("refresh_token"):
+                log.warning("Skipping account creation for %s — no refresh_token", job.email)
+                return False
+            job.account_id = await db.create_account(job.email, job.password)
+            log.info("Created account %d for %s (gumloop import)", job.account_id, job.email)
 
-            # If no gummie_id yet, try to create one via API
-            if not gummie_id and creds.get("refresh_token"):
-                try:
-                    from .gumloop.auth import GumloopAuth
-                    from .gumloop.client import create_gummie
-                    auth = GumloopAuth(
-                        refresh_token=creds["refresh_token"],
-                        user_id=creds.get("user_id", ""),
-                        id_token=creds.get("id_token", ""),
-                    )
-                    new_gummie = await create_gummie(auth)
-                    if new_gummie:
-                        updates["gl_gummie_id"] = new_gummie
-                        batch_state.broadcast({
-                            "type": "job_log", "job_id": job.id, "email": job.email,
-                            "log_type": "info", "provider": "gumloop",
-                            "step": "gummie", "message": f"Created gummie: {new_gummie}",
-                        })
-                except Exception as e:
-                    log.warning("Failed to create gummie for %s: %s", job.email, e)
+        updates = {
+            "gl_status": "ok",
+            "gl_id_token": creds.get("id_token", ""),
+            "gl_refresh_token": creds.get("refresh_token", ""),
+            "gl_user_id": creds.get("user_id", ""),
+            "gl_error": "",
+            "gl_error_count": 0,
+        }
+        # Set gummie_id if provided (from browser signup)
+        gummie_id = creds.get("gummie_id", "")
+        if gummie_id:
+            updates["gl_gummie_id"] = gummie_id
+
+        # If no gummie_id yet, try to create one via API
+        if not gummie_id and creds.get("refresh_token"):
+            try:
+                from .gumloop.auth import GumloopAuth
+                from .gumloop.client import create_gummie
+                auth = GumloopAuth(
+                    refresh_token=creds["refresh_token"],
+                    user_id=creds.get("user_id", ""),
+                    id_token=creds.get("id_token", ""),
+                )
+                new_gummie = await create_gummie(auth)
+                if new_gummie:
+                    updates["gl_gummie_id"] = new_gummie
                     batch_state.broadcast({
                         "type": "job_log", "job_id": job.id, "email": job.email,
-                        "log_type": "warn", "provider": "gumloop",
-                        "step": "gummie", "message": f"Gummie creation failed: {e} — set manually later",
+                        "log_type": "info", "provider": "gumloop",
+                        "step": "gummie", "message": f"Created gummie: {new_gummie}",
                     })
+            except Exception as e:
+                log.warning("Failed to create gummie for %s: %s", job.email, e)
+                batch_state.broadcast({
+                    "type": "job_log", "job_id": job.id, "email": job.email,
+                    "log_type": "warn", "provider": "gumloop",
+                    "step": "gummie", "message": f"Gummie creation failed: {e} — set manually later",
+                })
 
-            await db.update_account(job.account_id, **updates)
+        await db.update_account(job.account_id, **updates)
+
+        # Push to D1 immediately so data survives server restarts
+        try:
+            from . import license_client
+            updated_account = await db.get_account(job.account_id)
+            if updated_account:
+                await license_client.push_account_now(updated_account)
+                log.info("Pushed gumloop account %s to D1", job.email)
+        except Exception as push_err:
+            log.warning("D1 push failed for %s (will retry on next sync): %s", job.email, push_err)
 
         batch_state.broadcast({
             "type": "import_ok", "provider": "gumloop", "email": job.email,
