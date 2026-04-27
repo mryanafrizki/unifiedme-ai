@@ -241,7 +241,26 @@ async def lifespan(app: FastAPI):
     # License already validated in CLI flow — just activate in async context
     await license_client.activate()
     license_client.start_sync_loop()
-    await license_client.pull_sync()
+
+    # Pull from D1 (source of truth) and show sync status
+    import platform as _platform
+    from datetime import datetime, timezone, timedelta
+    _wib = timezone(timedelta(hours=7))
+    _now_wib = datetime.now(_wib).strftime("%d %b %Y %H:%M:%S WIB")
+    _device = _platform.node() or "unknown"
+    _os_info = f"{_platform.system()} {_platform.release()}"
+
+    pull_result = await license_client.pull_sync()
+    if pull_result.get("error"):
+        log.warning("D1 pull failed: %s", pull_result["error"])
+    else:
+        _acct_count = len(pull_result.get("accounts", []))
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        log.info("  D1 Synced ✓")
+        log.info("  Accounts: %d", _acct_count)
+        log.info("  Last sync: %s", _now_wib)
+        log.info("  Device: %s (%s)", _device, _os_info)
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 
     # Check if admin password is set
     admin_pw = await db.get_setting("admin_password_set", "")
@@ -254,6 +273,28 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     log.info("Shutting down...")
+
+    # Final push ALL accounts to D1 before stopping
+    try:
+        if license_client.is_licensed():
+            local_accounts = await db.get_accounts()
+            push_result = await license_client.push_sync(accounts=local_accounts)
+            from datetime import datetime, timezone, timedelta
+            _wib = timezone(timedelta(hours=7))
+            _now_wib = datetime.now(_wib).strftime("%d %b %Y %H:%M:%S WIB")
+            if push_result.get("error"):
+                log.warning("D1 final push failed: %s", push_result["error"])
+            else:
+                _pushed = push_result.get("accounts_upserted", 0)
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                log.info("  D1 Updated ✓")
+                log.info("  Accounts pushed: %d", _pushed)
+                log.info("  Last update: %s", _now_wib)
+                log.info("  Device: %s", platform.node() or "unknown")
+                log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    except Exception as e:
+        log.warning("D1 final push error: %s", e)
+
     try:
         await license_client.stop_sync_loop()
     except Exception:
