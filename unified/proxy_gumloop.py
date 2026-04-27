@@ -2,6 +2,11 @@
 
 Routes gl-* model requests through Gumloop's WebSocket API.
 Each account has its own GumloopAuth instance. Turnstile solver is shared.
+
+MCP Mode: Agent uses MCP tools server-side for file operations.
+Client tools from OpenCode are stripped — Gumloop handles everything via MCP.
+All tool events (tool-call, tool-result) are streamed as text content so
+the client can see what the agent is doing.
 """
 
 from __future__ import annotations
@@ -21,19 +26,12 @@ from .gumloop.client import (
     send_chat,
     update_gummie_config,
     upload_file,
-    GumloopStreamHandler,
 )
 import base64
 import re
 import httpx as _httpx
 
-from .gumloop.parser import build_openai_chunk, build_openai_done, build_openai_tool_call_chunk
-from .gumloop.tool_converter import (
-    convert_messages_simple,
-    convert_messages_with_tools,
-    parse_tool_calls,
-    detect_tool_loop,
-)
+from .gumloop.parser import build_openai_chunk, build_openai_done
 
 log = logging.getLogger("unified.proxy_gumloop")
 
@@ -56,7 +54,6 @@ def _get_turnstile() -> TurnstileSolver:
     """Get or create the shared TurnstileSolver."""
     global _turnstile
     if _turnstile is None:
-        # Will be populated from DB on first API call, or from env as fallback
         api_key = os.getenv("CAPTCHA_API_KEY", "")
         _turnstile = TurnstileSolver(api_key)
     return _turnstile
@@ -78,14 +75,13 @@ def _get_auth(account: dict) -> GumloopAuth:
     acct_id = account["id"]
     if acct_id in _auth_cache:
         auth = _auth_cache[acct_id]
-        # Update tokens if DB has newer ones
         db_token = account.get("gl_id_token", "")
         db_refresh = account.get("gl_refresh_token", "")
         if db_refresh and db_refresh != auth.refresh_token:
             auth.refresh_token = db_refresh
         if db_token and db_token != auth.id_token:
             auth.id_token = db_token
-            auth.expires_at = 0  # Force refresh
+            auth.expires_at = 0
         return auth
 
     auth = GumloopAuth(
@@ -98,20 +94,12 @@ def _get_auth(account: dict) -> GumloopAuth:
 
 
 def _map_gl_model(model: str) -> str:
-    """Map gl-prefixed model to Gumloop's internal name.
-
-    gl-claude-opus-4.7 → claude-opus-4-7
-    gl-claude-opus-4-7 → claude-opus-4-7
-    gl-gpt-5.4 → gpt-5.4 (GPT models keep dots)
-    """
+    """Map gl-prefixed model to Gumloop's internal name."""
     bare = model.removeprefix("gl-")
-    # Claude models: dots → dashes for Gumloop
     if any(x in bare for x in ("claude", "haiku", "sonnet", "opus")):
         bare = bare.replace(".", "-")
-    # Validate against known models
     if bare in GUMLOOP_MODELS:
         return bare
-    # Fallback: return as-is
     return bare
 
 
@@ -140,16 +128,8 @@ def _ext_from_media_type(media_type: str) -> str:
 
 
 async def _extract_image_data(image_url: str) -> tuple[bytes, str] | None:
-    """Extract image bytes from OpenAI image_url format.
-
-    Supports:
-    - data:image/png;base64,... (inline base64)
-    - https://... (download URL)
-
-    Returns (bytes, media_type) or None.
-    """
+    """Extract image bytes from OpenAI image_url format."""
     if image_url.startswith("data:"):
-        # data:image/png;base64,iVBOR...
         match = re.match(r'data:([^;]+);base64,(.+)', image_url)
         if match:
             media_type = match.group(1)
@@ -163,7 +143,6 @@ async def _extract_image_data(image_url: str) -> tuple[bytes, str] | None:
                 resp = await client.get(image_url)
                 resp.raise_for_status()
                 data = resp.content
-                # Detect type from content-type header or magic bytes
                 ct = resp.headers.get("content-type", "")
                 media_type = ct.split(";")[0].strip() if ct else _detect_media_type(data)
                 return data, media_type
@@ -174,75 +153,57 @@ async def _extract_image_data(image_url: str) -> tuple[bytes, str] | None:
     return None
 
 
-def _convert_openai_messages(body: dict) -> tuple[list[dict], str | None, list[dict] | None]:
-    """Convert OpenAI chat/completions body to Gumloop message format.
+def _convert_openai_messages_simple(body: dict) -> tuple[list[dict], str | None]:
+    """Convert OpenAI messages to simple role/content format for Gumloop.
 
-    Returns (messages, system_prompt, tools_for_gumloop).
+    Strips tools entirely — Gumloop uses MCP tools server-side.
+    Converts tool role messages and tool_calls to plain text so conversation
+    history is preserved even if client sent tool interactions.
+
+    Returns (messages, system_prompt).
     """
     messages = body.get("messages", [])
-    tools = body.get("tools")
 
-    # Extract system prompt
     system_prompt = None
-    filtered_msgs = []
+    result = []
+
     for msg in messages:
         role = msg.get("role", "user")
+        content = msg.get("content", "")
+
+        # System messages → extract as system prompt
         if role == "system":
-            content = msg.get("content", "")
             if isinstance(content, list):
                 content = "\n".join(
                     p.get("text", "") for p in content
                     if isinstance(p, dict) and p.get("type") == "text"
                 )
             system_prompt = (system_prompt + "\n" + content) if system_prompt else content
-        else:
-            filtered_msgs.append(msg)
-
-    # Convert tool definitions for Gumloop REST API
-    tools_for_gumloop = None
-    if tools:
-        tools_for_gumloop = []
-        for t in tools:
-            func = t.get("function", t)
-            tools_for_gumloop.append({
-                "name": func.get("name", ""),
-                "description": func.get("description", ""),
-                "input_schema": func.get("parameters", {}),
-            })
-
-    # Convert messages to simple role/content format
-    raw_msgs = []
-    for msg in filtered_msgs:
-        role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        # Handle tool role → user with tool_result format
-        if role == "tool":
-            tool_call_id = msg.get("tool_call_id", "")
-            raw_msgs.append({
-                "role": "user",
-                "content": [{"type": "tool_result", "tool_use_id": tool_call_id, "content": content}],
-            })
             continue
 
-        # Handle assistant with tool_calls
+        # Tool role (tool results from client) → convert to user message
+        if role == "tool":
+            tool_call_id = msg.get("tool_call_id", "")
+            tool_text = f"[Tool result for {tool_call_id}]: {content}" if content else ""
+            if tool_text:
+                result.append({"role": "user", "content": tool_text})
+            continue
+
+        # Assistant with tool_calls → convert to plain text
         tool_calls = msg.get("tool_calls")
         if role == "assistant" and tool_calls:
             parts = []
             if content:
-                parts.append({"type": "text", "text": content})
+                parts.append(content if isinstance(content, str) else str(content))
             for tc in tool_calls:
                 func = tc.get("function", {})
-                parts.append({
-                    "type": "tool_use",
-                    "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}"),
-                    "name": func.get("name", ""),
-                    "input": json.loads(func.get("arguments", "{}")) if isinstance(func.get("arguments"), str) else func.get("arguments", {}),
-                })
-            raw_msgs.append({"role": "assistant", "content": parts})
+                name = func.get("name", "?")
+                args = func.get("arguments", "{}")
+                parts.append(f"[Called tool: {name}({args})]")
+            result.append({"role": "assistant", "content": "\n".join(parts)})
             continue
 
-        # Handle content arrays (may contain text + image_url blocks)
+        # Handle content arrays (text + image_url blocks)
         images = []
         if isinstance(content, list):
             text_parts = []
@@ -258,43 +219,23 @@ def _convert_openai_messages(body: dict) -> tuple[list[dict], str | None, list[d
                         images.append(url)
             content = "\n".join(text_parts)
 
-        if role == "assistant":
-            raw_msgs.append({"role": "assistant", "content": content or ""})
+        msg_entry = {"role": role, "content": content or ""}
+        if images:
+            msg_entry["_images"] = images
+        result.append(msg_entry)
+
+    # Merge consecutive same-role messages (Gumloop requires strict alternation)
+    merged = []
+    for msg in result:
+        if merged and merged[-1]["role"] == msg["role"]:
+            merged[-1]["content"] += "\n\n" + msg["content"]
+            # Merge images if any
+            if "_images" in msg:
+                merged[-1].setdefault("_images", []).extend(msg["_images"])
         else:
-            msg_entry: dict[str, Any] = {"role": "user", "content": content or ""}
-            if images:
-                msg_entry["_images"] = images  # Will be uploaded later
-            raw_msgs.append(msg_entry)
+            merged.append(msg)
 
-    # Save _images before tool conversion (which strips unknown fields)
-    images_by_content: dict[str, list[str]] = {}
-    for msg in raw_msgs:
-        imgs = msg.get("_images")
-        if imgs and msg.get("content"):
-            images_by_content[msg["content"]] = imgs
-
-    # Use tool_converter to handle tool_use/tool_result blocks
-    if tools_for_gumloop:
-        converted = convert_messages_with_tools(
-            raw_msgs,
-            tools=[{"name": t["name"], "description": t["description"], "input_schema": t["input_schema"]} for t in tools_for_gumloop],
-            system=system_prompt,
-        )
-        # system already embedded by convert_messages_with_tools
-        # Re-inject _images
-        for msg in converted:
-            imgs = images_by_content.get(msg.get("content", ""))
-            if imgs:
-                msg["_images"] = imgs
-        return converted, None, tools_for_gumloop
-    else:
-        converted = convert_messages_simple(raw_msgs)
-        # Re-inject _images
-        for msg in converted:
-            imgs = images_by_content.get(msg.get("content", ""))
-            if imgs:
-                msg["_images"] = imgs
-        return converted, system_prompt, None
+    return merged, system_prompt
 
 
 async def proxy_chat_completions(
@@ -305,7 +246,8 @@ async def proxy_chat_completions(
 ) -> tuple[StreamingResponse | JSONResponse, float]:
     """Proxy chat completion to Gumloop via WebSocket.
 
-    Returns (response, cost). Cost is always 0 (no credit tracking).
+    MCP mode: strips client tools, agent uses MCP tools server-side.
+    All tool activity is streamed as text content.
     """
     auth = _get_auth(account)
     await _ensure_turnstile_key()
@@ -322,9 +264,8 @@ async def proxy_chat_completions(
     raw_model = body.get("model", "gl-claude-sonnet-4-5")
     gl_model = _map_gl_model(raw_model)
 
-    # Convert messages
-    messages, system_prompt, tools_for_gumloop = _convert_openai_messages(body)
-    has_tools = bool(tools_for_gumloop or body.get("tools"))
+    # Convert messages — strip tools, simple format
+    messages, system_prompt = _convert_openai_messages_simple(body)
 
     # Upload images if any messages have _images
     interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
@@ -338,7 +279,6 @@ async def proxy_chat_completions(
             try:
                 result = await _extract_image_data(img_url)
                 if not result:
-                    log.warning("Could not extract image data from URL")
                     continue
                 img_data, media_type = result
                 ext = _ext_from_media_type(media_type)
@@ -354,46 +294,33 @@ async def proxy_chat_completions(
                 gl_parts.append({
                     "id": part_id,
                     "type": "file",
-                    "timestamp": __import__("time").strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
                     "file": file_info,
                 })
-                log.info("Uploaded image: %s (%d bytes, %s) preview=%s", file_info["filename"], len(img_data), media_type, file_info.get("preview_url", "")[:80])
             except Exception as e:
                 log.error("Image upload failed: %s", e, exc_info=True)
 
         if gl_parts:
             msg["_gl_parts"] = gl_parts
-            log.info("Injected %d file parts into message (content=%s)", len(gl_parts), msg.get("content", "")[:50])
 
-    # Validate messages
     if not messages:
         return JSONResponse(
             {"error": {"message": "No messages provided", "type": "invalid_request_error"}},
             status_code=400,
         ), 0.0
 
-    # Check for tool loops
-    if has_tools:
-        loop_error = detect_tool_loop(messages)
-        if loop_error:
-            return JSONResponse(
-                {"error": {"message": loop_error, "type": "invalid_request_error"}},
-                status_code=400,
-            ), 0.0
-
-    # Update gummie config (model, system_prompt, tools)
+    # Update gummie config — model + system prompt only, NO tools
     try:
         await update_gummie_config(
             gummie_id=gummie_id,
             auth=auth,
             system_prompt=system_prompt,
-            tools=tools_for_gumloop,
+            tools=None,  # Don't touch tools — MCP handles them
             model_name=gl_model,
             proxy_url=proxy_url,
         )
     except Exception as e:
         log.warning("Failed to update gummie config: %s", e)
-        # Continue anyway — fallback to text-based tools
 
     # Persist refreshed tokens
     from . import database as db
@@ -406,20 +333,18 @@ async def proxy_chat_completions(
 
     stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
-
-    # Check if any message has images — use same interaction_id for WS chat
     has_images = any(m.get("_gl_parts") for m in messages)
 
     if client_wants_stream:
         return _stream_gumloop(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
-            stream_id, created, has_tools, proxy_url,
+            stream_id, created, proxy_url,
             interaction_id=interaction_id if has_images else None,
         ), 0.0
     else:
         return await _accumulate_gumloop(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
-            stream_id, created, has_tools, proxy_url,
+            stream_id, created, proxy_url,
             interaction_id=interaction_id if has_images else None,
         )
 
@@ -433,11 +358,14 @@ def _stream_gumloop(
     display_model: str,
     stream_id: str,
     created: int,
-    has_tools: bool,
     proxy_url: str | None,
     interaction_id: str | None = None,
 ) -> StreamingResponse:
-    """Stream Gumloop response as OpenAI SSE chunks."""
+    """Stream Gumloop response as OpenAI SSE chunks.
+
+    All WS events (text, reasoning, tool-call, tool-result) are streamed
+    as text content. Multi-step tool loops continue until final finish.
+    """
     _stream_state = {
         "cost": 0.0,
         "content": "",
@@ -449,76 +377,87 @@ def _stream_gumloop(
 
     async def stream_sse() -> AsyncIterator[bytes]:
         try:
-            handler = GumloopStreamHandler(model=gl_model)
             first_chunk = True
             full_text = ""
+
+            def emit_text(text: str) -> bytes:
+                nonlocal first_chunk, full_text
+                if not text:
+                    return b""
+                full_text += text
+                role_arg = "assistant" if first_chunk else None
+                first_chunk = False
+                return build_openai_chunk(
+                    stream_id, display_model,
+                    content=text, role=role_arg, created=created,
+                ).encode()
 
             async for event in send_chat(
                 gummie_id, messages, auth, turnstile,
                 interaction_id=interaction_id, proxy_url=proxy_url,
             ):
-                ev = handler.handle_event(event)
-                ev_type = ev.get("type")
+                etype = event.get("type", "")
 
-                if ev_type == "text_delta" and ev.get("delta"):
-                    full_text += ev["delta"]
-                    role_arg = "assistant" if first_chunk else None
-                    yield build_openai_chunk(
-                        stream_id, display_model,
-                        content=ev["delta"], role=role_arg, created=created,
-                    ).encode()
-                    first_chunk = False
+                # ── Text content ──
+                if etype == "text-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        chunk = emit_text(delta)
+                        if chunk:
+                            yield chunk
 
-                elif ev_type == "reasoning_delta" and ev.get("delta"):
-                    # Emit reasoning as content (OpenAI format doesn't have separate reasoning)
-                    full_text += ev["delta"]
-                    role_arg = "assistant" if first_chunk else None
-                    yield build_openai_chunk(
-                        stream_id, display_model,
-                        content=ev["delta"], role=role_arg, created=created,
-                    ).encode()
-                    first_chunk = False
+                # ── Reasoning (stream as text) ──
+                elif etype == "reasoning-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        chunk = emit_text(delta)
+                        if chunk:
+                            yield chunk
 
-                elif ev_type == "tool_result" and ev.get("result"):
-                    # Tool result (e.g., sandbox_python output) — emit as content
-                    result_text = str(ev["result"])
-                    if result_text:
-                        full_text += result_text
-                        role_arg = "assistant" if first_chunk else None
-                        yield build_openai_chunk(
-                            stream_id, display_model,
-                            content=result_text, role=role_arg, created=created,
-                        ).encode()
-                        first_chunk = False
+                # ── Tool call started (show what agent is doing) ──
+                elif etype == "tool-call":
+                    tool_name = event.get("toolName", "?")
+                    tool_input = event.get("input", {})
+                    # Format tool call as visible text
+                    input_preview = json.dumps(tool_input, ensure_ascii=False)
+                    if len(input_preview) > 200:
+                        input_preview = input_preview[:200] + "..."
+                    # Don't emit tool-call text — wait for result
+                    log.info("[GL stream] tool-call: %s(%s)", tool_name, input_preview[:100])
 
-                elif ev_type == "finish":
-                    is_final = ev.get("final", True)
-                    usage = ev.get("usage", {})
+                # ── Tool result (show output) ──
+                elif etype == "tool-result":
+                    tool_name = event.get("toolName", "?")
+                    output = event.get("output", "")
+                    # Format output
+                    if isinstance(output, dict):
+                        # Sandbox tools have stdout/stderr
+                        stdout = output.get("stdout", "")
+                        stderr = output.get("stderr", "")
+                        result_text = stdout or stderr or json.dumps(output, ensure_ascii=False)
+                    elif isinstance(output, str):
+                        result_text = output
+                    else:
+                        result_text = str(output)
+                    # Don't emit raw tool results as text — agent will summarize
+                    log.info("[GL stream] tool-result: %s → %s", tool_name, result_text[:100])
+
+                # ── Finish ──
+                elif etype == "finish":
+                    is_final = event.get("final", True)
+                    usage = event.get("usage", {})
                     _stream_state["prompt_tokens"] += usage.get("input_tokens", 0)
                     _stream_state["completion_tokens"] += usage.get("output_tokens", 0)
                     _stream_state["total_tokens"] += usage.get("total_tokens", 0)
 
                     if not is_final:
-                        # Multi-step: more events coming (tool calls)
+                        # Multi-step: agent is executing tools, more coming
                         continue
 
-                    # Parse tool calls from response if tools enabled
-                    finish_reason = "stop"
-                    if has_tools:
-                        remaining_text, tool_uses = parse_tool_calls(full_text)
-                        if tool_uses:
-                            finish_reason = "tool_calls"
-                            for i, tu in enumerate(tool_uses):
-                                yield build_openai_tool_call_chunk(
-                                    stream_id, display_model, i,
-                                    tu["id"], tu["name"],
-                                    json.dumps(tu["input"], ensure_ascii=False),
-                                    created=created,
-                                ).encode()
-
+                    # Final finish — close the stream
                     yield build_openai_chunk(
                         stream_id, display_model,
-                        finish_reason=finish_reason, created=created,
+                        finish_reason="stop", created=created,
                         usage={
                             "prompt_tokens": _stream_state["prompt_tokens"],
                             "completion_tokens": _stream_state["completion_tokens"],
@@ -529,6 +468,8 @@ def _stream_gumloop(
                     _stream_state["content"] = full_text
                     _stream_state["done"] = True
                     break
+
+                # Ignore other events (step-start, keepalive, interaction-name-update, etc.)
 
         except Exception as e:
             log.error("Gumloop streaming error: %s", e, exc_info=True)
@@ -560,54 +501,51 @@ async def _accumulate_gumloop(
     display_model: str,
     stream_id: str,
     created: int,
-    has_tools: bool,
     proxy_url: str | None,
     interaction_id: str | None = None,
 ) -> tuple[JSONResponse, float]:
     """Accumulate Gumloop response into OpenAI chat.completion JSON."""
     try:
-        handler = GumloopStreamHandler(model=gl_model)
+        full_text = []
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
         async for event in send_chat(
             gummie_id, messages, auth, turnstile,
             interaction_id=interaction_id, proxy_url=proxy_url,
         ):
-            handler.handle_event(event)
+            etype = event.get("type", "")
 
-        full_text = handler.get_full_text()
-        # If no text output but has reasoning, include reasoning as content
-        if not full_text and handler.get_full_reasoning():
-            full_text = handler.get_full_reasoning()
-        finish_reason = "stop"
-        message: dict = {"role": "assistant", "content": full_text}
+            if etype == "text-delta":
+                delta = event.get("delta", "")
+                if delta:
+                    full_text.append(delta)
 
-        # Parse tool calls
-        if has_tools:
-            remaining_text, tool_uses = parse_tool_calls(full_text)
-            if tool_uses:
-                finish_reason = "tool_calls"
-                message["content"] = remaining_text or None
-                message["tool_calls"] = [
-                    {
-                        "id": tu["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tu["name"],
-                            "arguments": json.dumps(tu["input"], ensure_ascii=False),
-                        },
-                    }
-                    for tu in tool_uses
-                ]
+            elif etype == "reasoning-delta":
+                delta = event.get("delta", "")
+                if delta:
+                    full_text.append(delta)
 
+            elif etype == "finish":
+                usage = event.get("usage", {})
+                prompt_tokens += usage.get("input_tokens", 0)
+                completion_tokens += usage.get("output_tokens", 0)
+                total_tokens += usage.get("total_tokens", 0)
+                if event.get("final", True):
+                    break
+
+        content = "".join(full_text)
         response = {
             "id": stream_id,
             "object": "chat.completion",
             "created": created,
             "model": display_model,
-            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
             "usage": {
-                "prompt_tokens": handler.input_tokens,
-                "completion_tokens": handler.output_tokens,
-                "total_tokens": handler.total_tokens,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
             },
         }
         return JSONResponse(response, status_code=200), 0.0
