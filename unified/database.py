@@ -753,14 +753,11 @@ async def get_failed() -> list[dict]:
     return await get_accounts(status="failed")
 
 
-async def get_next_account_for_tier(tier: str) -> Optional[dict]:
-    """Get the sticky/pinned active account for the given tier.
+async def get_next_account_for_tier(tier: str, exclude_ids: list[int] | None = None) -> Optional[dict]:
+    """Get the next available account for the given tier.
 
-    Pinned accounts (manually selected by user) are ALWAYS returned, even if
-    their status is not 'ok' — the router retry logic will handle errors.
-    This prevents the system from silently switching away from user's choice.
-
-    Auto-sticky accounts (set by rotation) are cleared when dead.
+    Supports exclude_ids for retry loops — skip already-tried accounts.
+    Pinned accounts returned first (even if errored), then auto-rotation.
     """
     db = await get_db()
     tier_config = {
@@ -771,16 +768,16 @@ async def get_next_account_for_tier(tier: str) -> Optional[dict]:
     }
     status_col, last_used_col = tier_config.get(tier, ("kiro_status", "last_used_kiro"))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    skip = set(exclude_ids or [])
 
-    # 1. Check sticky/pinned account
+    # 1. Check sticky/pinned account (only if not excluded)
     sticky_id = await get_sticky_account_id(tier)
-    if sticky_id:
+    if sticky_id and sticky_id not in skip:
         account = await get_account(sticky_id)
         pinned = await is_sticky_pinned(tier)
 
         if account and account["status"] == "active":
             if account[status_col] == "ok":
-                # Account is healthy — use it
                 await db.execute(
                     f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
                     (ts, sticky_id),
@@ -788,8 +785,6 @@ async def get_next_account_for_tier(tier: str) -> Optional[dict]:
                 await db.commit()
                 return account
             elif pinned:
-                # Account has issues BUT user pinned it — still return it
-                # Router retry logic will handle errors and report to user
                 await db.execute(
                     f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
                     (ts, sticky_id),
@@ -797,17 +792,27 @@ async def get_next_account_for_tier(tier: str) -> Optional[dict]:
                 await db.commit()
                 return account
 
-        # Sticky account is dead and NOT pinned — clear it
         if not pinned:
             await clear_sticky_account(tier)
 
-    # 2. Pick oldest created account that's active+ok
-    cur = await db.execute(
-        f"""SELECT * FROM accounts
-            WHERE status = 'active' AND {status_col} = 'ok'
-            ORDER BY created_at ASC, id ASC
-            LIMIT 1"""
-    )
+    # 2. Pick next active+ok account, excluding already-tried ones
+    if skip:
+        placeholders = ",".join("?" for _ in skip)
+        cur = await db.execute(
+            f"""SELECT * FROM accounts
+                WHERE status = 'active' AND {status_col} = 'ok'
+                AND id NOT IN ({placeholders})
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1""",
+            list(skip),
+        )
+    else:
+        cur = await db.execute(
+            f"""SELECT * FROM accounts
+                WHERE status = 'active' AND {status_col} = 'ok'
+                ORDER BY created_at ASC, id ASC
+                LIMIT 1"""
+        )
     row = await cur.fetchone()
     if row is None:
         return None

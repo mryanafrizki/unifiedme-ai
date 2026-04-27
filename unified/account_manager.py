@@ -21,12 +21,12 @@ MAX_CONSECUTIVE_ERRORS = 3
 # Account rotation
 # ---------------------------------------------------------------------------
 
-async def get_next_account(tier: Tier) -> Optional[dict]:
-    """Get the next available account for the given tier (oldest-first rotation).
+async def get_next_account(tier: Tier, exclude_ids: list[int] | None = None) -> Optional[dict]:
+    """Get the next available account for the given tier.
 
-    Returns the account dict or None if no accounts are available.
+    Pass exclude_ids to skip already-tried accounts in retry loops.
     """
-    return await db.get_next_account_for_tier(tier.value)
+    return await db.get_next_account_for_tier(tier.value, exclude_ids=exclude_ids)
 
 
 # ---------------------------------------------------------------------------

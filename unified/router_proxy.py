@@ -111,21 +111,15 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
     req_body_str = body_bytes.decode("utf-8", errors="replace")[:_MAX_RESPONSE_BODY]
 
     if tier == Tier.STANDARD:
-        # Route to Kiro API — with retry on auth/rate errors
-        max_retries = 3
+        # Route to Kiro API — instant rotation on failure
+        max_retries = 5
         tried_ids: list[int] = []
         last_error = ""
 
         for attempt in range(max_retries):
-            account = await get_next_account(tier)
+            account = await get_next_account(tier, exclude_ids=tried_ids)
             if account is None:
                 break
-            if account["id"] in tried_ids:
-                # Same account returned — force clear sticky and try again
-                await db.clear_sticky_account(tier.value)
-                account = await get_next_account(tier)
-                if account is None or account["id"] in tried_ids:
-                    break
             tried_ids.append(account["id"])
 
             if not account.get("kiro_access_token"):
@@ -291,18 +285,13 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         return response
 
     if tier == Tier.MAX_GL:
-        # Route to Gumloop — WebSocket chat with account rotation
-        max_retries = 3
+        # Route to Gumloop — WebSocket chat with instant account rotation on failure
+        max_retries = 5
         tried_gl_ids: list[int] = []
 
         for attempt in range(max_retries):
-            account = await get_next_account(tier)
+            account = await get_next_account(tier, exclude_ids=tried_gl_ids)
             if account is None:
-                return JSONResponse(
-                    {"error": {"message": "No available Gumloop accounts", "type": "server_error"}},
-                    status_code=503,
-                )
-            if account["id"] in tried_gl_ids:
                 break
             tried_gl_ids.append(account["id"])
 
@@ -392,22 +381,15 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             status_code=503,
         )
 
-    # MAX tier → CodeBuddy — try multiple accounts on auth/rate/exhaust errors
+    # MAX tier → CodeBuddy — instant rotation on failure
     max_retries = 5
     tried_account_ids: list[int] = []
     last_error = ""
 
     for attempt in range(max_retries):
-        account = await get_next_account(tier)
+        account = await get_next_account(tier, exclude_ids=tried_account_ids)
         if account is None:
             break
-
-        # If same account returned, force clear sticky and get next
-        if account["id"] in tried_account_ids:
-            await db.clear_sticky_account(tier.value)
-            account = await get_next_account(tier)
-            if account is None or account["id"] in tried_account_ids:
-                break
         tried_account_ids.append(account["id"])
 
         api_key = account["cb_api_key"]
