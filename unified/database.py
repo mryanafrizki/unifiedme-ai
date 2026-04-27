@@ -619,7 +619,19 @@ async def create_account(email: str, password: str) -> int:
         (email, password),
     )
     await db.commit()
-    return cur.lastrowid
+    account_id = cur.lastrowid
+
+    # Push new account to D1 immediately
+    try:
+        from . import license_client
+        account = await get_account(account_id)
+        if account and license_client.is_licensed():
+            import asyncio
+            asyncio.create_task(license_client.push_account_now(account))
+    except Exception:
+        pass
+
+    return account_id
 
 
 async def get_accounts(status: Optional[str] = None) -> list[dict]:
@@ -659,6 +671,25 @@ async def update_account(account_id: int, **fields: Any) -> bool:
         f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
     )
     await db.commit()
+
+    # Auto-push to D1 on critical field changes (credentials, status)
+    _critical_fields = {
+        "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+        "kiro_status", "kiro_access_token", "kiro_refresh_token",
+        "cb_status", "cb_api_key",
+        "ws_status", "ws_api_key",
+        "status",
+    }
+    if _critical_fields & set(fields.keys()):
+        try:
+            from . import license_client
+            updated = await get_account(account_id)
+            if updated and license_client.is_licensed():
+                import asyncio
+                asyncio.create_task(license_client.push_account_now(updated))
+        except Exception:
+            pass  # Best effort — sync loop will catch up
+
     return True
 
 
@@ -688,10 +719,26 @@ async def deduct_ws_credit(account_id: int, cost: float) -> None:
 
 
 async def delete_account(account_id: int) -> bool:
+    # Get account data before deleting (for D1 sync)
+    account = await get_account(account_id)
+
     db = await get_db()
     cur = await db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
     await db.commit()
-    return cur.rowcount > 0
+    deleted = cur.rowcount > 0
+
+    # Push deletion to D1 — mark as deleted so D1 removes it too
+    if deleted and account:
+        try:
+            from . import license_client
+            if license_client.is_licensed():
+                account["status"] = "deleted"
+                import asyncio
+                asyncio.create_task(license_client.push_account_now(account))
+        except Exception:
+            pass
+
+    return deleted
 
 
 async def move_to_trash(account_id: int) -> bool:

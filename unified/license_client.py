@@ -279,25 +279,24 @@ async def pull_sync() -> dict:
 async def _write_to_local_db(data: dict) -> None:
     """Write pulled D1 data to local SQLite database.
 
-    Smart merge: don't overwrite local credentials with empty D1 data.
-    If local has valid credentials (refresh_token, api_key, etc.) and D1 has
-    empty values, keep the local data. D1 only wins when it has actual data.
+    D1 is the source of truth. On pull, D1 data overwrites local.
+    Every local change is pushed to D1 immediately (via update_account hook),
+    so D1 should always have the latest data.
     """
     from . import database as db
 
-    # Credential fields that should NOT be overwritten with empty values
-    _CREDENTIAL_FIELDS = {
-        "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
-        "cb_api_key",
-        "ws_api_key",
-        "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-    }
-    # Status fields that should NOT be downgraded (ok → none/empty)
-    _STATUS_FIELDS = {
-        "kiro_status", "cb_status", "ws_status", "gl_status",
-    }
+    _SYNC_FIELDS = [
+        "password", "status",
+        "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+        "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+        "kiro_error", "kiro_error_count", "kiro_expires_at",
+        "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+        "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+        "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+        "gl_credits", "gl_error", "gl_error_count",
+    ]
 
-    # Upsert accounts
+    # Upsert accounts — D1 overwrites local
     accounts = data.get("accounts", [])
     for acc in accounts:
         email = acc.get("email", "")
@@ -305,55 +304,39 @@ async def _write_to_local_db(data: dict) -> None:
             continue
         existing = await db.get_account_by_email(email)
         if existing:
-            # Smart merge: don't overwrite local credentials with empty D1 data
             fields = {}
-            for key in [
-                "password", "status",
-                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
-                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
-                "kiro_error", "kiro_error_count", "kiro_expires_at",
-                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
-                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
-                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-                "gl_credits", "gl_error", "gl_error_count",
-            ]:
-                if key not in acc or acc[key] is None:
-                    continue
-                d1_val = acc[key]
-                local_val = existing.get(key, "")
-
-                # Don't overwrite valid local credentials with empty D1 data
-                if key in _CREDENTIAL_FIELDS:
-                    if not d1_val and local_val:
-                        continue  # Keep local credential
-
-                # Don't downgrade status from 'ok' to 'none' or empty
-                if key in _STATUS_FIELDS:
-                    if local_val == "ok" and d1_val in ("none", "", None):
-                        continue  # Keep local 'ok' status
-
-                fields[key] = d1_val
-
-            if fields:
-                await db.update_account(existing["id"], **fields)
-        else:
-            # Create new account from D1
-            account_id = await db.create_account(email, acc.get("password", ""))
-            fields = {}
-            for key in [
-                "status",
-                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
-                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
-                "kiro_error", "kiro_error_count", "kiro_expires_at",
-                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
-                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
-                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-                "gl_credits", "gl_error", "gl_error_count",
-            ]:
+            for key in _SYNC_FIELDS:
                 if key in acc and acc[key] is not None:
                     fields[key] = acc[key]
             if fields:
-                await db.update_account(account_id, **fields)
+                # Direct DB update — skip the auto-push hook to avoid push loop
+                _db = await db.get_db()
+                sets = [f"{k} = ?" for k in fields]
+                vals = list(fields.values()) + [existing["id"]]
+                await _db.execute(
+                    f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
+                )
+                await _db.commit()
+        else:
+            # Create new account from D1 — direct insert, skip push hook
+            _db = await db.get_db()
+            cur = await _db.execute(
+                "INSERT INTO accounts (email, password) VALUES (?, ?)",
+                (email, acc.get("password", "")),
+            )
+            await _db.commit()
+            account_id = cur.lastrowid
+            fields = {}
+            for key in _SYNC_FIELDS:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                sets = [f"{k} = ?" for k in fields]
+                vals = list(fields.values()) + [account_id]
+                await _db.execute(
+                    f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
+                )
+                await _db.commit()
 
     # Upsert settings
     settings = data.get("settings", {})
