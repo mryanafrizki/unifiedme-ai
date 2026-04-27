@@ -54,7 +54,7 @@ DB_PATH = str(DATA_DIR / "unified.db")
 # ---------------------------------------------------------------------------
 AUTH_DIR = BASE_DIR.parent          # auth/
 AUTH_SCRIPT = AUTH_DIR / "login.py"
-WAVESPEED_DIR = BASE_DIR.parent.parent / "wavespeed"
+WAVESPEED_DIR = BASE_DIR.parent / "wavespeed"
 WAVESPEED_SCRIPT = WAVESPEED_DIR / "register.py"
 GUMLOOP_SCRIPT = AUTH_DIR / "gumloop_login.py"
 # Windows uses Scripts/, Linux uses bin/
