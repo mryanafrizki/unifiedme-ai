@@ -175,12 +175,58 @@ def _show_d1_status_from_log():
         pass
 
 
+def _get_account_stats() -> dict:
+    """Read account stats from local DB."""
+    import sqlite3
+    db_path = DATA_DIR / "unified.db"
+    if not db_path.exists():
+        return {}
+    try:
+        db = sqlite3.connect(str(db_path))
+        total = db.execute("SELECT COUNT(*) FROM accounts WHERE status='active'").fetchone()[0]
+        kr = db.execute("SELECT COUNT(*) FROM accounts WHERE kiro_status='ok'").fetchone()[0]
+        cb = db.execute("SELECT COUNT(*) FROM accounts WHERE cb_status='ok'").fetchone()[0]
+        ws = db.execute("SELECT COUNT(*) FROM accounts WHERE ws_status='ok'").fetchone()[0]
+        gl = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
+        db.close()
+        return {"total": total, "kr": kr, "cb": cb, "ws": ws, "gl": gl}
+    except Exception:
+        return {}
+
+
+def _print_d1_box(title: str, push_ok: bool = True):
+    """Print D1 sync status box with account breakdown."""
+    stats = _get_account_stats()
+    if not stats:
+        return
+
+    _now = _get_timestamp_wib()
+    _device = platform.node() or "unknown"
+    _os_info = f"{platform.system()} {platform.release()}"
+
+    GREEN = "\033[0;32m"
+    CYAN = "\033[0;36m"
+    YELLOW = "\033[1;33m"
+    DIM = "\033[2m"
+    NC = "\033[0m"
+
+    status = f"{GREEN}{title} ✓{NC}" if push_ok else f"{YELLOW}{title} (best effort){NC}"
+
+    print()
+    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+    print(f"    {status}")
+    print(f"    KR: {stats['kr']}  CB: {stats['cb']}  WS: {stats['ws']}  GL: {stats['gl']}")
+    print(f"    Total: {stats['total']} active")
+    print(f"    {DIM}{_now} · {_device} ({_os_info}){NC}")
+    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+    print()
+
+
 def _push_d1_before_stop():
-    """Call the running proxy's API to trigger D1 push before stopping."""
+    """Push to D1 before stopping and show status."""
     try:
         import httpx
-        # Trigger sync push via admin API
-        # Read admin password from data dir
+        # Try to push via proxy API
         import sqlite3
         db_path = DATA_DIR / "unified.db"
         if not db_path.exists():
@@ -190,13 +236,9 @@ def _push_d1_before_stop():
         db.row_factory = sqlite3.Row
         pw_row = db.execute("SELECT value FROM settings WHERE key='admin_password'").fetchone()
         admin_pw = pw_row[0] if pw_row else "kUcingku0"
-
-        # Count accounts
-        acct_count = db.execute("SELECT COUNT(*) FROM accounts WHERE status='active'").fetchone()[0]
-        gl_count = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
         db.close()
 
-        # Try to push via proxy API (fire and forget)
+        push_ok = False
         try:
             resp = httpx.post(
                 f"http://localhost:{LISTEN_PORT}/api/sync/push",
@@ -205,66 +247,18 @@ def _push_d1_before_stop():
             )
             push_ok = resp.status_code == 200
         except Exception:
-            push_ok = False
+            pass
 
-        _now = _get_timestamp_wib()
-        _device = platform.node() or "unknown"
-        _os_info = f"{platform.system()} {platform.release()}"
-
-        GREEN = "\033[0;32m"
-        CYAN = "\033[0;36m"
-        YELLOW = "\033[1;33m"
-        DIM = "\033[2m"
-        NC = "\033[0m"
-
-        print()
-        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
-        if push_ok:
-            print(f"  {GREEN}  D1 Updated ✓{NC}")
-        else:
-            print(f"  {YELLOW}  D1 Push (best effort){NC}")
-        print(f"    Accounts: {acct_count} active, {gl_count} GL")
-        print(f"    Last update: {_now}")
-        print(f"    Device: {_device} ({_os_info})")
-        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
-        print()
+        _print_d1_box("D1 Updated", push_ok)
 
     except Exception:
         pass
 
 
-def _show_d1_box(title: str, mode: str = "pull"):
-    """Show D1 sync status box in terminal."""
-    try:
-        import sqlite3
-        db_path = DATA_DIR / "unified.db"
-        if not db_path.exists():
-            return
-
-        db = sqlite3.connect(str(db_path))
-        acct_count = db.execute("SELECT COUNT(*) FROM accounts WHERE status='active'").fetchone()[0]
-        gl_count = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
-        db.close()
-
-        _now = _get_timestamp_wib()
-        _device = platform.node() or "unknown"
-        _os_info = f"{platform.system()} {platform.release()}"
-
-        GREEN = "\033[0;32m"
-        CYAN = "\033[0;36m"
-        NC = "\033[0m"
-
-        print()
-        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
-        print(f"  {GREEN}  {title} ✓{NC}")
-        print(f"    Accounts: {acct_count} active, {gl_count} GL")
-        print(f"    Last sync: {_now}")
-        print(f"    Device: {_device} ({_os_info})")
-        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
-        print()
-
-    except Exception:
-        pass
+def _show_d1_status_from_log():
+    """Show D1 sync status after proxy starts."""
+    time.sleep(2)
+    _print_d1_box("D1 Synced")
 
 
 # ─── Commands ────────────────────────────────────────────────────────────────
