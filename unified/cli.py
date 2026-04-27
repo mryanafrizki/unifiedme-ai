@@ -147,6 +147,126 @@ def _find_pythonw() -> str | None:
     return None
 
 
+# ─── D1 Sync Helpers ─────────────────────────────────────────────────────────
+
+def _get_timestamp_wib() -> str:
+    """Get current timestamp in WIB (UTC+7) format."""
+    from datetime import datetime, timezone, timedelta
+    wib = timezone(timedelta(hours=7))
+    return datetime.now(wib).strftime("%d %b %Y %H:%M:%S WIB")
+
+
+def _show_d1_status_from_log():
+    """Read proxy.log and show D1 sync status if available."""
+    log_path = DATA_DIR / "proxy.log"
+    if not log_path.exists():
+        return
+    try:
+        # Wait a bit for proxy to finish startup sync
+        time.sleep(2)
+        lines = log_path.read_text(errors="replace").strip().split("\n")
+        # Look for D1 sync lines in last 30 lines
+        for line in lines[-30:]:
+            if "D1 Synced" in line or "Accounts:" in line and "local DB" not in line:
+                # Found sync info — show summary
+                _show_d1_box("D1 Synced", "pull")
+                return
+    except Exception:
+        pass
+
+
+def _push_d1_before_stop():
+    """Call the running proxy's API to trigger D1 push before stopping."""
+    try:
+        import httpx
+        # Trigger sync push via admin API
+        # Read admin password from data dir
+        import sqlite3
+        db_path = DATA_DIR / "unified.db"
+        if not db_path.exists():
+            return
+
+        db = sqlite3.connect(str(db_path))
+        db.row_factory = sqlite3.Row
+        pw_row = db.execute("SELECT value FROM settings WHERE key='admin_password'").fetchone()
+        admin_pw = pw_row[0] if pw_row else "kUcingku0"
+
+        # Count accounts
+        acct_count = db.execute("SELECT COUNT(*) FROM accounts WHERE status='active'").fetchone()[0]
+        gl_count = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
+        db.close()
+
+        # Try to push via proxy API (fire and forget)
+        try:
+            resp = httpx.post(
+                f"http://localhost:{LISTEN_PORT}/api/sync/push",
+                headers={"X-Admin-Password": admin_pw},
+                timeout=10,
+            )
+            push_ok = resp.status_code == 200
+        except Exception:
+            push_ok = False
+
+        _now = _get_timestamp_wib()
+        _device = platform.node() or "unknown"
+        _os_info = f"{platform.system()} {platform.release()}"
+
+        GREEN = "\033[0;32m"
+        CYAN = "\033[0;36m"
+        YELLOW = "\033[1;33m"
+        DIM = "\033[2m"
+        NC = "\033[0m"
+
+        print()
+        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+        if push_ok:
+            print(f"  {GREEN}  D1 Updated ✓{NC}")
+        else:
+            print(f"  {YELLOW}  D1 Push (best effort){NC}")
+        print(f"    Accounts: {acct_count} active, {gl_count} GL")
+        print(f"    Last update: {_now}")
+        print(f"    Device: {_device} ({_os_info})")
+        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+        print()
+
+    except Exception:
+        pass
+
+
+def _show_d1_box(title: str, mode: str = "pull"):
+    """Show D1 sync status box in terminal."""
+    try:
+        import sqlite3
+        db_path = DATA_DIR / "unified.db"
+        if not db_path.exists():
+            return
+
+        db = sqlite3.connect(str(db_path))
+        acct_count = db.execute("SELECT COUNT(*) FROM accounts WHERE status='active'").fetchone()[0]
+        gl_count = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
+        db.close()
+
+        _now = _get_timestamp_wib()
+        _device = platform.node() or "unknown"
+        _os_info = f"{platform.system()} {platform.release()}"
+
+        GREEN = "\033[0;32m"
+        CYAN = "\033[0;36m"
+        NC = "\033[0m"
+
+        print()
+        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+        print(f"  {GREEN}  {title} ✓{NC}")
+        print(f"    Accounts: {acct_count} active, {gl_count} GL")
+        print(f"    Last sync: {_now}")
+        print(f"    Device: {_device} ({_os_info})")
+        print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+        print()
+
+    except Exception:
+        pass
+
+
 # ─── Commands ────────────────────────────────────────────────────────────────
 
 def cmd_start():
@@ -216,6 +336,8 @@ def cmd_start():
         print(f"  Proxy started (PID {proc.pid})")
         print(f"  Dashboard: http://localhost:{LISTEN_PORT}/dashboard")
         print(f"  Log file:  {DATA_DIR / 'proxy.log'}")
+        # Show D1 sync status from log
+        _show_d1_status_from_log()
     else:
         print("  Failed to start!")
         # Show last error lines from log
@@ -243,6 +365,9 @@ def cmd_stop():
         PID_FILE.unlink(missing_ok=True)
         UPTIME_FILE.unlink(missing_ok=True)
         return
+
+    # Push to D1 before stopping
+    _push_d1_before_stop()
 
     print(f"  Stopping proxy (PID {pid})...")
     try:
