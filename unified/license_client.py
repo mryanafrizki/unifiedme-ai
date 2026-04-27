@@ -276,6 +276,101 @@ async def pull_sync() -> dict:
     return result
 
 
+async def pull_and_merge() -> dict:
+    """Pull from D1 and MERGE with local — never overwrite existing local data.
+
+    Strategy:
+    - Account exists in D1 but NOT local → ADD to local (new from other device)
+    - Account exists in BOTH → keep local version (local is master)
+    - Account exists in local but NOT D1 → keep local (will be pushed later)
+    - Settings/filters/watchwords → always pull from D1
+
+    Returns {new_accounts: N, updated_accounts: N}.
+    """
+    global _watchwords, _watchword_cache_ts, _global_filters
+
+    if not is_licensed():
+        return {"error": "Not licensed"}
+
+    result = await _api_get("/api/sync/pull", {
+        "license_key": LICENSE_KEY,
+        "device_fingerprint": _device_fingerprint,
+    })
+
+    if result.get("error"):
+        log.warning("Sync pull failed: %s", result["error"])
+        return result
+
+    # Update watchword + global filter cache
+    _watchwords = result.get("watchwords", [])
+    _watchword_cache_ts = time.monotonic()
+    _global_filters = result.get("global_filters", [])
+
+    from . import database as db
+
+    # Merge accounts — only ADD new ones from D1
+    new_accounts = 0
+    d1_accounts = result.get("accounts", [])
+    for acc in d1_accounts:
+        email = acc.get("email", "")
+        if not email:
+            continue
+        existing = await db.get_account_by_email(email)
+        if not existing:
+            # New account from D1 (added on another device) → add to local
+            account_id = await db.create_account(email, acc.get("password", ""))
+            fields = {}
+            for key in [
+                "status",
+                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+                "kiro_error", "kiro_error_count", "kiro_expires_at",
+                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+                "gl_credits", "gl_error", "gl_error_count",
+            ]:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                # Direct DB update to skip auto-push (we'll push everything after)
+                _db = await db.get_db()
+                sets = [f"{k} = ?" for k in fields]
+                vals = list(fields.values()) + [account_id]
+                await _db.execute(
+                    f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
+                )
+                await _db.commit()
+            new_accounts += 1
+        # If exists locally → skip (local is master)
+
+    # Pull settings, filters (always from D1)
+    settings = result.get("settings", {})
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            await db.set_setting(key, str(value))
+
+    filters = result.get("filters", [])
+    if filters:
+        local_filters = await db.get_filters()
+        for lf in local_filters:
+            await db.delete_filter(lf["id"])
+        for f in filters:
+            await db.create_filter(
+                find_text=f.get("find_text", ""),
+                replace_text=f.get("replace_text", ""),
+                is_regex=bool(f.get("is_regex", 0)),
+                description=f.get("description", ""),
+            )
+        from .message_filter import invalidate_cache
+        invalidate_cache()
+
+    if new_accounts:
+        log.info("Merged %d new accounts from D1", new_accounts)
+
+    return {"ok": True, "new_accounts": new_accounts, "updated_accounts": 0}
+
+
 async def pull_settings_only() -> dict:
     """Pull only settings, filters, watchwords from D1 — NOT accounts.
 
@@ -642,8 +737,8 @@ async def _sync_loop() -> None:
             local_accounts = await db.get_accounts()
             await push_sync(accounts=local_accounts)
 
-            # Pull only settings, filters, watchwords (NOT accounts — local is master)
-            await pull_settings_only()
+            # Pull & merge — add new accounts from D1 (other devices), keep local data
+            await pull_and_merge()
 
         except asyncio.CancelledError:
             break
