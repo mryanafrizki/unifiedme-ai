@@ -242,10 +242,7 @@ async def lifespan(app: FastAPI):
     await license_client.activate()
     license_client.start_sync_loop()
 
-    # Sync with D1 on startup — MERGE strategy
-    # 1. Pull from D1 → add NEW accounts to local (don't overwrite existing)
-    # 2. Push local to D1 → D1 gets latest from this device
-    # This handles multi-device: Device B adds accounts → D1 has them → Device A pulls new ones
+    # D1 = source of truth. Full pull on startup.
     import platform as _platform
     from datetime import datetime, timezone, timedelta
     _wib = timezone(timedelta(hours=7))
@@ -254,27 +251,19 @@ async def lifespan(app: FastAPI):
     _os_info = f"{_platform.system()} {_platform.release()}"
 
     try:
-        # Step 1: Pull from D1 — merge new accounts, don't overwrite existing
-        pull_result = await license_client.pull_and_merge()
-        _new_from_d1 = pull_result.get("new_accounts", 0)
-        _updated_from_d1 = pull_result.get("updated_accounts", 0)
-
-        # Step 2: Push local to D1 — D1 gets our latest data
-        local_accounts = await db.get_accounts()
-        push_result = await license_client.push_sync(accounts=local_accounts)
-        _pushed = push_result.get("accounts_upserted", 0) if not push_result.get("error") else 0
-
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        log.info("  D1 Synced ✓")
-        if _new_from_d1:
-            log.info("  New from D1: %d accounts", _new_from_d1)
-        log.info("  Pushed to D1: %d accounts", _pushed)
-        log.info("  Local total: %d accounts", len(local_accounts))
-        log.info("  Last sync: %s", _now_wib)
-        log.info("  Device: %s (%s)", _device, _os_info)
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        pull_result = await license_client.full_pull_replace_local()
+        if pull_result.get("error"):
+            log.warning("D1 pull failed: %s — using local data", pull_result["error"])
+        else:
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            log.info("  D1 Synced ✓")
+            log.info("  +%d new  ~%d updated  -%d deleted  = %d total",
+                     pull_result.get("added", 0), pull_result.get("updated", 0),
+                     pull_result.get("deleted", 0), pull_result.get("total", 0))
+            log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     except Exception as e:
-        log.warning("D1 startup sync failed: %s", e)
+        log.warning("D1 startup sync failed: %s — using local data", e)
 
     # Check if admin password is set
     admin_pw = await db.get_setting("admin_password_set", "")

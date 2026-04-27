@@ -571,21 +571,162 @@ async def push_sync(
 
 # ─── Usage Log Buffer ────────────────────────────────────────────────────────
 
-async def push_account_now(account: dict) -> None:
-    """Immediately push a single account change to D1 (don't wait for sync interval).
-
-    Call this on critical changes: account added, exhausted, banned, credentials updated.
-    """
+async def push_account_now(account: dict) -> bool:
+    """Push a single account to D1. Returns True if success."""
     if not is_licensed():
-        return
+        return False
     try:
-        await _api_post("/api/sync/push", {
+        result = await _api_post("/api/sync/push", {
             "license_key": LICENSE_KEY,
             "device_fingerprint": _device_fingerprint,
             "accounts": [account],
         }, timeout=10)
+        return not result.get("error")
     except Exception as e:
-        log.warning("Instant account push failed (will retry on next sync): %s", e)
+        log.warning("D1 push failed: %s", e)
+        return False
+
+
+async def d1_sync_account(account_id: int) -> bool:
+    """Read account from local DB and push to D1. Call after any local update."""
+    from . import database as db
+    account = await db.get_account(account_id)
+    if not account:
+        return False
+    return await push_account_now(account)
+
+
+async def d1_delete_account(email: str) -> bool:
+    """Delete account from D1 by email."""
+    if not is_licensed():
+        return False
+    try:
+        result = await _api_post("/api/sync/push", {
+            "license_key": LICENSE_KEY,
+            "device_fingerprint": _device_fingerprint,
+            "accounts": [{"email": email, "status": "deleted"}],
+        }, timeout=10)
+        return not result.get("error")
+    except Exception as e:
+        log.warning("D1 delete failed for %s: %s", email, e)
+        return False
+
+
+async def full_pull_replace_local() -> dict:
+    """FULL PULL from D1 → completely replace local accounts.
+
+    D1 = source of truth. Local DB is wiped and rebuilt from D1 data.
+    Also pulls settings, filters, watchwords.
+    """
+    global _watchwords, _watchword_cache_ts, _global_filters
+
+    if not is_licensed():
+        return {"error": "Not licensed"}
+
+    result = await _api_get("/api/sync/pull", {
+        "license_key": LICENSE_KEY,
+        "device_fingerprint": _device_fingerprint,
+    })
+
+    if result.get("error"):
+        log.warning("D1 full pull failed: %s", result["error"])
+        return result
+
+    # Update caches
+    _watchwords = result.get("watchwords", [])
+    _watchword_cache_ts = time.monotonic()
+    _global_filters = result.get("global_filters", [])
+
+    from . import database as db
+
+    d1_accounts = result.get("accounts", [])
+    d1_emails = {acc.get("email", "") for acc in d1_accounts if acc.get("email")}
+
+    # Get local accounts
+    local_accounts = await db.get_accounts()
+    local_by_email = {acc["email"]: acc for acc in local_accounts}
+
+    added = 0
+    updated = 0
+    deleted = 0
+
+    _SYNC_FIELDS = [
+        "password", "status",
+        "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+        "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+        "kiro_error", "kiro_error_count", "kiro_expires_at",
+        "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+        "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+        "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+        "gl_credits", "gl_error", "gl_error_count",
+    ]
+
+    # Upsert D1 accounts to local
+    for acc in d1_accounts:
+        email = acc.get("email", "")
+        if not email:
+            continue
+
+        # Skip deleted accounts from D1
+        if acc.get("status") == "deleted":
+            if email in local_by_email:
+                await db.delete_account(local_by_email[email]["id"])
+                deleted += 1
+            continue
+
+        existing = local_by_email.get(email)
+        if existing:
+            # Update local with D1 data
+            fields = {}
+            for key in _SYNC_FIELDS:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                await db.update_account(existing["id"], **fields)
+                updated += 1
+        else:
+            # New account from D1
+            account_id = await db.create_account(email, acc.get("password", ""))
+            fields = {}
+            for key in _SYNC_FIELDS:
+                if key in acc and acc[key] is not None:
+                    fields[key] = acc[key]
+            if fields:
+                await db.update_account(account_id, **fields)
+            added += 1
+
+    # Delete local accounts that don't exist in D1
+    for email, local_acc in local_by_email.items():
+        if email not in d1_emails:
+            await db.delete_account(local_acc["id"])
+            deleted += 1
+
+    # Sync settings
+    settings = result.get("settings", {})
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            await db.set_setting(key, str(value))
+
+    # Sync filters
+    filters = result.get("filters", [])
+    if filters:
+        local_filters = await db.get_filters()
+        for lf in local_filters:
+            await db.delete_filter(lf["id"])
+        for f in filters:
+            await db.create_filter(
+                find_text=f.get("find_text", ""),
+                replace_text=f.get("replace_text", ""),
+                is_regex=bool(f.get("is_regex", 0)),
+                description=f.get("description", ""),
+            )
+        from .message_filter import invalidate_cache
+        invalidate_cache()
+
+    log.info("D1 full pull: +%d new, ~%d updated, -%d deleted, %d total",
+             added, updated, deleted, len(d1_accounts))
+
+    return {"ok": True, "added": added, "updated": updated, "deleted": deleted, "total": len(d1_accounts)}
 
 
 def buffer_usage_log(
@@ -732,13 +873,11 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push local accounts + buffered logs to D1 (local = master)
-            from . import database as db
-            local_accounts = await db.get_accounts()
-            await push_sync(accounts=local_accounts)
+            # Push buffered usage logs to D1
+            await push_sync()
 
-            # Pull & merge — add new accounts from D1 (other devices), keep local data
-            await pull_and_merge()
+            # Full pull from D1 — D1 is source of truth
+            await full_pull_replace_local()
 
         except asyncio.CancelledError:
             break

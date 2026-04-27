@@ -352,10 +352,18 @@ async def update_account_fields(account_id: int, request: Request, _: bool = Dep
 
 @router.delete("/accounts/{account_id}")
 async def delete_account(account_id: int, request: Request, _: bool = Depends(verify_admin)):
-    """Permanently delete an account."""
-    ok = await db.delete_account(account_id)
-    if not ok:
+    """Permanently delete an account. Pushes deletion to D1 first."""
+    account = await db.get_account(account_id)
+    if not account:
         return JSONResponse({"error": "Account not found"}, status_code=404)
+    # Delete from D1 first (D1 = source of truth)
+    try:
+        from . import license_client
+        await license_client.d1_delete_account(account["email"])
+    except Exception:
+        pass
+    # Then delete locally
+    await db.delete_account(account_id)
     return {"ok": True}
 
 

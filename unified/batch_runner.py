@@ -302,6 +302,14 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                 if not has_any_ok:
                     await db.update_account(job.account_id, status="failed")
 
+        # Push final account state to D1 (D1 = source of truth)
+        if job.account_id:
+            try:
+                from . import license_client
+                await license_client.d1_sync_account(job.account_id)
+            except Exception:
+                pass
+
         batch_state.broadcast({
             "type": "job_done",
             "job_id": job.id,

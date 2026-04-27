@@ -613,25 +613,14 @@ async def count_active_api_keys() -> int:
 # ---------------------------------------------------------------------------
 
 async def create_account(email: str, password: str) -> int:
+    """Create account in local DB only. Caller handles D1 sync."""
     db = await get_db()
     cur = await db.execute(
         "INSERT INTO accounts (email, password) VALUES (?, ?)",
         (email, password),
     )
     await db.commit()
-    account_id = cur.lastrowid
-
-    # Push new account to D1 immediately
-    try:
-        from . import license_client
-        account = await get_account(account_id)
-        if account and license_client.is_licensed():
-            import asyncio
-            asyncio.create_task(license_client.push_account_now(account))
-    except Exception:
-        pass
-
-    return account_id
+    return cur.lastrowid
 
 
 async def get_accounts(status: Optional[str] = None) -> list[dict]:
@@ -654,6 +643,7 @@ async def get_account(account_id: int) -> Optional[dict]:
 
 
 async def update_account(account_id: int, **fields: Any) -> bool:
+    """Update account in local DB only. Caller handles D1 sync."""
     if not fields:
         return False
     db = await get_db()
@@ -671,25 +661,6 @@ async def update_account(account_id: int, **fields: Any) -> bool:
         f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
     )
     await db.commit()
-
-    # Auto-push to D1 on critical field changes (credentials, status)
-    _critical_fields = {
-        "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-        "kiro_status", "kiro_access_token", "kiro_refresh_token",
-        "cb_status", "cb_api_key",
-        "ws_status", "ws_api_key",
-        "status",
-    }
-    if _critical_fields & set(fields.keys()):
-        try:
-            from . import license_client
-            updated = await get_account(account_id)
-            if updated and license_client.is_licensed():
-                import asyncio
-                asyncio.create_task(license_client.push_account_now(updated))
-        except Exception:
-            pass  # Best effort — sync loop will catch up
-
     return True
 
 
@@ -719,26 +690,11 @@ async def deduct_ws_credit(account_id: int, cost: float) -> None:
 
 
 async def delete_account(account_id: int) -> bool:
-    # Get account data before deleting (for D1 sync)
-    account = await get_account(account_id)
-
+    """Delete account from local DB only. Caller handles D1 sync."""
     db = await get_db()
     cur = await db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
     await db.commit()
-    deleted = cur.rowcount > 0
-
-    # Push deletion to D1 — mark as deleted so D1 removes it too
-    if deleted and account:
-        try:
-            from . import license_client
-            if license_client.is_licensed():
-                account["status"] = "deleted"
-                import asyncio
-                asyncio.create_task(license_client.push_account_now(account))
-        except Exception:
-            pass
-
-    return deleted
+    return cur.rowcount > 0
 
 
 async def move_to_trash(account_id: int) -> bool:
