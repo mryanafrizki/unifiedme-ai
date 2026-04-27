@@ -276,6 +276,59 @@ async def pull_sync() -> dict:
     return result
 
 
+async def pull_settings_only() -> dict:
+    """Pull only settings, filters, watchwords from D1 — NOT accounts.
+
+    Local SQLite is the master for accounts. D1 only provides:
+    - Settings (admin password, captcha key, etc.)
+    - Filter rules
+    - Watchwords
+    - Proxies
+    """
+    global _watchwords, _watchword_cache_ts, _global_filters
+
+    if not is_licensed():
+        return {"error": "Not licensed"}
+
+    result = await _api_get("/api/sync/pull", {
+        "license_key": LICENSE_KEY,
+        "device_fingerprint": _device_fingerprint,
+    })
+
+    if result.get("error"):
+        return result
+
+    # Update watchword + global filter cache
+    _watchwords = result.get("watchwords", [])
+    _watchword_cache_ts = time.monotonic()
+    _global_filters = result.get("global_filters", [])
+
+    # Write ONLY settings, filters, proxies — skip accounts
+    from . import database as db
+
+    settings = result.get("settings", {})
+    if isinstance(settings, dict):
+        for key, value in settings.items():
+            await db.set_setting(key, str(value))
+
+    filters = result.get("filters", [])
+    if filters:
+        local_filters = await db.get_filters()
+        for lf in local_filters:
+            await db.delete_filter(lf["id"])
+        for f in filters:
+            await db.create_filter(
+                find_text=f.get("find_text", ""),
+                replace_text=f.get("replace_text", ""),
+                is_regex=bool(f.get("is_regex", 0)),
+                description=f.get("description", ""),
+            )
+        from .message_filter import invalidate_cache
+        invalidate_cache()
+
+    return {"ok": True}
+
+
 async def _write_to_local_db(data: dict) -> None:
     """Write pulled D1 data to local SQLite database.
 
@@ -584,13 +637,13 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push buffered usage logs + local account changes to D1
+            # Push local accounts + buffered logs to D1 (local = master)
             from . import database as db
             local_accounts = await db.get_accounts()
             await push_sync(accounts=local_accounts)
 
-            # Pull latest data from D1 (accounts, settings, filters, watchwords)
-            await pull_sync()
+            # Pull only settings, filters, watchwords (NOT accounts — local is master)
+            await pull_settings_only()
 
         except asyncio.CancelledError:
             break

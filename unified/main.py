@@ -242,7 +242,7 @@ async def lifespan(app: FastAPI):
     await license_client.activate()
     license_client.start_sync_loop()
 
-    # Pull from D1 (source of truth) and show sync status
+    # Push local data to D1 on startup (local = master, D1 = backup)
     import platform as _platform
     from datetime import datetime, timezone, timedelta
     _wib = timezone(timedelta(hours=7))
@@ -250,17 +250,23 @@ async def lifespan(app: FastAPI):
     _device = _platform.node() or "unknown"
     _os_info = f"{_platform.system()} {_platform.release()}"
 
-    pull_result = await license_client.pull_sync()
-    if pull_result.get("error"):
-        log.warning("D1 pull failed: %s", pull_result["error"])
-    else:
-        _acct_count = len(pull_result.get("accounts", []))
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        log.info("  D1 Synced ✓")
-        log.info("  Accounts: %d", _acct_count)
-        log.info("  Last sync: %s", _now_wib)
-        log.info("  Device: %s (%s)", _device, _os_info)
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    try:
+        local_accounts = await db.get_accounts()
+        push_result = await license_client.push_sync(accounts=local_accounts)
+        if push_result.get("error"):
+            log.warning("D1 push failed: %s", push_result["error"])
+        else:
+            _pushed = push_result.get("accounts_upserted", 0)
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            log.info("  D1 Backup ✓ (pushed %d accounts)", _pushed)
+            log.info("  Last sync: %s", _now_wib)
+            log.info("  Device: %s (%s)", _device, _os_info)
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    except Exception as e:
+        log.warning("D1 startup push failed: %s", e)
+
+    # Pull only settings, filters, watchwords from D1 (NOT accounts)
+    await license_client.pull_settings_only()
 
     # Check if admin password is set
     admin_pw = await db.get_setting("admin_password_set", "")
