@@ -322,7 +322,7 @@ async function syncPush(db, request) {
   let alertsInserted = 0;
   let proxiesUpserted = 0;
 
-  // Upsert accounts (smart: don't overwrite credentials with empty values)
+  // Upsert accounts — direct overwrite (local device is always correct)
   let accountsDeleted = 0;
   if (accounts && Array.isArray(accounts)) {
     for (const acc of accounts) {
@@ -336,35 +336,11 @@ async function syncPush(db, request) {
         continue;
       }
 
-      const existing = await db.prepare('SELECT * FROM accounts WHERE license_id = ? AND email = ?')
+      const existing = await db.prepare('SELECT id FROM accounts WHERE license_id = ? AND email = ?')
         .bind(license.id, acc.email).first();
 
       if (existing) {
-        // Smart update: for credential fields, only update if new value is non-empty
-        // This prevents accidental overwrites when pushing partial data
-        const credentialFields = [
-          'kiro_access_token', 'kiro_refresh_token', 'kiro_profile_arn',
-          'cb_api_key', 'ws_api_key',
-          'gl_refresh_token', 'gl_user_id', 'gl_gummie_id', 'gl_id_token'
-        ];
-        const statusFields = ['kiro_status', 'cb_status', 'ws_status', 'gl_status'];
-
-        const v = (field, fallback) => {
-          const newVal = acc[field];
-          const oldVal = existing[field];
-          // Credential fields: keep old value if new is empty
-          if (credentialFields.includes(field)) {
-            return (newVal !== undefined && newVal !== null && newVal !== '') ? newVal : (oldVal || fallback);
-          }
-          // Status fields: don't downgrade from 'ok' to 'none'/'pending' if credential exists
-          if (statusFields.includes(field)) {
-            if (oldVal === 'ok' && (newVal === 'none' || newVal === 'pending' || !newVal)) {
-              return oldVal; // Keep 'ok'
-            }
-          }
-          return (newVal !== undefined && newVal !== null) ? newVal : fallback;
-        };
-
+        // Direct overwrite — pushing device has the correct data
         await db.prepare(`UPDATE accounts SET
           password = ?, status = ?,
           kiro_status = ?, kiro_access_token = ?, kiro_refresh_token = ?, kiro_profile_arn = ?,
@@ -376,18 +352,17 @@ async function syncPush(db, request) {
           gl_credits = ?, gl_error = ?, gl_error_count = ?,
           updated_at = datetime('now')
           WHERE id = ?`).bind(
-          v('password', ''), v('status', 'active'),
-          v('kiro_status', 'pending'), v('kiro_access_token', ''), v('kiro_refresh_token', ''), v('kiro_profile_arn', ''),
-          v('kiro_credits', 0), v('kiro_credits_total', 0), v('kiro_credits_used', 0),
-          v('kiro_error', ''), v('kiro_error_count', 0), v('kiro_expires_at', ''),
-          v('cb_status', 'pending'), v('cb_api_key', ''), v('cb_credits', 0), v('cb_error', ''), v('cb_error_count', 0), v('cb_expires_at', ''),
-          v('ws_status', 'none'), v('ws_api_key', ''), v('ws_credits', 0), v('ws_error', ''), v('ws_error_count', 0),
-          v('gl_status', 'none'), v('gl_refresh_token', ''), v('gl_user_id', ''), v('gl_gummie_id', ''), v('gl_id_token', ''),
-          v('gl_credits', 0), v('gl_error', ''), v('gl_error_count', 0),
+          acc.password || '', acc.status || 'active',
+          acc.kiro_status || 'pending', acc.kiro_access_token || '', acc.kiro_refresh_token || '', acc.kiro_profile_arn || '',
+          acc.kiro_credits || 0, acc.kiro_credits_total || 0, acc.kiro_credits_used || 0,
+          acc.kiro_error || '', acc.kiro_error_count || 0, acc.kiro_expires_at || '',
+          acc.cb_status || 'pending', acc.cb_api_key || '', acc.cb_credits || 0, acc.cb_error || '', acc.cb_error_count || 0, acc.cb_expires_at || '',
+          acc.ws_status || 'none', acc.ws_api_key || '', acc.ws_credits || 0, acc.ws_error || '', acc.ws_error_count || 0,
+          acc.gl_status || 'none', acc.gl_refresh_token || '', acc.gl_user_id || '', acc.gl_gummie_id || '', acc.gl_id_token || '',
+          acc.gl_credits || 0, acc.gl_error || '', acc.gl_error_count || 0,
           existing.id
         ).run();
       } else {
-        // New account — insert with whatever data we have
         await db.prepare(`INSERT INTO accounts (
           license_id, email, password, status,
           kiro_status, kiro_access_token, kiro_refresh_token, kiro_profile_arn,
