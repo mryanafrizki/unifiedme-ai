@@ -227,21 +227,25 @@ async def import_gumloop_account(request: Request, _: bool = Depends(verify_admi
 
 @router.post("/accounts/{account_id}/sticky/{tier}")
 async def set_sticky_account_endpoint(account_id: int, tier: str, _: bool = Depends(verify_admin)):
-    """Set an account as the sticky (preferred) account for a tier."""
+    """Set an account as the sticky (pinned) account for a tier.
+
+    Pinned accounts won't be auto-cleared on errors — they stay selected
+    until manually cleared by the user.
+    """
     valid_tiers = {"standard", "max", "wavespeed", "max_gl"}
     if tier not in valid_tiers:
         return JSONResponse({"error": f"Invalid tier: {tier}"}, status_code=400)
     account = await db.get_account(account_id)
     if not account:
         return JSONResponse({"error": "Account not found"}, status_code=404)
-    await db.set_sticky_account(tier, account_id)
-    return {"ok": True, "tier": tier, "account_id": account_id}
+    await db.set_sticky_account(tier, account_id, pinned=True)
+    return {"ok": True, "tier": tier, "account_id": account_id, "pinned": True}
 
 
 @router.delete("/accounts/{account_id}/sticky/{tier}")
 async def clear_sticky_account_endpoint(account_id: int, tier: str, _: bool = Depends(verify_admin)):
-    """Clear sticky account for a tier."""
-    await db.clear_sticky_account(tier)
+    """Clear sticky account for a tier (force-clear, even if pinned)."""
+    await db.force_clear_sticky_account(tier)
     return {"ok": True, "tier": tier}
 
 

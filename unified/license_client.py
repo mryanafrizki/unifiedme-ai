@@ -277,8 +277,25 @@ async def pull_sync() -> dict:
 
 
 async def _write_to_local_db(data: dict) -> None:
-    """Write pulled D1 data to local SQLite database."""
+    """Write pulled D1 data to local SQLite database.
+
+    Smart merge: don't overwrite local credentials with empty D1 data.
+    If local has valid credentials (refresh_token, api_key, etc.) and D1 has
+    empty values, keep the local data. D1 only wins when it has actual data.
+    """
     from . import database as db
+
+    # Credential fields that should NOT be overwritten with empty values
+    _CREDENTIAL_FIELDS = {
+        "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+        "cb_api_key",
+        "ws_api_key",
+        "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+    }
+    # Status fields that should NOT be downgraded (ok → none/empty)
+    _STATUS_FIELDS = {
+        "kiro_status", "cb_status", "ws_status", "gl_status",
+    }
 
     # Upsert accounts
     accounts = data.get("accounts", [])
@@ -288,7 +305,7 @@ async def _write_to_local_db(data: dict) -> None:
             continue
         existing = await db.get_account_by_email(email)
         if existing:
-            # Update existing account with D1 data
+            # Smart merge: don't overwrite local credentials with empty D1 data
             fields = {}
             for key in [
                 "password", "status",
@@ -300,12 +317,27 @@ async def _write_to_local_db(data: dict) -> None:
                 "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
                 "gl_credits", "gl_error", "gl_error_count",
             ]:
-                if key in acc and acc[key] is not None:
-                    fields[key] = acc[key]
+                if key not in acc or acc[key] is None:
+                    continue
+                d1_val = acc[key]
+                local_val = existing.get(key, "")
+
+                # Don't overwrite valid local credentials with empty D1 data
+                if key in _CREDENTIAL_FIELDS:
+                    if not d1_val and local_val:
+                        continue  # Keep local credential
+
+                # Don't downgrade status from 'ok' to 'none' or empty
+                if key in _STATUS_FIELDS:
+                    if local_val == "ok" and d1_val in ("none", "", None):
+                        continue  # Keep local 'ok' status
+
+                fields[key] = d1_val
+
             if fields:
                 await db.update_account(existing["id"], **fields)
         else:
-            # Create new account
+            # Create new account from D1
             account_id = await db.create_account(email, acc.get("password", ""))
             fields = {}
             for key in [

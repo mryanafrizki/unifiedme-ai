@@ -491,14 +491,34 @@ async def get_sticky_account_id(tier: str) -> int | None:
     return None
 
 
-async def set_sticky_account(tier: str, account_id: int) -> None:
-    """Set the sticky account for a tier."""
+async def is_sticky_pinned(tier: str) -> bool:
+    """Check if the sticky account was manually pinned by user (don't auto-clear)."""
+    val = await get_setting(f"sticky_pinned_{tier}", "")
+    return val == "1"
+
+
+async def set_sticky_account(tier: str, account_id: int, pinned: bool = False) -> None:
+    """Set the sticky account for a tier. If pinned=True, won't be auto-cleared on errors."""
     await set_setting(f"sticky_account_{tier}", str(account_id))
+    if pinned:
+        await set_setting(f"sticky_pinned_{tier}", "1")
 
 
 async def clear_sticky_account(tier: str) -> None:
-    """Clear the sticky account for a tier, forcing rotation to next."""
+    """Clear the sticky account for a tier, forcing rotation to next.
+
+    Respects pinned accounts — if pinned, does NOT clear.
+    Use force_clear_sticky_account() to override.
+    """
+    if await is_sticky_pinned(tier):
+        return  # Don't auto-clear pinned accounts
     await set_setting(f"sticky_account_{tier}", "")
+
+
+async def force_clear_sticky_account(tier: str) -> None:
+    """Force-clear sticky account, even if pinned. Used by admin UI."""
+    await set_setting(f"sticky_account_{tier}", "")
+    await set_setting(f"sticky_pinned_{tier}", "")
 
 
 # ---------------------------------------------------------------------------
@@ -687,10 +707,13 @@ async def get_failed() -> list[dict]:
 
 
 async def get_next_account_for_tier(tier: str) -> Optional[dict]:
-    """Get the sticky active account for the given tier.
+    """Get the sticky/pinned active account for the given tier.
 
-    Sticky behavior: keep using the same account until it errors/exhausts.
-    When no sticky account is set, pick the oldest (by created_at) active+ok account.
+    Pinned accounts (manually selected by user) are ALWAYS returned, even if
+    their status is not 'ok' — the router retry logic will handle errors.
+    This prevents the system from silently switching away from user's choice.
+
+    Auto-sticky accounts (set by rotation) are cleared when dead.
     """
     db = await get_db()
     tier_config = {
@@ -702,19 +725,34 @@ async def get_next_account_for_tier(tier: str) -> Optional[dict]:
     status_col, last_used_col = tier_config.get(tier, ("kiro_status", "last_used_kiro"))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # 1. Check sticky account
+    # 1. Check sticky/pinned account
     sticky_id = await get_sticky_account_id(tier)
     if sticky_id:
         account = await get_account(sticky_id)
-        if account and account["status"] == "active" and account[status_col] == "ok":
-            await db.execute(
-                f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
-                (ts, sticky_id),
-            )
-            await db.commit()
-            return account
-        # Sticky account is dead — clear it
-        await clear_sticky_account(tier)
+        pinned = await is_sticky_pinned(tier)
+
+        if account and account["status"] == "active":
+            if account[status_col] == "ok":
+                # Account is healthy — use it
+                await db.execute(
+                    f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
+                    (ts, sticky_id),
+                )
+                await db.commit()
+                return account
+            elif pinned:
+                # Account has issues BUT user pinned it — still return it
+                # Router retry logic will handle errors and report to user
+                await db.execute(
+                    f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
+                    (ts, sticky_id),
+                )
+                await db.commit()
+                return account
+
+        # Sticky account is dead and NOT pinned — clear it
+        if not pinned:
+            await clear_sticky_account(tier)
 
     # 2. Pick oldest created account that's active+ok
     cur = await db.execute(
@@ -727,8 +765,8 @@ async def get_next_account_for_tier(tier: str) -> Optional[dict]:
     if row is None:
         return None
 
-    # 3. Set as new sticky
-    await set_sticky_account(tier, row["id"])
+    # 3. Set as new sticky (auto, not pinned)
+    await set_sticky_account(tier, row["id"], pinned=False)
     await db.execute(
         f"UPDATE accounts SET {last_used_col} = ? WHERE id = ?",
         (ts, row["id"]),
