@@ -298,6 +298,14 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
             any_cleared = True
             cleared += 1
 
+        # Push cleared account to D1
+        if any_cleared:
+            try:
+                from . import license_client
+                await license_client.d1_sync_account(acct_id)
+            except Exception:
+                pass
+
         # After cleanup, check if account has ANY alive provider left
         if any_cleared:
             refreshed = await db.get_account(acct_id)
@@ -316,6 +324,11 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
                     or refreshed.get("gl_status") in ("none", "pending")
                 )
                 if not has_any and not has_pending:
+                    try:
+                        from . import license_client
+                        await license_client.d1_delete_account(acc["email"])
+                    except Exception:
+                        pass
                     await db.delete_account(acct_id)
                     deleted += 1
 
@@ -347,6 +360,11 @@ async def update_account_fields(account_id: int, request: Request, _: bool = Dep
     ok = await db.update_account(account_id, **fields)
     if not ok:
         return JSONResponse({"error": "Account not found"}, status_code=404)
+    try:
+        from . import license_client
+        await license_client.d1_sync_account(account_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -373,6 +391,11 @@ async def trash_account(account_id: int, request: Request, _: bool = Depends(ver
     ok = await db.move_to_trash(account_id)
     if not ok:
         return JSONResponse({"error": "Account not found"}, status_code=404)
+    try:
+        from . import license_client
+        await license_client.d1_sync_account(account_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 
@@ -382,6 +405,11 @@ async def restore_account(account_id: int, request: Request, _: bool = Depends(v
     ok = await db.restore_account(account_id)
     if not ok:
         return JSONResponse({"error": "Account not found"}, status_code=404)
+    try:
+        from . import license_client
+        await license_client.d1_sync_account(account_id)
+    except Exception:
+        pass
     return {"ok": True}
 
 
