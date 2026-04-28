@@ -603,49 +603,84 @@ async def push_sync(
 ) -> dict:
     """Push local changes to central DB.
 
+    Chunks accounts into batches of 50 to avoid D1 rate limits.
     Flushes accumulated usage_logs and alerts buffers.
-    Optionally pushes account updates, settings, and proxies.
     """
     global _usage_buffer, _alert_buffer
 
     if not is_licensed():
         return {"error": "Not licensed"}
 
-    # Grab and clear buffers atomically
     logs = _usage_buffer[:]
     alerts = _alert_buffer[:]
     _usage_buffer.clear()
     _alert_buffer.clear()
 
-    payload: dict[str, Any] = {
-        "license_key": LICENSE_KEY,
-        "device_fingerprint": _device_fingerprint,
-    }
+    total_upserted = 0
+    total_deleted = 0
 
+    # Push accounts in chunks of 50 to avoid D1 "Too many API requests" error
+    CHUNK_SIZE = 50
     if accounts:
-        payload["accounts"] = accounts
-    if settings:
-        payload["settings"] = settings
-    if logs:
-        payload["usage_logs"] = logs
-    if alerts:
-        payload["alerts"] = alerts
-    if proxies:
-        payload["proxies"] = proxies
+        for i in range(0, len(accounts), CHUNK_SIZE):
+            chunk = accounts[i:i + CHUNK_SIZE]
+            payload: dict[str, Any] = {
+                "license_key": LICENSE_KEY,
+                "device_fingerprint": _device_fingerprint,
+                "accounts": chunk,
+            }
+            # Attach logs/alerts/settings only to first chunk
+            if i == 0:
+                if settings:
+                    payload["settings"] = settings
+                if logs:
+                    payload["usage_logs"] = logs
+                if alerts:
+                    payload["alerts"] = alerts
+                if proxies:
+                    payload["proxies"] = proxies
 
-    result = await _api_post("/api/sync/push", payload, timeout=30)
+            result = await _api_post("/api/sync/push", payload, timeout=30)
+            if result.get("error"):
+                if i == 0:
+                    _usage_buffer.extend(logs)
+                    _alert_buffer.extend(alerts)
+                log.warning("Sync push chunk %d-%d failed: %s", i, i + len(chunk), result["error"])
+                return result
 
-    if result.get("error"):
-        # Put logs/alerts back on failure so they're retried next sync
-        _usage_buffer.extend(logs)
-        _alert_buffer.extend(alerts)
-        log.warning("Sync push failed: %s (buffered %d logs, %d alerts for retry)",
-                     result["error"], len(logs), len(alerts))
-        return result
+            total_upserted += result.get("accounts_upserted", 0)
+            total_deleted += result.get("accounts_deleted", 0)
 
-    log.info("Sync push: %d logs, %d alerts, %d accounts, %d proxies",
-             result.get("logs_inserted", 0), result.get("alerts_inserted", 0),
-             result.get("accounts_upserted", 0), result.get("proxies_upserted", 0))
+            # Small delay between chunks to avoid rate limit
+            if i + CHUNK_SIZE < len(accounts):
+                import asyncio as _aio
+                await _aio.sleep(0.5)
+    else:
+        # No accounts — just push logs/alerts
+        payload = {
+            "license_key": LICENSE_KEY,
+            "device_fingerprint": _device_fingerprint,
+        }
+        if settings:
+            payload["settings"] = settings
+        if logs:
+            payload["usage_logs"] = logs
+        if alerts:
+            payload["alerts"] = alerts
+        if proxies:
+            payload["proxies"] = proxies
+
+        result = await _api_post("/api/sync/push", payload, timeout=30)
+        if result.get("error"):
+            _usage_buffer.extend(logs)
+            _alert_buffer.extend(alerts)
+            log.warning("Sync push failed: %s", result["error"])
+            return result
+
+    result = {"ok": True, "accounts_upserted": total_upserted, "accounts_deleted": total_deleted}
+    log.info("Sync push: %d accounts (%d chunks), %d logs, %d alerts",
+             total_upserted, (len(accounts) + CHUNK_SIZE - 1) // CHUNK_SIZE if accounts else 0,
+             len(logs), len(alerts))
 
     return result
 
