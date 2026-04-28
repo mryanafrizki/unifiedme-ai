@@ -208,17 +208,18 @@ def _print_d1_box(title: str, push_ok: bool = True):
     CYAN = "\033[0;36m"
     YELLOW = "\033[1;33m"
     DIM = "\033[2m"
+    WHITE = "\033[1;37m"
     NC = "\033[0m"
 
-    status = f"{GREEN}{title} ✓{NC}" if push_ok else f"{YELLOW}{title} (best effort){NC}"
+    status = f"{GREEN}{title}{NC}" if push_ok else f"{YELLOW}{title}{NC}"
 
     print()
-    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
     print(f"    {status}")
-    print(f"    KR: {stats['kr']}  CB: {stats['cb']}  WS: {stats['ws']}  GL: {stats['gl']}")
-    print(f"    Total: {stats['total']} active")
+    print(f"    {WHITE}KR:{NC} {stats['kr']}  {WHITE}CB:{NC} {stats['cb']}  {WHITE}WS:{NC} {stats['ws']}  {WHITE}GL:{NC} {stats['gl']}  {DIM}Total: {stats['total']}{NC}")
     print(f"    {DIM}{_now} · {_device} ({_os_info}){NC}")
-    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
+    print(f"    {DIM}Push: local → D1 (50/batch) · Pull: new accounts only{NC}")
+    print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
     print()
 
 
@@ -257,7 +258,30 @@ def _push_d1_before_stop():
 
 def _show_d1_status_from_log():
     """Show D1 sync status after proxy starts."""
-    time.sleep(2)
+    GREEN = "\033[0;32m"
+    CYAN = "\033[0;36m"
+    DIM = "\033[2m"
+    NC = "\033[0m"
+
+    # Wait for proxy to finish startup sync
+    print(f"  {DIM}Syncing with D1...{NC}", end="", flush=True)
+    for i in range(15):
+        time.sleep(1)
+        log_path = DATA_DIR / "proxy.log"
+        if log_path.exists():
+            lines = log_path.read_text(errors="replace").strip().split("\n")
+            # Look for sync completion in last 20 lines
+            for line in lines[-20:]:
+                if "D1 Synced" in line or "Sync push:" in line:
+                    print(f"\r  {GREEN}D1 sync complete{NC}     ")
+                    _print_d1_box("D1 Synced")
+                    return
+                if "D1 startup sync failed" in line or "Sync push failed" in line:
+                    print(f"\r  {CYAN}D1 sync failed (using local data){NC}")
+                    _print_d1_box("D1 Local Only")
+                    return
+    # Timeout — show whatever we have
+    print(f"\r  {DIM}D1 sync in progress...{NC}")
     _print_d1_box("D1 Synced")
 
 
