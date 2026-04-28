@@ -356,6 +356,7 @@ code,pre,.mono{font-family:'JetBrains Mono',monospace}
   border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;
 }
 @keyframes spin{to{transform:rotate(360deg)}}
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
 .loading-overlay{
   display:flex;align-items:center;justify-content:center;padding:3rem;
   color:var(--text-muted);gap:.5rem;font-size:.85rem;
@@ -3081,81 +3082,147 @@ async function deleteFixAccounts() {
   btn.disabled = false;
 }
 
+function _syncModal(html) {
+  let el = document.getElementById('sync-d1-modal');
+  if (el) el.remove();
+  el = document.createElement('div');
+  el.id = 'sync-d1-modal';
+  el.className = 'modal-overlay';
+  el.onclick = function(e) { if (e.target === el) closeSyncModal(); };
+  el.innerHTML = '<div class="modal-box" style="width:520px">' +
+    '<div class="modal-header"><h3>&#x2601; D1 Sync</h3><button class="modal-close" onclick="closeSyncModal()">&#x2715;</button></div>' +
+    '<div class="modal-body" id="sync-modal-body">' + html + '</div></div>';
+  document.body.appendChild(el);
+}
+function closeSyncModal() {
+  const el = document.getElementById('sync-d1-modal');
+  if (el) el.remove();
+}
+function _syncStep(icon, text, status) {
+  return '<div style="display:flex;align-items:center;gap:.75rem;padding:.5rem 0">' +
+    '<span style="font-size:1.2rem">' + icon + '</span>' +
+    '<span style="flex:1">' + text + '</span>' +
+    '<span style="font-size:.85rem;color:' + (status === 'ok' ? 'var(--green)' : status === 'error' ? 'var(--red)' : 'var(--text-muted)') + '">' +
+    (status === 'ok' ? '&#x2714;' : status === 'error' ? '&#x2718;' : status === 'loading' ? '<span class="spinner"></span>' : '') +
+    '</span></div>';
+}
+function _syncStats(label, data) {
+  return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.75rem 1rem;margin:.5rem 0">' +
+    '<div style="font-size:.8rem;color:var(--text-muted);margin-bottom:.4rem">' + label + '</div>' +
+    '<div style="display:flex;gap:1.5rem;font-size:.95rem">' +
+    '<span><b style="color:var(--green)">KR:</b> ' + data.kr + '</span>' +
+    '<span><b style="color:var(--green)">CB:</b> ' + data.cb + '</span>' +
+    '<span><b style="color:var(--green)">WS:</b> ' + data.ws + '</span>' +
+    '<span><b style="color:var(--green)">GL:</b> ' + data.gl + '</span>' +
+    '<span style="color:var(--text-muted)">Total: ' + data.total + '</span>' +
+    '</div></div>';
+}
+
 async function syncFromD1() {
   const btn = document.getElementById('sync-d1-btn');
-  const origText = btn.innerHTML;
-
-  // Step 1: Push local to D1
   btn.disabled = true;
-  btn.innerHTML = '&#x2601; Pushing local → D1...';
-  
+
+  // Step 1: Push
+  _syncModal(
+    _syncStep('&#x1F4E4;', 'Pushing local accounts to D1...', 'loading') +
+    _syncStep('&#x1F50D;', 'Compare local vs D1', '') +
+    _syncStep('&#x1F4E5;', 'Pull new accounts', '')
+  );
+
   let pushData;
   try {
     pushData = await apiFetch('/api/accounts/sync-d1/push', { method: 'POST' });
   } catch (e) {
-    toast('Push to D1 failed: ' + e.message, 'error');
+    _syncModal(
+      _syncStep('&#x1F4E4;', 'Push failed: ' + e.message, 'error') +
+      '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal()">Close</button></div>'
+    );
     btn.disabled = false;
-    btn.innerHTML = origText;
     return;
   }
 
-  // Step 2: Preview what D1 has (before pulling)
-  btn.innerHTML = '&#x2601; Checking D1...';
-  
+  // Step 2: Preview
+  _syncModal(
+    _syncStep('&#x1F4E4;', 'Pushed ' + (pushData.pushed || 0) + ' accounts to D1', 'ok') +
+    _syncStep('&#x1F50D;', 'Comparing local vs D1...', 'loading') +
+    _syncStep('&#x1F4E5;', 'Pull new accounts', '')
+  );
+
   let previewData;
   try {
     previewData = await apiFetch('/api/accounts/sync-d1/preview', { method: 'GET' });
   } catch (e) {
-    toast('D1 preview failed: ' + e.message, 'error');
+    _syncModal(
+      _syncStep('&#x1F4E4;', 'Pushed ' + (pushData.pushed || 0) + ' accounts', 'ok') +
+      _syncStep('&#x1F50D;', 'Preview failed: ' + e.message, 'error') +
+      '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal()">Close</button></div>'
+    );
     btn.disabled = false;
-    btn.innerHTML = origText;
     return;
   }
 
-  // Step 3: Show confirm dialog with data comparison
   const local = previewData.local || {};
   const d1 = previewData.d1 || {};
-  const newAccounts = previewData.new_from_d1 || 0;
+  const newCount = previewData.new_from_d1 || 0;
 
-  let msg = `📤 Pushed ${pushData.pushed || 0} accounts to D1\n\n`;
-  msg += `Current Local:\n`;
-  msg += `  KR: ${local.kr}  CB: ${local.cb}  WS: ${local.ws}  GL: ${local.gl}  Total: ${local.total}\n\n`;
-  msg += `D1 Database:\n`;
-  msg += `  KR: ${d1.kr}  CB: ${d1.cb}  WS: ${d1.ws}  GL: ${d1.gl}  Total: ${d1.total}\n\n`;
-  
-  if (newAccounts > 0) {
-    msg += `🆕 ${newAccounts} new account(s) from other devices will be added.\n\n`;
-    msg += `Pull ${newAccounts} new accounts from D1?`;
-  } else {
-    msg += `✅ No new accounts from other devices.\n`;
-    msg += `Local is up to date.`;
-    toast(msg.replace(/\n/g, ' | '), 'success');
+  if (newCount === 0) {
+    // No new accounts — done
+    _syncModal(
+      _syncStep('&#x1F4E4;', 'Pushed ' + (pushData.pushed || 0) + ' accounts to D1', 'ok') +
+      _syncStep('&#x1F50D;', 'Compared — no new accounts from other devices', 'ok') +
+      _syncStats('Local Database', local) +
+      _syncStats('D1 Cloud Database', d1) +
+      '<div style="margin-top:.75rem;padding:.6rem 1rem;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);border-radius:var(--radius-sm);color:var(--green);font-size:.9rem">&#x2714; Local is up to date. No sync needed.</div>' +
+      '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal()">Close</button></div>'
+    );
     btn.disabled = false;
-    btn.innerHTML = origText;
-    await loadAccounts();
     return;
   }
 
-  if (!confirm(msg)) {
-    toast('Sync cancelled by user', 'info');
-    btn.disabled = false;
-    btn.innerHTML = origText;
-    return;
-  }
+  // Has new accounts — show confirm
+  _syncModal(
+    _syncStep('&#x1F4E4;', 'Pushed ' + (pushData.pushed || 0) + ' accounts to D1', 'ok') +
+    _syncStep('&#x1F50D;', 'Found ' + newCount + ' new account(s) from other devices', 'ok') +
+    _syncStats('Local Database', local) +
+    _syncStats('D1 Cloud Database', d1) +
+    '<div style="margin-top:.75rem;padding:.6rem 1rem;background:rgba(108,138,255,.1);border:1px solid rgba(108,138,255,.3);border-radius:var(--radius-sm);color:var(--accent);font-size:.9rem">&#x1F195; ' + newCount + ' new account(s) will be added to local. Existing accounts will NOT be changed.</div>' +
+    '<div style="margin-top:1rem;display:flex;gap:.75rem;justify-content:flex-end">' +
+    '<button class="btn" onclick="closeSyncModal()">Cancel</button>' +
+    '<button class="btn" style="background:var(--green);color:#000;font-weight:600" onclick="syncD1ConfirmPull()">Pull ' + newCount + ' Account(s)</button>' +
+    '</div>'
+  );
+  btn.disabled = false;
+}
 
-  // Step 4: Pull new accounts
-  btn.innerHTML = '&#x2601; Pulling new accounts...';
+async function syncD1ConfirmPull() {
+  const btn = document.getElementById('sync-d1-btn');
+  btn.disabled = true;
+
+  _syncModal(
+    _syncStep('&#x1F4E4;', 'Push complete', 'ok') +
+    _syncStep('&#x1F50D;', 'Preview complete', 'ok') +
+    _syncStep('&#x1F4E5;', 'Pulling new accounts from D1...', 'loading')
+  );
+
   try {
     const pullData = await apiFetch('/api/accounts/sync-d1/pull', { method: 'POST' });
-    const result = `D1 Sync complete! Added ${pullData.new_accounts || 0} new accounts. KR:${pullData.kr} CB:${pullData.cb} WS:${pullData.ws} GL:${pullData.gl} Total:${pullData.total}`;
-    toast(result, 'success');
-    await loadAccounts();
+    _syncModal(
+      _syncStep('&#x1F4E4;', 'Push complete', 'ok') +
+      _syncStep('&#x1F50D;', 'Preview complete', 'ok') +
+      _syncStep('&#x1F4E5;', 'Added ' + (pullData.new_accounts || 0) + ' new accounts', 'ok') +
+      _syncStats('Updated Local Database', { kr: pullData.kr, cb: pullData.cb, ws: pullData.ws, gl: pullData.gl, total: pullData.total }) +
+      '<div style="margin-top:.75rem;padding:.6rem 1rem;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.3);border-radius:var(--radius-sm);color:var(--green);font-size:.9rem">&#x2714; D1 Sync complete!</div>' +
+      '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal();loadAccounts()">Done</button></div>'
+    );
   } catch (e) {
-    toast('Pull from D1 failed: ' + e.message, 'error');
+    _syncModal(
+      _syncStep('&#x1F4E4;', 'Push complete', 'ok') +
+      _syncStep('&#x1F50D;', 'Preview complete', 'ok') +
+      _syncStep('&#x1F4E5;', 'Pull failed: ' + e.message, 'error') +
+      '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal()">Close</button></div>'
+    );
   }
-  
   btn.disabled = false;
-  btn.innerHTML = origText;
 }
 
 // ── Models ──
