@@ -251,17 +251,24 @@ async def lifespan(app: FastAPI):
     _os_info = f"{_platform.system()} {_platform.release()}"
 
     try:
-        pull_result = await license_client.full_pull_replace_local()
-        if pull_result.get("error"):
-            log.warning("D1 pull failed: %s — using local data", pull_result["error"])
-        else:
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            log.info("  D1 Synced ✓")
-            log.info("  +%d new  ~%d updated  -%d deleted  = %d total",
-                     pull_result.get("added", 0), pull_result.get("updated", 0),
-                     pull_result.get("deleted", 0), pull_result.get("total", 0))
-            log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
-            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        # Step 1: Push local to D1 (local is master)
+        local_accounts = await db.get_accounts()
+        push_result = await license_client.push_sync(accounts=local_accounts)
+        _pushed = push_result.get("accounts_upserted", 0) if not push_result.get("error") else 0
+
+        # Step 2: Pull only NEW accounts from D1 (added on other devices)
+        pull_result = await license_client.pull_new_accounts_only()
+        _new = pull_result.get("new_accounts", 0)
+
+        local_after = await db.get_accounts()
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        log.info("  D1 Synced ✓")
+        log.info("  Pushed: %d accounts to D1", _pushed)
+        if _new:
+            log.info("  New from other devices: %d", _new)
+        log.info("  Local: %d accounts", len(local_after))
+        log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
+        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     except Exception as e:
         log.warning("D1 startup sync failed: %s — using local data", e)
 
