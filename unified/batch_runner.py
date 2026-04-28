@@ -54,6 +54,7 @@ class AccountJob:
     result: Optional[dict] = None
     started_at: float = 0
     finished_at: float = 0
+    mcp_urls: list[str] = field(default_factory=list)
 
 
 class BatchState:
@@ -98,12 +99,14 @@ batch_state = BatchState()
 # ---------------------------------------------------------------------------
 
 async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
-                      headless: bool = True, concurrency: int = 1) -> int:
+                      headless: bool = True, concurrency: int = 1,
+                      mcp_urls: list[str] | None = None) -> int:
     """Start a batch login. Returns number of jobs queued.
 
     accounts: list of (email, password) tuples
     providers: list of provider names ("kiro", "codebuddy")
     concurrency: number of parallel browser instances (1 = sequential)
+    mcp_urls: MCP server URLs to attach after Gumloop login
     """
     if batch_state.running:
         raise RuntimeError("Batch already running")
@@ -142,6 +145,7 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
             password=password,
             providers=needed_providers,  # Only providers that need login
             account_id=account_id,
+            mcp_urls=mcp_urls or [],
         )
         batch_state.jobs.append(job)
 
@@ -241,6 +245,19 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             ok = await _import_gumloop(job)
             if ok:
                 imported.append("gumloop")
+                # Attach MCP servers if provided
+                if job.mcp_urls:
+                    try:
+                        proxy_info = await db.get_proxy_for_api_call()
+                        proxy_url = proxy_info["url"] if proxy_info else None
+                        await _attach_mcp_servers(job, proxy_url=proxy_url)
+                    except Exception as mcp_err:
+                        log.warning("MCP attach failed for %s: %s", job.email, mcp_err)
+                        batch_state.broadcast({
+                            "type": "job_log", "job_id": job.id, "email": job.email,
+                            "log_type": "warn", "provider": "gumloop",
+                            "step": "mcp", "message": f"MCP attach failed: {mcp_err}",
+                        })
             batch_state.broadcast({
                 "type": "provider_done", "job_id": job.id, "email": job.email,
                 "provider": "gumloop", "success": ok,
@@ -993,6 +1010,169 @@ async def _import_gumloop(job: AccountJob) -> bool:
             "email": job.email, "error": str(exc),
         })
         return False
+
+
+# ---------------------------------------------------------------------------
+# MCP server attachment
+# ---------------------------------------------------------------------------
+
+_MCP_API_BASE = "https://api.gumloop.com"
+
+
+def _mcp_headers(id_token: str, user_id: str) -> dict:
+    return {
+        "Authorization": f"Bearer {id_token}",
+        "x-auth-key": user_id,
+        "Content-Type": "application/json",
+    }
+
+
+async def _attach_mcp_servers(job: AccountJob, proxy_url: str | None = None) -> None:
+    """Attach MCP servers to a Gumloop account's gummie after import."""
+    if not job.mcp_urls or not job.account_id:
+        return
+
+    account = await db.get_account(job.account_id)
+    if not account:
+        return
+
+    result = await attach_mcp_to_account(
+        account, job.mcp_urls, proxy_url=proxy_url,
+        broadcast_fn=lambda msg: batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "log_type": "info", "provider": "gumloop",
+            "step": "mcp", "message": msg,
+        }),
+    )
+    if result.get("error"):
+        raise RuntimeError(result["error"])
+
+
+async def attach_mcp_to_account(
+    account: dict,
+    mcp_urls: list[str],
+    proxy_url: str | None = None,
+    broadcast_fn=None,
+) -> dict:
+    """Attach MCP server(s) to an existing Gumloop account. Callable from batch or API.
+
+    Returns {"ok": True, "attached": N} or {"error": "..."}.
+    """
+    import httpx
+    import random
+    import string
+
+    gummie_id = account.get("gl_gummie_id", "")
+    refresh_tok = account.get("gl_refresh_token", "")
+    if not gummie_id or not refresh_tok:
+        return {"error": "Account has no gummie_id or refresh_token"}
+
+    # Auth
+    from .gumloop.auth import GumloopAuth
+    auth = GumloopAuth(
+        refresh_token=refresh_tok,
+        user_id=account.get("gl_user_id", ""),
+        id_token=account.get("gl_id_token", ""),
+        proxy_url=proxy_url,
+    )
+    try:
+        id_token = await auth.get_token()
+    except Exception as e:
+        return {"error": f"Token refresh failed: {e}"}
+    user_id = auth.user_id
+    headers = _mcp_headers(id_token, user_id)
+
+    # Persist refreshed tokens
+    updated_tokens = auth.get_updated_tokens()
+    if updated_tokens.get("gl_id_token"):
+        try:
+            await db.update_account(account["id"], **updated_tokens)
+        except Exception:
+            pass
+
+    def _log(msg: str):
+        if broadcast_fn:
+            broadcast_fn(msg)
+        log.info("[MCP attach] %s: %s", account.get("email", "?"), msg)
+
+    try:
+        client_kwargs = {"timeout": 60}
+        if proxy_url:
+            client_kwargs["proxy"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            # Get existing MCP servers
+            resp = await client.get(f"{_MCP_API_BASE}//secrets/mcp_servers", headers=headers)
+            existing = resp.json() if resp.status_code == 200 else []
+            existing_urls = [s.get("url", "") for s in existing]
+
+            tools = []
+            for mcp_url in mcp_urls:
+                mcp_url = mcp_url.strip()
+                if not mcp_url:
+                    continue
+
+                if mcp_url in existing_urls:
+                    secret_id = next((s["secret_id"] for s in existing if s.get("url") == mcp_url), "")
+                    mcp_name = next((s["nickname"] for s in existing if s.get("url") == mcp_url), "mcp")
+                    _log(f"Reusing existing MCP: {mcp_name}")
+                else:
+                    mcp_name = "mcp-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))
+                    payload = {
+                        "secret_type": "mcp_server", "value": "",
+                        "metadata": [
+                            {"name": "URL", "value": mcp_url, "placeholder": "https://mcp.example.com"},
+                            {"name": "Label", "value": mcp_name, "placeholder": "slack-mcp-server"},
+                            {"name": "Access Token / API Key", "value": "", "isSecret": True,
+                             "isOptional": True, "description": "OAuth authentication token",
+                             "placeholder": "xxxxxxxxxxxxxxxxxxxxxxxx"},
+                            {"name": "Additional Header", "value": "", "isOptional": True,
+                             "description": "Additional Header",
+                             "placeholder": "Authorization: Basic xxxxxxxxxxxxxxxxxxxxxxxx"},
+                        ],
+                        "nickname": mcp_name, "user_id": user_id,
+                    }
+                    resp = await client.post(
+                        f"{_MCP_API_BASE}//secret", json=payload, headers=headers,
+                    )
+                    if resp.status_code not in (200, 201):
+                        _log(f"Failed to create MCP secret for {mcp_url}: HTTP {resp.status_code}")
+                        continue
+                    secret_id = resp.json().get("secret_id", "")
+                    _log(f"Created MCP secret: {mcp_name}")
+
+                if secret_id:
+                    tools.append({
+                        "secret_id": secret_id, "mcp_server_url": mcp_url,
+                        "name": mcp_name, "type": "mcp_server", "restricted_tools": [],
+                    })
+
+            if not tools:
+                return {"error": "No MCP servers could be created"}
+
+            # Add built-in tools
+            tools.extend([
+                {"metadata": {}, "type": "web_search"},
+                {"metadata": {}, "type": "web_fetch"},
+                {"metadata": {"model": "gemini-3.1-flash-image-preview"}, "type": "image_generator"},
+                {"type": "interaction_search"},
+            ])
+
+            # Attach to gummie
+            resp = await client.patch(
+                f"{_MCP_API_BASE}/gummies/{gummie_id}",
+                json={"tools": tools}, headers=headers,
+            )
+            if resp.status_code != 200:
+                return {"error": f"Failed to attach tools to gummie: HTTP {resp.status_code}"}
+
+            gummie_tools = resp.json().get("gummie", {}).get("tools", [])
+            mcp_count = sum(1 for t in gummie_tools if t.get("type") == "mcp_server")
+            _log(f"Attached {mcp_count} MCP server(s) to gummie")
+            return {"ok": True, "attached": mcp_count}
+
+    except Exception as e:
+        return {"error": f"MCP attach error: {e}"}
 
 
 # ---------------------------------------------------------------------------

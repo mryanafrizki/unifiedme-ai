@@ -267,7 +267,7 @@ async def proxy_chat_completions(
     # Convert messages — strip tools, simple format
     messages, system_prompt = _convert_openai_messages_simple(body)
 
-    # Upload images if any messages have _images
+    # Generate interaction_id per request (each OpenAI call = fresh Gumloop turn)
     interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
     for msg in messages:
         image_urls = msg.pop("_images", None)
@@ -309,12 +309,30 @@ async def proxy_chat_completions(
             status_code=400,
         ), 0.0
 
+    # Prepend MCP rules to system prompt so agent uses MCP tools, not sandbox
+    mcp_rules = (
+        "You are a coding assistant. You have MCP tools connected to the user's LOCAL workspace.\n\n"
+        "MANDATORY RULES (never violate):\n"
+        "1. For ALL file operations: ONLY use MCP tools (read_file, write_file, edit_file, bash, list_directory, glob, grep, download_image).\n"
+        "2. NEVER use sandbox_python, sandbox_file, sandbox_download, or ANY sandbox tool. They are on a remote server, NOT the user's machine.\n"
+        "3. ALL output files (code, html, text) → write_file.\n"
+        "4. ALL shell commands → bash.\n"
+        "5. IMAGE WORKFLOW (critical):\n"
+        "   a. Generate image with image_generator tool → you get a response with storage_link (gl:// URL)\n"
+        "   b. Immediately call download_image with the EXACT gl:// URL and a filename\n"
+        "   c. Example: download_image(url=\"gl://uid-xxx/custom_agent_interactions/.../image.png\", filename=\"output.png\")\n"
+        "   d. NEVER use sandbox_download. NEVER convert gl:// URLs to gumloop.com/files/ URLs.\n"
+        "   e. The download_image MCP tool handles gl:// authentication internally.\n"
+        "6. Respond in the same language as the user.\n"
+    )
+    full_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
+
     # Update gummie config — model + system prompt only, NO tools
     try:
         await update_gummie_config(
             gummie_id=gummie_id,
             auth=auth,
-            system_prompt=system_prompt,
+            system_prompt=full_system,
             tools=None,  # Don't touch tools — MCP handles them
             model_name=gl_model,
             proxy_url=proxy_url,
@@ -340,6 +358,8 @@ async def proxy_chat_completions(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
             stream_id, created, proxy_url,
             interaction_id=interaction_id if has_images else None,
+            account_id=account.get("id", 0),
+            account_email=account.get("email", "?"),
         ), 0.0
     else:
         return await _accumulate_gumloop(
@@ -360,6 +380,8 @@ def _stream_gumloop(
     created: int,
     proxy_url: str | None,
     interaction_id: str | None = None,
+    account_id: int = 0,
+    account_email: str = "?",
 ) -> StreamingResponse:
     """Stream Gumloop response as OpenAI SSE chunks.
 
@@ -373,6 +395,8 @@ def _stream_gumloop(
         "completion_tokens": 0,
         "total_tokens": 0,
         "done": False,
+        "_account_id": account_id,
+        "_account_email": account_email,
     }
 
     async def stream_sse() -> AsyncIterator[bytes]:
@@ -392,21 +416,42 @@ def _stream_gumloop(
                     content=text, role=role_arg, created=created,
                 ).encode()
 
+            in_reasoning = False
+
             async for event in send_chat(
                 gummie_id, messages, auth, turnstile,
                 interaction_id=interaction_id, proxy_url=proxy_url,
             ):
                 etype = event.get("type", "")
+                # DEBUG: log every event type with full payload for errors
+                if etype not in ("keepalive",):
+                    if etype == "error":
+                        log.warning("[GL stream] ERROR event: %s", json.dumps(event, ensure_ascii=False)[:500])
+                    else:
+                        delta_preview = str(event.get("delta", ""))[:50]
+                        log.info("[GL stream] event: %s | delta: %s", etype, delta_preview)
 
                 # ── Text content ──
                 if etype == "text-delta":
                     delta = event.get("delta", "")
                     if delta:
+                        # Close reasoning block if transitioning
+                        if in_reasoning:
+                            chunk = emit_text("\n\n")
+                            if chunk:
+                                yield chunk
+                            in_reasoning = False
                         chunk = emit_text(delta)
                         if chunk:
                             yield chunk
 
-                # ── Reasoning (stream as text) ──
+                # ── Reasoning (stream as italic text so user sees progress) ──
+                elif etype == "reasoning-start":
+                    in_reasoning = True
+                    chunk = emit_text("\n*Thinking:* ")
+                    if chunk:
+                        yield chunk
+
                 elif etype == "reasoning-delta":
                     delta = event.get("delta", "")
                     if delta:
@@ -414,24 +459,32 @@ def _stream_gumloop(
                         if chunk:
                             yield chunk
 
+                elif etype == "reasoning-end":
+                    if in_reasoning:
+                        chunk = emit_text("\n\n")
+                        if chunk:
+                            yield chunk
+                        in_reasoning = False
+
                 # ── Tool call started (show what agent is doing) ──
                 elif etype == "tool-call":
                     tool_name = event.get("toolName", "?")
                     tool_input = event.get("input", {})
-                    # Format tool call as visible text
                     input_preview = json.dumps(tool_input, ensure_ascii=False)
-                    if len(input_preview) > 200:
-                        input_preview = input_preview[:200] + "..."
-                    # Don't emit tool-call text — wait for result
+                    if len(input_preview) > 300:
+                        input_preview = input_preview[:300] + "..."
                     log.info("[GL stream] tool-call: %s(%s)", tool_name, input_preview[:100])
+                    # Stream tool call as visible text so user sees progress
+                    tool_text = f"\n\n> **[Tool]** `{tool_name}({input_preview})`\n"
+                    chunk = emit_text(tool_text)
+                    if chunk:
+                        yield chunk
 
                 # ── Tool result (show output) ──
                 elif etype == "tool-result":
                     tool_name = event.get("toolName", "?")
                     output = event.get("output", "")
-                    # Format output
                     if isinstance(output, dict):
-                        # Sandbox tools have stdout/stderr
                         stdout = output.get("stdout", "")
                         stderr = output.get("stderr", "")
                         result_text = stdout or stderr or json.dumps(output, ensure_ascii=False)
@@ -439,13 +492,51 @@ def _stream_gumloop(
                         result_text = output
                     else:
                         result_text = str(output)
-                    # Don't emit raw tool results as text — agent will summarize
                     log.info("[GL stream] tool-result: %s → %s", tool_name, result_text[:100])
+                    # Stream result preview so user sees tool output
+                    preview = result_text[:500]
+                    if len(result_text) > 500:
+                        preview += "..."
+                    result_block = f"\n> **[Result]** `{tool_name}` →\n> ```\n> {preview}\n> ```\n\n"
+                    chunk = emit_text(result_block)
+                    if chunk:
+                        yield chunk
+
+                # ── Error from Gumloop ──
+                elif etype == "error":
+                    error_msg = event.get("error", "Unknown Gumloop error")
+                    error_type = event.get("errorType", "")
+                    log.error("[GL stream] Gumloop error: %s (%s)", error_msg, error_type)
+
+                    # Mark account immediately (don't wait for BackgroundTask)
+                    is_credit_error = "credit" in error_type.lower() or "credit" in error_msg.lower()
+                    if is_credit_error:
+                        _stream_state["error"] = f"CREDIT_EXHAUSTED: {error_msg}"
+                        from . import database as _db
+                        try:
+                            await _db.update_account(
+                                _stream_state.get("_account_id", 0),
+                                gl_status="exhausted",
+                                gl_error=f"Credit exhausted: {error_msg[:150]}",
+                            )
+                            await _db.clear_sticky_account("max_gl")
+                            log.warning("[GL stream] Account %s credit exhausted — marked immediately",
+                                        _stream_state.get("_account_email", "?"))
+                        except Exception as db_err:
+                            log.warning("[GL stream] Failed to mark exhausted: %s", db_err)
+                    else:
+                        _stream_state["error"] = error_msg
+
+                    # Stream error as visible text to user
+                    err_text = f"\n\n**[Gumloop Error]** {error_msg}\n"
+                    chunk = emit_text(err_text)
+                    if chunk:
+                        yield chunk
 
                 # ── Finish ──
                 elif etype == "finish":
                     is_final = event.get("final", True)
-                    usage = event.get("usage", {})
+                    usage = event.get("usage") or {}
                     _stream_state["prompt_tokens"] += usage.get("input_tokens", 0)
                     _stream_state["completion_tokens"] += usage.get("output_tokens", 0)
                     _stream_state["total_tokens"] += usage.get("total_tokens", 0)
@@ -528,7 +619,7 @@ async def _accumulate_gumloop(
                     full_text.append(delta)
 
             elif etype == "finish":
-                usage = event.get("usage", {})
+                usage = event.get("usage") or {}
                 prompt_tokens += usage.get("input_tokens", 0)
                 completion_tokens += usage.get("output_tokens", 0)
                 total_tokens += usage.get("total_tokens", 0)

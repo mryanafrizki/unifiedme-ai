@@ -249,6 +249,99 @@ async def clear_sticky_account_endpoint(account_id: int, tier: str, _: bool = De
     return {"ok": True, "tier": tier}
 
 
+@router.post("/accounts/{account_id}/bind-mcp")
+async def bind_mcp_endpoint(account_id: int, request: Request, _: bool = Depends(verify_admin)):
+    """Bind MCP server(s) to a single Gumloop account's gummie."""
+    body = await request.json()
+    mcp_urls = body.get("mcp_urls", [])
+    if not mcp_urls or not isinstance(mcp_urls, list):
+        return JSONResponse({"error": "mcp_urls (list) is required"}, status_code=400)
+
+    mcp_urls = [u.strip() for u in mcp_urls if isinstance(u, str) and u.strip()]
+    if not mcp_urls:
+        return JSONResponse({"error": "No valid MCP URLs provided"}, status_code=400)
+
+    account = await db.get_account(account_id)
+    if not account:
+        return JSONResponse({"error": "Account not found"}, status_code=404)
+
+    if not account.get("gl_gummie_id") or not account.get("gl_refresh_token"):
+        return JSONResponse({"error": "Account has no Gumloop gummie or refresh token"}, status_code=400)
+
+    proxy_info = await db.get_proxy_for_batch()
+    proxy_url = proxy_info["url"] if proxy_info else None
+
+    from .batch_runner import attach_mcp_to_account
+    result = await attach_mcp_to_account(account, mcp_urls, proxy_url=proxy_url)
+
+    if result.get("error"):
+        return JSONResponse({"error": result["error"]}, status_code=500)
+    return result
+
+
+@router.post("/accounts/bind-mcp-bulk")
+async def bind_mcp_bulk_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Bind MCP server(s) to multiple Gumloop accounts at once.
+
+    Uses batch proxy pool with smart rotate support.
+    Returns results array with per-account status.
+    """
+    import asyncio as _asyncio
+
+    body = await request.json()
+    mcp_urls = body.get("mcp_urls", [])
+    account_ids = body.get("account_ids", [])
+
+    if not mcp_urls or not isinstance(mcp_urls, list):
+        return JSONResponse({"error": "mcp_urls (list) is required"}, status_code=400)
+    mcp_urls = [u.strip() for u in mcp_urls if isinstance(u, str) and u.strip()]
+    if not mcp_urls:
+        return JSONResponse({"error": "No valid MCP URLs provided"}, status_code=400)
+
+    # Get accounts — either specified IDs or all active GL accounts
+    if account_ids:
+        accounts = []
+        for aid in account_ids:
+            acct = await db.get_account(int(aid))
+            if acct and acct.get("gl_gummie_id") and acct.get("gl_refresh_token"):
+                accounts.append(acct)
+    else:
+        all_accts = await db.get_accounts()
+        accounts = [a for a in all_accts
+                    if a.get("gl_status") == "ok" and a.get("gl_gummie_id") and a.get("gl_refresh_token")]
+
+    if not accounts:
+        return JSONResponse({"error": "No eligible GL accounts found"}, status_code=400)
+
+    from .batch_runner import attach_mcp_to_account
+
+    results = []
+    for acct in accounts:
+        # Get proxy per-account (smart rotate gives different proxy each time)
+        proxy_info = await db.get_proxy_for_batch()
+        proxy_url = proxy_info["url"] if proxy_info else None
+        proxy_display = proxy_url.split("@")[-1] if proxy_url and "@" in proxy_url else (proxy_url or "direct")
+
+        try:
+            result = await attach_mcp_to_account(acct, mcp_urls, proxy_url=proxy_url)
+            result["email"] = acct.get("email", "?")
+            result["proxy"] = proxy_display
+            results.append(result)
+        except Exception as e:
+            results.append({
+                "email": acct.get("email", "?"),
+                "ok": False,
+                "error": str(e),
+                "proxy": proxy_display,
+            })
+
+        # Small delay to avoid rate limiting
+        await _asyncio.sleep(0.3)
+
+    ok_count = sum(1 for r in results if r.get("ok"))
+    return {"ok": True, "total": len(accounts), "success": ok_count, "results": results}
+
+
 @router.delete("/accounts/delete-fix")
 async def delete_fix_accounts(_: bool = Depends(verify_admin)):
     """Per-provider fix cleanup: clear dead provider credentials.
@@ -723,9 +816,12 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
 
+    mcp_urls = [u.strip() for u in (req.mcp_urls or []) if u.strip()]
+
     try:
         count = await start_batch(accounts, providers, headless=req.headless,
-                                  concurrency=max(1, req.concurrency))
+                                  concurrency=max(1, req.concurrency),
+                                  mcp_urls=mcp_urls)
     except RuntimeError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
 

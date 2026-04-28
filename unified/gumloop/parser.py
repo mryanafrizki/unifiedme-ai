@@ -14,12 +14,15 @@ def build_openai_chunk(
     finish_reason: Optional[str] = None,
     created: int = 0,
     usage: Optional[dict] = None,
+    reasoning_content: Optional[str] = None,
 ) -> str:
     delta: dict[str, Any] = {}
     if role:
         delta["role"] = role
     if content is not None:
         delta["content"] = content
+    if reasoning_content is not None:
+        delta["reasoning_content"] = reasoning_content
     chunk: dict[str, Any] = {
         "id": stream_id,
         "object": "chat.completion.chunk",

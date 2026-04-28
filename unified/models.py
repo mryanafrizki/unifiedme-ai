@@ -89,6 +89,7 @@ class BatchLoginRequest(BaseModel):
     providers: list[str] = ["kiro", "codebuddy"]
     headless: bool = True
     concurrency: int = 1  # parallel browser instances
+    mcp_urls: list[str] = []  # MCP server URLs to attach after Gumloop login
     # Valid providers: kiro, codebuddy, wavespeed, gumloop
 
 

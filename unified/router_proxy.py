@@ -330,7 +330,10 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 error_msg = f"Gumloop HTTP {status} (account: {account['email']})"
                 await mark_account_error(account["id"], tier, error_msg)
             else:
-                await mark_account_success(account["id"], tier)
+                # For streaming: don't mark success yet — stream might fail mid-flight
+                # BackgroundTask will handle final status after stream completes
+                if not client_wants_stream:
+                    await mark_account_success(account["id"], tier)
 
             # Streaming: log after stream completes via BackgroundTask
             gl_stream_state = getattr(response, '_gl_stream_state', None)
@@ -343,10 +346,24 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
 
                 async def _post_gl_stream_log():
                     import asyncio as _asyncio
-                    for _ in range(30):
+                    for _ in range(60):
                         if gl_stream_state["done"]:
                             break
                         await _asyncio.sleep(0.5)
+
+                    # Check if stream encountered credit/error — mark account
+                    stream_error = gl_stream_state.get("error", "")
+                    if stream_error:
+                        acct_id = gl_stream_state.get("_account_id", _acct_id)
+                        if "CREDIT_EXHAUSTED" in stream_error or "credit" in stream_error.lower():
+                            await db.update_account(acct_id, gl_status="exhausted",
+                                                    gl_error=stream_error[:200])
+                            await db.clear_sticky_account("max_gl")
+                            log.warning("[GL post-stream] Account %s marked exhausted: %s",
+                                        gl_stream_state.get("_account_email", "?"), stream_error[:100])
+
+                    # Use error status code if stream had errors
+                    log_status = 529 if stream_error else status  # 529 = custom "stream error"
 
                     log_body = json.dumps({
                         "content": gl_stream_state["content"][:2000],
@@ -354,13 +371,14 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                             "prompt_tokens": gl_stream_state["prompt_tokens"],
                             "completion_tokens": gl_stream_state["completion_tokens"],
                             "total_tokens": gl_stream_state["total_tokens"],
-                        }
+                        },
+                        "error": stream_error or None,
                     }, ensure_ascii=False)
                     await db.log_usage(
-                        _key_id, _acct_id, model, tier.value, status, latency,
+                        _key_id, _acct_id, model, tier.value, log_status, latency,
                         request_headers=req_headers_str, request_body=req_body_str,
                         response_headers=resp_headers_str, response_body=log_body,
-                        error_message=error_msg,
+                        error_message=stream_error or error_msg,
                         proxy_url=_proxy_url,
                     )
 
@@ -611,3 +629,94 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
         "object": "list",
         "data": models,
     }
+
+
+# ─── Gumloop file download (for MCP server gl:// URLs) ──────────────────────
+
+@router.post("/gl-download")
+async def gl_download(request: Request, _: bool = Depends(verify_api_key)):
+    """Download a file from Gumloop storage using the correct account auth.
+
+    Body: {"gl_url": "gl://uid-{user_id}/path/to/file"}
+    Returns: raw file bytes with appropriate content-type.
+    """
+    import httpx
+    from fastapi.responses import Response
+
+    body = await request.json()
+    gl_url = body.get("gl_url", "")
+    if not gl_url or not gl_url.startswith("gl://"):
+        return JSONResponse({"error": "gl_url is required and must start with gl://"}, status_code=400)
+
+    # Parse gl:// URL → extract user_id and file_path
+    gl_path = gl_url[5:]  # strip "gl://"
+    url_user_id = ""
+    file_path = gl_path
+    if gl_path.startswith("uid-"):
+        parts = gl_path.split("/", 1)
+        if len(parts) == 2:
+            url_user_id = parts[0][4:]  # strip "uid-"
+            file_path = parts[1]
+
+    if not file_path:
+        return JSONResponse({"error": "Invalid gl:// URL"}, status_code=400)
+
+    # Find account with matching gl_user_id
+    account = None
+    all_accounts = await db.get_accounts()
+    if url_user_id:
+        for acct in all_accounts:
+            if acct.get("gl_user_id") == url_user_id and acct.get("gl_refresh_token"):
+                account = acct
+                break
+
+    # Fallback: try any GL account with valid auth
+    if not account:
+        for acct in all_accounts:
+            if acct.get("gl_refresh_token") and acct.get("gl_status") == "ok":
+                account = acct
+                break
+
+    if not account:
+        return JSONResponse({"error": "No Gumloop account available for download"}, status_code=503)
+
+    # Get fresh auth
+    from .proxy_gumloop import _get_auth
+    auth = _get_auth(account)
+    id_token = await auth.get_token()
+    user_id = auth.user_id or url_user_id
+
+    # Download via Gumloop API
+    download_body = {"file_name": file_path, "user_id": user_id}
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "x-auth-key": user_id,
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                "https://api.gumloop.com/download_file",
+                json=download_body,
+                headers=headers,
+            )
+            if resp.status_code != 200:
+                log.warning("[gl-download] Failed: HTTP %s — %s", resp.status_code, resp.text[:200])
+                return JSONResponse(
+                    {"error": f"Gumloop download failed: HTTP {resp.status_code}"},
+                    status_code=resp.status_code,
+                )
+
+            # Detect content type from file extension
+            import mimetypes
+            content_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={"Content-Length": str(len(resp.content))},
+            )
+    except Exception as e:
+        log.error("[gl-download] Error: %s", e)
+        return JSONResponse({"error": str(e)}, status_code=500)
