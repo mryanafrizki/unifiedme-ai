@@ -12,6 +12,8 @@ Usage:
     unifiedme addaccounts add      Batch add accounts (interactive)
     unifiedme addaccounts status   Show batch progress (real-time)
     unifiedme addaccounts stop     Force stop running batch
+    unifiedme mcp list             List MCP servers for all GL accounts
+    unifiedme mcp toggle           Enable/disable MCP on an account
     unifiedme help                 Show this help
 """
 
@@ -1345,6 +1347,156 @@ def cmd_addaccounts():
         print(f"    {CMD} addaccounts stop     Force stop running batch")
 
 
+# ─── MCP Management CLI ─────────────────────────────────────────────────────
+
+def cmd_mcp_list():
+    """List MCP servers for all GL accounts."""
+    print(f"\n  {_CYAN}MCP Servers — All Gumloop Accounts{_NC}")
+    print(f"  {'='*50}")
+
+    if not _aa_check_server():
+        print(f"  {_RED}Server not running. Start with: {CMD} start{_NC}")
+        sys.exit(1)
+
+    # Get all accounts
+    try:
+        data = _aa_api("GET", "/accounts", timeout=10)
+    except Exception as e:
+        print(f"  {_RED}Failed to get accounts: {e}{_NC}")
+        sys.exit(1)
+
+    # Find GL accounts
+    all_accts = data.get("accounts", {})
+    active = all_accts.get("active", [])
+    gl_accounts = [a for a in active if a.get("gl_status") == "ok" and a.get("gl_gummie_id")]
+
+    if not gl_accounts:
+        print(f"  {_DIM}No active Gumloop accounts found.{_NC}")
+        return
+
+    print(f"  {_DIM}Found {len(gl_accounts)} GL accounts. Fetching MCP info...{_NC}\n")
+
+    for acct in gl_accounts:
+        acct_id = acct.get("id", "")
+        email = acct.get("email", "?")
+        print(f"  {_WHITE}{email}{_NC}")
+
+        try:
+            res = _aa_api("GET", f"/accounts/{acct_id}/mcp-list", timeout=15)
+            servers = res.get("mcp_servers", [])
+
+            if not servers:
+                print(f"    {_DIM}(no MCP servers){_NC}")
+            else:
+                for s in servers:
+                    dot = f"{_GREEN}*{_NC}" if s.get("active") else f"{_RED}x{_NC}"
+                    status = f"{_GREEN}ON{_NC}" if s.get("active") else f"{_DIM}OFF{_NC}"
+                    print(f"    {dot} [{status}] {s.get('name', '?')} — {_DIM}{s.get('url', '?')}{_NC}")
+        except Exception as e:
+            print(f"    {_RED}Error: {e}{_NC}")
+
+        print()
+
+    print(f"  {_DIM}Manage via dashboard or: {CMD} mcp toggle{_NC}")
+
+
+def cmd_mcp_toggle():
+    """Interactive toggle MCP on/off for an account."""
+    if not _aa_check_server():
+        print(f"\n  {_RED}Server not running. Start with: {CMD} start{_NC}")
+        sys.exit(1)
+
+    # Get GL accounts
+    try:
+        data = _aa_api("GET", "/accounts", timeout=10)
+    except Exception as e:
+        print(f"\n  {_RED}Failed: {e}{_NC}")
+        sys.exit(1)
+
+    active = data.get("accounts", {}).get("active", [])
+    gl_accounts = [a for a in active if a.get("gl_status") == "ok" and a.get("gl_gummie_id")]
+
+    if not gl_accounts:
+        print(f"\n  {_DIM}No active GL accounts.{_NC}")
+        return
+
+    # Pick account
+    print(f"\n  {_CYAN}Select account:{_NC}")
+    for i, a in enumerate(gl_accounts[:20], 1):
+        print(f"    {i}. {a.get('email', '?')}")
+    choice = _aa_prompt("Account number", "1")
+    try:
+        idx = int(choice) - 1
+        acct = gl_accounts[idx]
+    except (ValueError, IndexError):
+        print(f"  {_RED}Invalid choice.{_NC}")
+        return
+
+    acct_id = acct["id"]
+    email = acct.get("email", "?")
+
+    # Get MCP list
+    try:
+        res = _aa_api("GET", f"/accounts/{acct_id}/mcp-list", timeout=15)
+    except Exception as e:
+        print(f"  {_RED}Failed: {e}{_NC}")
+        return
+
+    servers = res.get("mcp_servers", [])
+    if not servers:
+        print(f"\n  {_DIM}No MCP servers for {email}.{_NC}")
+        print(f"  Add via dashboard or: {CMD} addaccounts add")
+        return
+
+    print(f"\n  {_WHITE}{email}{_NC} — MCP servers:")
+    for i, s in enumerate(servers, 1):
+        status = f"{_GREEN}ON{_NC}" if s.get("active") else f"{_RED}OFF{_NC}"
+        print(f"    {i}. [{status}] {s.get('name', '?')} — {_DIM}{s.get('url', '?')}{_NC}")
+
+    choice = _aa_prompt("Toggle which? (number)")
+    try:
+        idx = int(choice) - 1
+        server = servers[idx]
+    except (ValueError, IndexError):
+        print(f"  {_RED}Invalid choice.{_NC}")
+        return
+
+    action = "disable" if server.get("active") else "enable"
+    print(f"  {action.capitalize()}ing {server.get('name', '?')}...", end=" ", flush=True)
+
+    try:
+        body = {}
+        if action == "enable":
+            body["enable"] = [server["url"]]
+        else:
+            body["disable"] = [server["url"]]
+        res = _aa_api("POST", f"/accounts/{acct_id}/mcp-toggle", json_body=body, timeout=30)
+        if res.get("ok"):
+            print(f"{_GREEN}Done{_NC} ({res.get('active_mcp', 0)} active)")
+        else:
+            print(f"{_RED}Failed: {res.get('error', '?')}{_NC}")
+    except Exception as e:
+        print(f"{_RED}Failed: {e}{_NC}")
+
+
+def cmd_mcp():
+    """Route mcp subcommands."""
+    args = sys.argv[2:]
+    subcmd = args[0] if args else "list"
+
+    subcmds = {
+        "list": cmd_mcp_list,
+        "toggle": cmd_mcp_toggle,
+    }
+
+    if subcmd in subcmds:
+        subcmds[subcmd]()
+    else:
+        print(f"\n  Usage:")
+        print(f"    {CMD} mcp list     List MCP servers for all GL accounts")
+        print(f"    {CMD} mcp toggle   Enable/disable MCP on an account")
+
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -1360,6 +1512,7 @@ def cli_main():
         "kill-port": cmd_kill_port,
         "logout": cmd_logout,
         "addaccounts": cmd_addaccounts,
+        "mcp": cmd_mcp,
     }
 
     if cmd in ("-h", "--help", "help"):

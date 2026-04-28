@@ -2811,23 +2811,103 @@ async function testAccount(accountId, providerApiName) {
 }
 
 async function bindMcpSingle(accountId) {
-  var input = prompt('Enter MCP server URL(s), one per line:');
-  if (!input || !input.trim()) return;
-  var urls = input.trim().split('\n').filter(function(l) { return l.trim(); });
-  if (urls.length === 0) return;
-  toast('Binding ' + urls.length + ' MCP server(s)...', 'info');
+  // Show MCP manager modal for this account
+  var overlay = document.getElementById('mcp-modal-overlay');
+  overlay.style.display = 'flex';
+  document.getElementById('mcp-modal-input').style.display = 'block';
+  document.getElementById('mcp-modal-progress').style.display = 'none';
+
+  // Replace modal content with MCP manager
+  var inputDiv = document.getElementById('mcp-modal-input');
+  inputDiv.innerHTML = '<div style="text-align:center;color:var(--gray);padding:20px">Loading MCP servers...</div>';
+
+  // Update modal title
+  var titleEl = overlay.querySelector('h3');
+  if (titleEl) titleEl.textContent = 'MCP Servers';
+
+  try {
+    var res = await apiFetch('/api/accounts/' + accountId + '/mcp-list');
+    var servers = res.mcp_servers || [];
+    var email = res.email || '?';
+
+    var html = '<div style="font-size:12px;color:var(--gray);margin-bottom:10px">Account: <strong style="color:var(--text)">' + escHtml(email) + '</strong></div>';
+
+    if (servers.length === 0) {
+      html += '<div style="color:var(--gray);font-size:12px;padding:10px 0">No MCP servers registered.</div>';
+    } else {
+      html += '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px">';
+      for (var i = 0; i < servers.length; i++) {
+        var s = servers[i];
+        var activeColor = s.active ? 'var(--green)' : 'var(--gray)';
+        var activeLabel = s.active ? 'ON' : 'OFF';
+        var toggleAction = s.active ? 'disable' : 'enable';
+        var btnLabel = s.active ? 'Disable' : 'Enable';
+        var btnClass = s.active ? 'btn-danger' : 'btn-accent';
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:6px">'
+          + '<span style="width:8px;height:8px;border-radius:50%;background:' + activeColor + ';flex-shrink:0"></span>'
+          + '<div style="flex:1;min-width:0">'
+          + '<div style="font-size:12px;font-weight:600;color:var(--text)">' + escHtml(s.name) + ' <span style="color:' + activeColor + ';font-size:10px">[' + activeLabel + ']</span></div>'
+          + '<div style="font-size:10px;color:var(--gray);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escHtml(s.url) + '">' + escHtml(s.url) + '</div>'
+          + '</div>'
+          + '<button class="btn btn-sm ' + btnClass + '" style="font-size:10px;padding:2px 8px" onclick="toggleMcp(\'' + accountId + '\',\'' + escHtml(s.url) + '\',\'' + toggleAction + '\')">' + btnLabel + '</button>'
+          + '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Add new MCP input
+    html += '<div style="border-top:1px solid var(--border);padding-top:10px;margin-top:4px">'
+      + '<label style="font-size:11px;color:var(--gray)">Add new MCP server:</label>'
+      + '<div style="display:flex;gap:6px;margin-top:4px">'
+      + '<input id="mcp-add-url" type="text" placeholder="https://your-mcp.trycloudflare.com" style="flex:1;font-size:11px;padding:4px 8px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px">'
+      + '<button class="btn btn-accent btn-sm" style="font-size:10px" onclick="addMcpToAccount(\'' + accountId + '\')">Add</button>'
+      + '</div></div>';
+
+    inputDiv.innerHTML = html;
+  } catch (e) {
+    inputDiv.innerHTML = '<div style="color:var(--red);padding:10px">Failed to load: ' + escHtml(e.message) + '</div>';
+  }
+}
+
+async function toggleMcp(accountId, url, action) {
+  toast((action === 'enable' ? 'Enabling' : 'Disabling') + ' MCP...', 'info');
+  try {
+    var body = {};
+    if (action === 'enable') body.enable = [url];
+    else body.disable = [url];
+    var res = await apiFetch('/api/accounts/' + accountId + '/mcp-toggle', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    if (res.ok) {
+      toast('MCP ' + action + 'd (' + res.active_mcp + ' active)', 'success');
+      bindMcpSingle(accountId); // Refresh the modal
+    } else {
+      toast('Failed: ' + (res.error || 'unknown'), 'error');
+    }
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function addMcpToAccount(accountId) {
+  var urlInput = document.getElementById('mcp-add-url');
+  var url = (urlInput ? urlInput.value : '').trim();
+  if (!url) { toast('Enter a URL', 'error'); return; }
+  toast('Adding MCP server...', 'info');
   try {
     var res = await apiFetch('/api/accounts/' + accountId + '/bind-mcp', {
       method: 'POST',
-      body: JSON.stringify({ mcp_urls: urls }),
+      body: JSON.stringify({ mcp_urls: [url] }),
     });
     if (res.ok) {
-      toast('Attached ' + (res.attached || 0) + ' MCP server(s)', 'success');
+      toast('Added MCP server (' + (res.attached || 0) + ' total)', 'success');
+      bindMcpSingle(accountId); // Refresh
     } else {
-      toast('MCP bind failed: ' + (res.error || 'unknown'), 'error');
+      toast('Failed: ' + (res.error || 'unknown'), 'error');
     }
   } catch (e) {
-    toast('MCP bind failed: ' + e.message, 'error');
+    toast('Failed: ' + e.message, 'error');
   }
 }
 

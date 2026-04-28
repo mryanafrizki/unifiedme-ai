@@ -1127,20 +1127,33 @@ async def attach_mcp_to_account(
             client_kwargs["proxy"] = proxy_url
 
         async with httpx.AsyncClient(**client_kwargs) as client:
-            # Get existing MCP servers
+            # Get existing MCP secrets
             resp = await client.get(f"{_MCP_API_BASE}//secrets/mcp_servers", headers=headers)
-            existing = resp.json() if resp.status_code == 200 else []
-            existing_urls = [s.get("url", "") for s in existing]
+            existing_secrets = resp.json() if resp.status_code == 200 else []
+            existing_urls = [s.get("url", "") for s in existing_secrets]
 
-            tools = []
+            # Get current gummie tools to preserve existing active MCPs
+            resp2 = await client.get(f"{_MCP_API_BASE}/gummies/{gummie_id}", headers=headers)
+            current_mcp_tools = []
+            if resp2.status_code == 200:
+                current_tools = resp2.json().get("gummie", {}).get("tools", [])
+                current_mcp_tools = [t for t in current_tools if t.get("type") == "mcp_server"]
+
+            # Start with existing active MCPs (merge, not replace)
+            tools = list(current_mcp_tools)
+            active_urls = {t.get("mcp_server_url", "") for t in tools}
+
+            # Add new MCPs
             for mcp_url in mcp_urls:
                 mcp_url = mcp_url.strip()
-                if not mcp_url:
+                if not mcp_url or mcp_url in active_urls:
+                    if mcp_url in active_urls:
+                        _log(f"Already active: {mcp_url}")
                     continue
 
                 if mcp_url in existing_urls:
-                    secret_id = next((s["secret_id"] for s in existing if s.get("url") == mcp_url), "")
-                    mcp_name = next((s["nickname"] for s in existing if s.get("url") == mcp_url), "mcp")
+                    secret_id = next((s["secret_id"] for s in existing_secrets if s.get("url") == mcp_url), "")
+                    mcp_name = next((s["nickname"] for s in existing_secrets if s.get("url") == mcp_url), "mcp")
                     _log(f"Reusing existing MCP: {mcp_name}")
                 else:
                     mcp_name = "mcp-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=6))

@@ -249,6 +249,195 @@ async def clear_sticky_account_endpoint(account_id: int, tier: str, _: bool = De
     return {"ok": True, "tier": tier}
 
 
+@router.get("/accounts/{account_id}/mcp-list")
+async def mcp_list_endpoint(account_id: int, _: bool = Depends(verify_admin)):
+    """List MCP servers bound to a Gumloop account.
+
+    Returns both registered secrets and which ones are active on the gummie.
+    """
+    import httpx
+
+    account = await db.get_account(account_id)
+    if not account:
+        return JSONResponse({"error": "Account not found"}, status_code=404)
+
+    refresh_tok = account.get("gl_refresh_token", "")
+    gummie_id = account.get("gl_gummie_id", "")
+    if not refresh_tok:
+        return JSONResponse({"error": "Account has no Gumloop credentials"}, status_code=400)
+
+    # Auth
+    from .gumloop.auth import GumloopAuth
+    proxy_info = await db.get_proxy_for_batch()
+    proxy_url = proxy_info["url"] if proxy_info else None
+
+    auth = GumloopAuth(
+        refresh_token=refresh_tok,
+        user_id=account.get("gl_user_id", ""),
+        id_token=account.get("gl_id_token", ""),
+        proxy_url=proxy_url,
+    )
+    try:
+        id_token = await auth.get_token()
+    except Exception as e:
+        return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=500)
+
+    user_id = auth.user_id
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "x-auth-key": user_id,
+        "Content-Type": "application/json",
+    }
+
+    client_kwargs = {"timeout": 30}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        # Get registered MCP secrets
+        resp = await client.get("https://api.gumloop.com//secrets/mcp_servers", headers=headers)
+        secrets = resp.json() if resp.status_code == 200 else []
+
+        # Get gummie tools to see which MCPs are active
+        active_mcp_urls = []
+        if gummie_id:
+            resp2 = await client.get(f"https://api.gumloop.com/gummies/{gummie_id}", headers=headers)
+            if resp2.status_code == 200:
+                tools = resp2.json().get("gummie", {}).get("tools", [])
+                active_mcp_urls = [t.get("mcp_server_url", "") for t in tools if t.get("type") == "mcp_server"]
+
+    # Build result
+    mcp_list = []
+    for s in secrets:
+        url = s.get("url", "")
+        mcp_list.append({
+            "secret_id": s.get("secret_id", ""),
+            "name": s.get("nickname", ""),
+            "url": url,
+            "active": url in active_mcp_urls,
+        })
+
+    # Persist refreshed tokens
+    updated = auth.get_updated_tokens()
+    if updated.get("gl_id_token"):
+        try:
+            await db.update_account(account_id, **updated)
+        except Exception:
+            pass
+
+    return {"ok": True, "mcp_servers": mcp_list, "email": account.get("email", "")}
+
+
+@router.post("/accounts/{account_id}/mcp-toggle")
+async def mcp_toggle_endpoint(account_id: int, request: Request, _: bool = Depends(verify_admin)):
+    """Toggle MCP server(s) on/off for a Gumloop account's gummie.
+
+    Body: {"enable": ["url1", "url2"], "disable": ["url3"]}
+    Rebuilds the gummie tools array with only enabled MCPs + built-in tools.
+    """
+    import httpx
+
+    body = await request.json()
+    enable_urls = set(body.get("enable", []))
+    disable_urls = set(body.get("disable", []))
+
+    account = await db.get_account(account_id)
+    if not account:
+        return JSONResponse({"error": "Account not found"}, status_code=404)
+
+    gummie_id = account.get("gl_gummie_id", "")
+    refresh_tok = account.get("gl_refresh_token", "")
+    if not gummie_id or not refresh_tok:
+        return JSONResponse({"error": "Account has no gummie or credentials"}, status_code=400)
+
+    from .gumloop.auth import GumloopAuth
+    proxy_info = await db.get_proxy_for_batch()
+    proxy_url = proxy_info["url"] if proxy_info else None
+
+    auth = GumloopAuth(
+        refresh_token=refresh_tok,
+        user_id=account.get("gl_user_id", ""),
+        id_token=account.get("gl_id_token", ""),
+        proxy_url=proxy_url,
+    )
+    try:
+        id_token = await auth.get_token()
+    except Exception as e:
+        return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=500)
+
+    user_id = auth.user_id
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "x-auth-key": user_id,
+        "Content-Type": "application/json",
+    }
+
+    client_kwargs = {"timeout": 30}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        # Get all registered MCP secrets
+        resp = await client.get("https://api.gumloop.com//secrets/mcp_servers", headers=headers)
+        secrets = resp.json() if resp.status_code == 200 else []
+
+        # Get current gummie tools
+        resp2 = await client.get(f"https://api.gumloop.com/gummies/{gummie_id}", headers=headers)
+        current_tools = []
+        if resp2.status_code == 200:
+            current_tools = resp2.json().get("gummie", {}).get("tools", [])
+
+        # Current active MCP URLs
+        current_mcp_urls = {t.get("mcp_server_url", "") for t in current_tools if t.get("type") == "mcp_server"}
+
+        # Calculate new active set
+        new_active = set(current_mcp_urls)
+        new_active |= enable_urls
+        new_active -= disable_urls
+
+        # Build new tools array
+        new_tools = []
+        for s in secrets:
+            url = s.get("url", "")
+            if url in new_active:
+                new_tools.append({
+                    "secret_id": s.get("secret_id", ""),
+                    "mcp_server_url": url,
+                    "name": s.get("nickname", ""),
+                    "type": "mcp_server",
+                    "restricted_tools": [],
+                })
+
+        # Add built-in tools
+        new_tools.extend([
+            {"metadata": {}, "type": "web_search"},
+            {"metadata": {}, "type": "web_fetch"},
+            {"metadata": {"model": "gemini-3.1-flash-image-preview"}, "type": "image_generator"},
+            {"type": "interaction_search"},
+        ])
+
+        # Patch gummie
+        resp3 = await client.patch(
+            f"https://api.gumloop.com/gummies/{gummie_id}",
+            json={"tools": new_tools}, headers=headers,
+        )
+        if resp3.status_code != 200:
+            return JSONResponse({"error": f"Failed to update gummie: HTTP {resp3.status_code}"}, status_code=500)
+
+        result_tools = resp3.json().get("gummie", {}).get("tools", [])
+        mcp_count = sum(1 for t in result_tools if t.get("type") == "mcp_server")
+
+    # Persist refreshed tokens
+    updated = auth.get_updated_tokens()
+    if updated.get("gl_id_token"):
+        try:
+            await db.update_account(account_id, **updated)
+        except Exception:
+            pass
+
+    return {"ok": True, "active_mcp": mcp_count}
+
+
 @router.post("/accounts/{account_id}/bind-mcp")
 async def bind_mcp_endpoint(account_id: int, request: Request, _: bool = Depends(verify_admin)):
     """Bind MCP server(s) to a single Gumloop account's gummie."""
