@@ -384,8 +384,8 @@ def cmd_stop():
         UPTIME_FILE.unlink(missing_ok=True)
         return
 
-    # Push to D1 before stopping
-    _push_d1_before_stop()
+    # Show current stats before stopping
+    _print_d1_box("Stopping")
 
     print(f"  Stopping proxy (PID {pid})...")
     try:
