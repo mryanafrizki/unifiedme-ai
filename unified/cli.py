@@ -288,6 +288,53 @@ def _show_d1_status_from_log():
     _print_d1_box("D1 Synced")
 
 
+# ─── Camoufox System Dependencies ────────────────────────────────────────────
+
+# Required system libraries for Camoufox/Firefox headless on Linux
+_CAMOUFOX_SYSTEM_DEPS = [
+    "libgtk-3-0", "libdbus-glib-1-2", "libasound2", "libx11-xcb1",
+    "libxcomposite1", "libxdamage1", "libxrandr2", "libgbm1",
+    "libpango-1.0-0", "libcairo2", "libatk1.0-0", "libatk-bridge2.0-0",
+    "libxkbcommon0", "libxfixes3", "libcups2", "libnspr4", "libnss3",
+    "fonts-liberation", "xvfb",
+]
+
+
+def check_camoufox_deps() -> tuple[list[str], list[str]]:
+    """Check which Camoufox system deps are installed (Linux only).
+
+    Returns (installed, missing) lists.
+    """
+    if platform.system() != "Linux":
+        return [], []
+
+    installed = []
+    missing = []
+    for pkg in _CAMOUFOX_SYSTEM_DEPS:
+        result = subprocess.run(
+            ["dpkg", "-s", pkg],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and "Status: install ok installed" in result.stdout:
+            installed.append(pkg)
+        else:
+            missing.append(pkg)
+    return installed, missing
+
+
+def install_camoufox_deps(missing: list[str]) -> bool:
+    """Install missing system deps via apt. Returns True on success."""
+    if not missing:
+        return True
+    print(f"  Installing {len(missing)} system packages...")
+    print(f"  {' '.join(missing)}")
+    result = subprocess.run(
+        ["sudo", "apt", "install", "-y"] + missing,
+        timeout=120,
+    )
+    return result.returncode == 0
+
+
 # ─── Commands ────────────────────────────────────────────────────────────────
 
 def cmd_start():
@@ -622,6 +669,27 @@ def cmd_fix():
             missing_pkgs.append(pkg)
             issues += 1
 
+    # 4b. Check Camoufox system dependencies (Linux only)
+    if platform.system() == "Linux":
+        cam_installed, cam_missing = check_camoufox_deps()
+        if cam_missing:
+            print(f"  {FAIL} Camoufox deps: {len(cam_missing)} missing")
+            for pkg in cam_missing:
+                print(f"       - {pkg}")
+            issues += 1
+            try:
+                answer = input("  Install missing system packages now? [Y/n]: ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                answer = "n"
+            if answer != "n":
+                if install_camoufox_deps(cam_missing):
+                    print(f"  {OK} System packages installed")
+                    issues -= 1
+                else:
+                    print(f"  {FAIL} Some packages failed to install")
+        else:
+            print(f"  {OK} Camoufox system deps ({len(cam_installed)} packages)")
+
     # 5. Check license
     from .main import LICENSE_FILE
     if LICENSE_FILE.exists():
@@ -905,6 +973,10 @@ def _aa_stream_progress(account_map: dict[str, str]):
                         done_count += 1
                         _aa_log(f"  {_YELLOW}[{done_count}/{total}] {email} — CANCELLED{_NC}")
 
+                    elif etype == "batch_auto_stop":
+                        reason = data.get("reason", "Auto-stopped")
+                        _aa_log(f"\n  {_RED}[AUTO-STOP] {reason}{_NC}")
+
                     elif etype == "batch_done":
                         ok = data.get("success", 0)
                         fail = data.get("failed", 0)
@@ -936,6 +1008,28 @@ def cmd_addaccounts_add():
         print(f"    {CMD} run")
         sys.exit(1)
     print(f"{_GREEN}OK{_NC}")
+
+    # ── Check Camoufox deps (Linux) ──
+    if platform.system() == "Linux":
+        _, cam_missing = check_camoufox_deps()
+        if cam_missing:
+            print(f"\n  {_YELLOW}[WARN]{_NC} Missing {len(cam_missing)} Camoufox system packages:")
+            for pkg in cam_missing[:5]:
+                print(f"    - {pkg}")
+            if len(cam_missing) > 5:
+                print(f"    ... and {len(cam_missing) - 5} more")
+            if _aa_yn("Install now? (requires sudo)", True):
+                if install_camoufox_deps(cam_missing):
+                    print(f"  {_GREEN}Installed{_NC}")
+                else:
+                    print(f"  {_RED}Install failed. Batch may error.{_NC}")
+                    if not _aa_yn("Continue anyway?", False):
+                        sys.exit(1)
+            else:
+                print(f"  {_DIM}Skipped. Run manually:{_NC}")
+                print(f"    sudo apt install -y {' '.join(cam_missing)}")
+                if not _aa_yn("Continue anyway?", False):
+                    sys.exit(1)
 
     # ── Show license ──
     lic = _aa_get_license_info()
@@ -1101,18 +1195,77 @@ def cmd_addaccounts_add():
     # ── Stream ──
     _aa_stream_progress(account_map)
 
-    # ── Done ──
+    # ── Done — show summary ──
+    try:
+        status = _aa_api("GET", "/batch/status", timeout=5)
+        _aa_print_summary(status)
+    except Exception:
+        # Fallback if API unavailable
+        fail_count = 0
+        if _AA_FAIL.exists():
+            fail_count = len([l for l in _AA_FAIL.read_text(encoding="utf-8").strip().splitlines() if l.strip()])
+        print()
+        print(f"  {_CYAN}{'='*50}{_NC}")
+        if fail_count:
+            print(f"  {_RED}Failed: {_AA_FAIL} ({fail_count} entries){_NC}")
+        else:
+            print(f"  {_GREEN}No failures!{_NC}")
+        print(f"  {_DIM}Full log: {_AA_LOG}{_NC}")
+        print(f"  {_CYAN}{'='*50}{_NC}")
+
+
+def _aa_format_duration(seconds: float) -> str:
+    """Format seconds into human-readable duration."""
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m {s}s"
+
+
+def _aa_format_ts(epoch: float) -> str:
+    """Format epoch timestamp to readable string."""
+    if not epoch:
+        return "-"
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch))
+
+
+def _aa_print_summary(status: dict):
+    """Print batch summary with timing and fail info."""
+    jobs = status.get("jobs", [])
+    total = len(jobs)
+    ok = sum(1 for j in jobs if j.get("status") == "success")
+    fail = sum(1 for j in jobs if j.get("status") == "failed")
+    cancelled = sum(1 for j in jobs if j.get("status") == "cancelled")
+    started_at = status.get("started_at", 0)
+    finished_at = status.get("finished_at", 0)
+
+    print(f"\n  {_CYAN}{'='*50}{_NC}")
+    print(f"  {_WHITE}Batch Summary{_NC}")
+    print(f"  {_CYAN}{'='*50}{_NC}")
+    print(f"  Result:    {_GREEN}{ok} OK{_NC}, {_RED}{fail} failed{_NC}, {_YELLOW}{cancelled} cancelled{_NC}  (total {total})")
+    print(f"  Started:   {_DIM}{_aa_format_ts(started_at)}{_NC}")
+    if finished_at:
+        print(f"  Finished:  {_DIM}{_aa_format_ts(finished_at)}{_NC}")
+        if started_at:
+            duration = finished_at - started_at
+            print(f"  Duration:  {_DIM}{_aa_format_duration(duration)}{_NC}")
+    else:
+        if started_at:
+            elapsed = time.time() - started_at
+            print(f"  Elapsed:   {_DIM}{_aa_format_duration(elapsed)} (still running){_NC}")
+
+    # Show fail file info
     fail_count = 0
     if _AA_FAIL.exists():
-        fail_count = len([l for l in _AA_FAIL.read_text(encoding="utf-8").strip().splitlines() if l.strip()])
-
-    print()
-    print(f"  {_CYAN}{'='*50}{_NC}")
+        lines = [l for l in _AA_FAIL.read_text(encoding="utf-8").strip().splitlines() if l.strip()]
+        fail_count = len(lines)
     if fail_count:
-        print(f"  {_RED}Failed: {_AA_FAIL} ({fail_count} entries){_NC}")
-    else:
-        print(f"  {_GREEN}No failures!{_NC}")
-    print(f"  {_DIM}Full log: {_AA_LOG}{_NC}")
+        print(f"  Failed:    {_RED}{_AA_FAIL} ({fail_count} entries){_NC}")
+    print(f"  Log:       {_DIM}{_AA_LOG}{_NC}")
     print(f"  {_CYAN}{'='*50}{_NC}")
 
 
@@ -1136,9 +1289,7 @@ def cmd_addaccounts_status():
 
     if not running and done == total and total > 0:
         print(f"{_YELLOW}Batch already finished{_NC}")
-        ok = sum(1 for j in jobs if j.get("status") == "success")
-        fail = sum(1 for j in jobs if j.get("status") == "failed")
-        print(f"  Result: {_GREEN}{ok} OK{_NC}, {_RED}{fail} failed{_NC}, total {total}")
+        _aa_print_summary(status)
         return
     elif not running and total == 0:
         print(f"{_DIM}No batch running{_NC}")
@@ -1150,6 +1301,13 @@ def cmd_addaccounts_status():
     # Build account map from jobs for fail logging
     account_map = {j.get("email", "?"): "?" for j in jobs}
     _aa_stream_progress(account_map)
+
+    # After stream ends, show summary
+    try:
+        status = _aa_api("GET", "/batch/status", timeout=5)
+        _aa_print_summary(status)
+    except Exception:
+        pass
 
 
 def cmd_addaccounts_stop():

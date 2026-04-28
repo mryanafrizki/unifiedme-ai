@@ -369,7 +369,14 @@ async def _run_batch() -> None:
     proxy_lock = asyncio.Lock()
     available_proxies = list(proxy_pool)
 
+    # Track consecutive failures for auto-stop
+    consecutive_fails = 0
+    _MAX_CONSECUTIVE_FAILS = 3
+    fail_lock = asyncio.Lock()
+
     async def worker(i: int, job: AccountJob) -> None:
+        nonlocal consecutive_fails
+
         # Check before acquiring semaphore (queued jobs)
         if batch_state.cancelled:
             job.status = JobStatus.CANCELLED
@@ -401,6 +408,25 @@ async def _run_batch() -> None:
                 if proxy_info:
                     async with proxy_lock:
                         available_proxies.append(proxy_info)
+
+            # Cooldown between accounts on same proxy to avoid rate limits
+            await asyncio.sleep(2)
+
+            # Track consecutive failures — auto-stop if same error keeps happening
+            async with fail_lock:
+                if job.status == JobStatus.FAILED:
+                    consecutive_fails += 1
+                    if consecutive_fails >= _MAX_CONSECUTIVE_FAILS:
+                        batch_state.cancelled = True
+                        reason = "Auto-stopped: 3 consecutive failures (likely missing dependencies or config issue)"
+                        log.warning("[batch] %s", reason)
+                        batch_state.broadcast({
+                            "type": "batch_auto_stop",
+                            "reason": reason,
+                            "consecutive_fails": consecutive_fails,
+                        })
+                elif job.status == JobStatus.SUCCESS:
+                    consecutive_fails = 0  # Reset on success
 
     # Launch all jobs — semaphore controls concurrency
     tasks = [asyncio.create_task(worker(i, job)) for i, job in enumerate(batch_state.jobs)]

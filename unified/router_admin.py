@@ -856,10 +856,16 @@ async def batch_status_endpoint(request: Request, _: bool = Depends(verify_admin
                 "errors": errors,
                 "providers": j.providers,
             })
+    # Timing info
+    started_times = [j.started_at for j in batch_state.jobs if j.started_at > 0]
+    finished_times = [j.finished_at for j in batch_state.jobs if j.finished_at > 0]
+
     return {
         "running": batch_state.running,
         "jobs": jobs,
         "failed_jobs": failed_jobs,
+        "started_at": min(started_times) if started_times else 0,
+        "finished_at": max(finished_times) if finished_times else 0,
     }
 
 

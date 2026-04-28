@@ -252,8 +252,41 @@ async def _try_click_consent(page) -> str:
         return ""
 
 
+async def _try_click_speedbump(page) -> bool:
+    """Handle Google speedbump pages (workspacetermsofservice, etc).
+
+    These pages have 'I understand', 'Accept', 'Agree' buttons.
+    Returns True if a button was clicked.
+    """
+    try:
+        result = await page.evaluate("""() => {
+            // Look for common speedbump buttons
+            for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"], input[type="submit"], input[type="button"]')) {
+                const t = (btn.textContent || btn.value || '').trim().toLowerCase();
+                if (!t || btn.offsetParent === null) continue;
+                if (t === 'i understand' || t === 'accept' || t === 'agree'
+                    || t === 'i agree' || t === 'continue' || t === 'confirm'
+                    || t === 'saya mengerti' || t === 'setuju' || t === 'lanjutkan'
+                    || t.includes('i understand') || t.includes('accept')
+                    || t.includes('agree') || t.includes('confirm')) {
+                    btn.click();
+                    return t;
+                }
+            }
+            // Try #confirm or submit inputs
+            const el = document.querySelector('#confirm')
+                || document.querySelector('input[type="submit"]')
+                || document.querySelector('[data-idom-class*="confirm"]');
+            if (el) { el.click(); return 'id:' + (el.id || 'submit'); }
+            return '';
+        }""")
+        return bool(result)
+    except Exception:
+        return False
+
+
 async def handle_consent_and_redirect(google_page, main_page) -> bool:
-    """Handle Google consent/gaplustos screens and wait for redirect.
+    """Handle Google consent/gaplustos/speedbump screens and wait for redirect.
 
     Polls BOTH the popup page AND the main page for consent screens.
     Google may show consent in either location depending on the OAuth flow.
@@ -261,6 +294,9 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
     """
     clicked_consent = False
     clicked_gaplustos = False
+    clicked_speedbump = False
+    failed_click_count = 0  # Track consecutive failed click attempts
+    _MAX_FAILED_CLICKS = 10  # Bail after this many failed attempts on same page
 
     for tick in range(60):
         await asyncio.sleep(1)
@@ -283,6 +319,11 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
 
             emit({"type": "debug", "message": f"consent tick={tick} popup={'closed' if popup_closed else gurl[:60]} main={main_url[:60]} clicked={clicked_consent}"})
 
+            # ── Too many failed clicks — bail ───────────────────────
+            if failed_click_count >= _MAX_FAILED_CLICKS:
+                emit({"type": "debug", "message": f"consent: bailing after {failed_click_count} failed click attempts"})
+                return False
+
             # ── Gaplustos on popup ──────────────────────────────────
             if "/speedbump/gaplustos" in gurl and not clicked_gaplustos:
                 await google_page.evaluate("""() => {
@@ -294,9 +335,34 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                     }
                 }""")
                 clicked_gaplustos = True
+                failed_click_count = 0
                 emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Clicked gaplustos confirm"})
                 await asyncio.sleep(3)
                 continue
+
+            # ── Speedbump pages (workspacetermsofservice, etc) ──────
+            if not popup_closed and "/speedbump/" in gurl and not clicked_speedbump:
+                ok = await _try_click_speedbump(google_page)
+                if ok:
+                    clicked_speedbump = True
+                    failed_click_count = 0
+                    emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Clicked speedbump button"})
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    failed_click_count += 1
+
+            # ── Speedbump on MAIN page ──────────────────────────────
+            if "/speedbump/" in main_url and not clicked_speedbump:
+                ok = await _try_click_speedbump(main_page)
+                if ok:
+                    clicked_speedbump = True
+                    failed_click_count = 0
+                    emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Clicked speedbump on main page"})
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    failed_click_count += 1
 
             # ── Try consent click on POPUP page ─────────────────────
             if not popup_closed and "accounts.google.com" in gurl and not clicked_consent:
@@ -304,25 +370,28 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                 emit({"type": "debug", "message": f"consent click (popup): {result}"})
                 if result and not result.startswith("no_"):
                     clicked_consent = True
+                    failed_click_count = 0
                     emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": f"Clicked consent on popup: {result}"})
                     await asyncio.sleep(3)
                     continue
+                else:
+                    failed_click_count += 1
 
             # ── Try consent click on MAIN page ──────────────────────
-            # Google sometimes shows consent in the main page (not popup)
             if "accounts.google.com" in main_url and not clicked_consent:
                 result = await _try_click_consent(main_page)
                 emit({"type": "debug", "message": f"consent click (main): {result}"})
                 if result and not result.startswith("no_"):
                     clicked_consent = True
+                    failed_click_count = 0
                     emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": f"Clicked consent on main page: {result}"})
                     await asyncio.sleep(3)
                     continue
+                else:
+                    failed_click_count += 1
 
             # ── Check for successful redirect to Gumloop ────────────
-            # Only consider redirect AFTER consent was clicked or popup closed
-            if clicked_consent or popup_closed:
-                # Re-read main URL (may have changed after consent click)
+            if clicked_consent or clicked_speedbump or clicked_gaplustos or popup_closed:
                 try:
                     main_url = main_page.url if not main_page.is_closed() else ""
                 except Exception:
