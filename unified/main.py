@@ -251,24 +251,22 @@ async def lifespan(app: FastAPI):
     _os_info = f"{_platform.system()} {_platform.release()}"
 
     try:
-        # Step 1: Push local to D1 (local is master)
-        local_accounts = await db.get_accounts()
-        push_result = await license_client.push_sync(accounts=local_accounts)
-        _pushed = push_result.get("accounts_upserted", 0) if not push_result.get("error") else 0
-
-        # Step 2: Pull only NEW accounts from D1 (added on other devices)
-        pull_result = await license_client.pull_new_accounts_only()
-        _new = pull_result.get("new_accounts", 0)
-
-        local_after = await db.get_accounts()
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-        log.info("  D1 Synced ✓")
-        log.info("  Pushed: %d accounts to D1", _pushed)
-        if _new:
-            log.info("  New from other devices: %d", _new)
-        log.info("  Local: %d accounts", len(local_after))
-        log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
-        log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        # Pull ALL from D1 → replace local cache. D1 = pusat.
+        pull_result = await license_client.full_pull_replace_local()
+        if pull_result.get("error"):
+            log.warning("D1 pull failed: %s — using local data", pull_result["error"])
+        else:
+            local_after = await db.get_accounts()
+            _kr = sum(1 for a in local_after if a.get("kiro_status") == "ok")
+            _cb = sum(1 for a in local_after if a.get("cb_status") == "ok")
+            _ws = sum(1 for a in local_after if a.get("ws_status") == "ok")
+            _gl = sum(1 for a in local_after if a.get("gl_status") == "ok")
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+            log.info("  D1 Synced ✓ (pulled %d accounts)", pull_result.get("total", 0))
+            log.info("  KR: %d  CB: %d  WS: %d  GL: %d", _kr, _cb, _ws, _gl)
+            log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
+            log.info("  Heartbeat: every %ds", license_client.SYNC_INTERVAL)
+            log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     except Exception as e:
         log.warning("D1 startup sync failed: %s — using local data", e)
 

@@ -218,7 +218,7 @@ def _print_d1_box(title: str, push_ok: bool = True):
     print(f"    {status}")
     print(f"    {WHITE}KR:{NC} {stats['kr']}  {WHITE}CB:{NC} {stats['cb']}  {WHITE}WS:{NC} {stats['ws']}  {WHITE}GL:{NC} {stats['gl']}  {DIM}Total: {stats['total']}{NC}")
     print(f"    {DIM}{_now} · {_device} ({_os_info}){NC}")
-    print(f"    {DIM}Push: local → D1 (50/batch) · Pull: new accounts only{NC}")
+    print(f"    {DIM}D1 = pusat · Heartbeat: 2min · Push: instant per-account{NC}")
     print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
     print()
 

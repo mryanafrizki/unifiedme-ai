@@ -322,13 +322,13 @@ async function syncPush(db, request) {
   let alertsInserted = 0;
   let proxiesUpserted = 0;
 
-  // Upsert accounts — direct overwrite (local device is always correct)
+  // Upsert accounts — SIMPLE: what device sends is what D1 stores. No merge.
   let accountsDeleted = 0;
   if (accounts && Array.isArray(accounts)) {
     for (const acc of accounts) {
       if (!acc.email) continue;
 
-      // Handle deleted accounts
+      // Delete
       if (acc.status === 'deleted') {
         await db.prepare('DELETE FROM accounts WHERE license_id = ? AND email = ?')
           .bind(license.id, acc.email).run();
@@ -340,22 +340,7 @@ async function syncPush(db, request) {
         .bind(license.id, acc.email).first();
 
       if (existing) {
-        // Status-aware merge: "worse" status always wins (exhausted > ok, banned > ok, etc.)
-        // This prevents Device B from reverting an exhausted account back to ok
-        const statusWeight = { 'ok': 0, 'pending': 0, 'none': 0, 'rate_limited': 1, 'exhausted': 2, 'expired': 2, 'failed': 3, 'banned': 4 };
-        const pickStatus = (newVal, oldVal, fallback) => {
-          const nw = statusWeight[newVal] ?? 0;
-          const ow = statusWeight[oldVal] ?? 0;
-          // Keep whichever is "worse" (higher weight)
-          return nw >= ow ? (newVal || fallback) : (oldVal || fallback);
-        };
-        // For credentials: keep non-empty (either new or old)
-        const pickCred = (newVal, oldVal) => {
-          return (newVal !== undefined && newVal !== null && newVal !== '') ? newVal : (oldVal || '');
-        };
-
-        const d1 = await db.prepare('SELECT * FROM accounts WHERE id = ?').bind(existing.id).first();
-
+        // Direct overwrite — no merge, no smart logic
         await db.prepare(`UPDATE accounts SET
           password = ?, status = ?,
           kiro_status = ?, kiro_access_token = ?, kiro_refresh_token = ?, kiro_profile_arn = ?,
@@ -367,37 +352,14 @@ async function syncPush(db, request) {
           gl_credits = ?, gl_error = ?, gl_error_count = ?,
           updated_at = datetime('now')
           WHERE id = ?`).bind(
-          acc.password || d1.password || '',
-          acc.status || 'active',
-          pickStatus(acc.kiro_status, d1.kiro_status, 'pending'),
-          pickCred(acc.kiro_access_token, d1.kiro_access_token),
-          pickCred(acc.kiro_refresh_token, d1.kiro_refresh_token),
-          pickCred(acc.kiro_profile_arn, d1.kiro_profile_arn),
-          acc.kiro_credits ?? d1.kiro_credits ?? 0,
-          acc.kiro_credits_total ?? d1.kiro_credits_total ?? 0,
-          acc.kiro_credits_used ?? d1.kiro_credits_used ?? 0,
-          acc.kiro_error || d1.kiro_error || '',
-          Math.max(acc.kiro_error_count || 0, d1.kiro_error_count || 0),
-          acc.kiro_expires_at || d1.kiro_expires_at || '',
-          pickStatus(acc.cb_status, d1.cb_status, 'pending'),
-          pickCred(acc.cb_api_key, d1.cb_api_key),
-          acc.cb_credits ?? d1.cb_credits ?? 0,
-          acc.cb_error || d1.cb_error || '',
-          Math.max(acc.cb_error_count || 0, d1.cb_error_count || 0),
-          acc.cb_expires_at || d1.cb_expires_at || '',
-          pickStatus(acc.ws_status, d1.ws_status, 'none'),
-          pickCred(acc.ws_api_key, d1.ws_api_key),
-          acc.ws_credits ?? d1.ws_credits ?? 0,
-          acc.ws_error || d1.ws_error || '',
-          Math.max(acc.ws_error_count || 0, d1.ws_error_count || 0),
-          pickStatus(acc.gl_status, d1.gl_status, 'none'),
-          pickCred(acc.gl_refresh_token, d1.gl_refresh_token),
-          pickCred(acc.gl_user_id, d1.gl_user_id),
-          pickCred(acc.gl_gummie_id, d1.gl_gummie_id),
-          pickCred(acc.gl_id_token, d1.gl_id_token),
-          acc.gl_credits ?? d1.gl_credits ?? 0,
-          acc.gl_error || d1.gl_error || '',
-          Math.max(acc.gl_error_count || 0, d1.gl_error_count || 0),
+          acc.password || '', acc.status || 'active',
+          acc.kiro_status || 'pending', acc.kiro_access_token || '', acc.kiro_refresh_token || '', acc.kiro_profile_arn || '',
+          acc.kiro_credits || 0, acc.kiro_credits_total || 0, acc.kiro_credits_used || 0,
+          acc.kiro_error || '', acc.kiro_error_count || 0, acc.kiro_expires_at || '',
+          acc.cb_status || 'pending', acc.cb_api_key || '', acc.cb_credits || 0, acc.cb_error || '', acc.cb_error_count || 0, acc.cb_expires_at || '',
+          acc.ws_status || 'none', acc.ws_api_key || '', acc.ws_credits || 0, acc.ws_error || '', acc.ws_error_count || 0,
+          acc.gl_status || 'none', acc.gl_refresh_token || '', acc.gl_user_id || '', acc.gl_gummie_id || '', acc.gl_id_token || '',
+          acc.gl_credits || 0, acc.gl_error || '', acc.gl_error_count || 0,
           existing.id
         ).run();
       } else {

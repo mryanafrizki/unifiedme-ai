@@ -28,7 +28,7 @@ log = logging.getLogger("unified.license_client")
 CENTRAL_API_URL = os.getenv("CENTRAL_API_URL", "https://unified-api.roubot71.workers.dev")
 LICENSE_KEY = os.getenv("LICENSE_KEY", "")
 DEVICE_NAME = os.getenv("DEVICE_NAME", platform.node() or "unknown")
-SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))  # 30 minutes (safety net only)
+SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "120"))  # 2 minutes heartbeat
 
 # ─── State ───────────────────────────────────────────────────────────────────
 
@@ -975,7 +975,11 @@ async def scan_watchwords(
 # ─── Periodic Sync Loop ─────────────────────────────────────────────────────
 
 async def _sync_loop() -> None:
-    """Background loop: pull + push every SYNC_INTERVAL seconds."""
+    """Heartbeat: every 2 minutes, pull ALL from D1 → replace local cache.
+
+    D1 = pusat. Local = cache.
+    Any changes from other devices appear within 2 minutes.
+    """
     while True:
         try:
             await asyncio.sleep(SYNC_INTERVAL)
@@ -989,13 +993,11 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push ALL local accounts + buffered logs to D1
-            from . import database as db
-            local_accounts = await db.get_accounts()
-            await push_sync(accounts=local_accounts)
+            # Push buffered usage logs only (accounts pushed instantly per-change)
+            await push_sync()
 
-            # Pull only NEW accounts from D1 (from other devices) — never overwrite local
-            await pull_new_accounts_only()
+            # Pull ALL from D1 → replace local cache
+            await full_pull_replace_local()
 
         except asyncio.CancelledError:
             break
