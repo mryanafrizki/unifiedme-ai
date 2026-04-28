@@ -1,15 +1,18 @@
 """Unified AI Proxy — CLI commands.
 
 Usage:
-    unifiedme start       Start proxy in background
-    unifiedme stop        Stop background proxy
-    unifiedme run         Start proxy in foreground (interactive)
-    unifiedme status      Show proxy status + version
-    unifiedme update      Pull latest code + reinstall deps
-    unifiedme fix         Check environment, auto-install missing deps
-    unifiedme kill-port   Kill process using port 1430
-    unifiedme logout      Clear license key (switch license)
-    unifiedme help        Show this help
+    unifiedme start                Start proxy in background
+    unifiedme stop                 Stop background proxy
+    unifiedme run                  Start proxy in foreground (interactive)
+    unifiedme status               Show proxy status + version
+    unifiedme update               Pull latest code + reinstall deps
+    unifiedme fix                  Check environment, auto-install missing deps
+    unifiedme kill-port            Kill process using port 1430
+    unifiedme logout               Clear license key (switch license)
+    unifiedme addaccounts add      Batch add accounts (interactive)
+    unifiedme addaccounts status   Show batch progress (real-time)
+    unifiedme addaccounts stop     Force stop running batch
+    unifiedme help                 Show this help
 """
 
 from __future__ import annotations
@@ -699,6 +702,491 @@ def cmd_logout():
         print("  No saved license found.")
 
 
+# ─── Add Accounts CLI ────────────────────────────────────────────────────────
+
+_AA_LOG = DATA_DIR / "addaccounts.log"
+_AA_FAIL = DATA_DIR / "addaccounts_failed.log"
+
+# ANSI colors
+_GREEN = "\033[0;32m"
+_RED = "\033[0;31m"
+_CYAN = "\033[0;36m"
+_YELLOW = "\033[1;33m"
+_DIM = "\033[2m"
+_WHITE = "\033[1;37m"
+_NC = "\033[0m"
+
+
+def _aa_ts() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _aa_log(msg: str, also_print: bool = True):
+    line = f"[{_aa_ts()}] {msg}"
+    with open(_AA_LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    if also_print:
+        print(line)
+
+
+def _aa_log_fail(email: str, password: str, reason: str):
+    with open(_AA_FAIL, "a", encoding="utf-8") as f:
+        f.write(f"{email}:{password} | {reason}\n")
+
+
+def _aa_api(method: str, path: str, json_body=None, timeout: float = 30) -> dict:
+    import httpx
+    from .config import ADMIN_PASSWORD
+    headers = {"X-Admin-Password": ADMIN_PASSWORD, "Content-Type": "application/json"}
+    url = f"http://localhost:{LISTEN_PORT}/api{path}"
+    with httpx.Client(timeout=timeout) as client:
+        if method == "GET":
+            resp = client.get(url, headers=headers)
+        else:
+            resp = client.post(url, headers=headers, json=json_body or {})
+        if resp.status_code != 200:
+            raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        return resp.json()
+
+
+def _aa_prompt(question: str, default: str = "") -> str:
+    hint = f" [{default}]" if default else ""
+    raw = input(f"  {question}{hint}: ").strip()
+    return raw or default
+
+
+def _aa_yn(question: str, default: bool = False) -> bool:
+    hint = "Y/n" if default else "y/N"
+    raw = input(f"  {question} [{hint}]: ").strip().lower()
+    if not raw:
+        return default
+    return raw in ("y", "yes")
+
+
+def _aa_check_server() -> bool:
+    """Check proxy is running and return True."""
+    pid = _get_pid()
+    if not pid or not _is_running(pid):
+        return False
+    try:
+        _aa_api("GET", "/accounts", timeout=5)
+        return True
+    except Exception:
+        return False
+
+
+def _aa_get_license_info() -> dict | None:
+    """Get license info from saved file + validate."""
+    from .main import LICENSE_FILE, _validate_license_sync
+    if not LICENSE_FILE.exists():
+        return None
+    key = LICENSE_FILE.read_text().strip()
+    if not key:
+        return None
+    result = _validate_license_sync(key)
+    if result.get("ok"):
+        lic = result.get("license", {})
+        return {
+            "key": key,
+            "owner": lic.get("owner_name", "?"),
+            "tier": lic.get("tier", "?"),
+            "max_devices": lic.get("max_devices", "?"),
+            "max_accounts": lic.get("max_accounts", "?"),
+            "device_id": result.get("device_id", "?"),
+        }
+    return None
+
+
+def _aa_load_file(filepath: str, label: str) -> list[str]:
+    """Load lines from a .txt file."""
+    p = Path(filepath)
+    if not p.exists():
+        print(f"  {_RED}[ERROR]{_NC} File not found: {filepath}")
+        return []
+    lines = p.read_text(encoding="utf-8").strip().splitlines()
+    return [l.strip() for l in lines if l.strip() and not l.strip().startswith("#")]
+
+
+def _aa_check_proxies(proxies: list[str]) -> list[dict]:
+    """Quick connectivity check."""
+    import httpx
+    results = []
+    for p in proxies:
+        try:
+            with httpx.Client(proxy=p, timeout=10) as client:
+                resp = client.get("https://httpbin.org/ip")
+                if resp.status_code == 200:
+                    ip = resp.json().get("origin", "?")
+                    results.append({"url": p, "ok": True, "ip": ip})
+                else:
+                    results.append({"url": p, "ok": False, "ip": f"HTTP {resp.status_code}"})
+        except Exception as e:
+            results.append({"url": p, "ok": False, "ip": str(e)[:40]})
+    return results
+
+
+def _aa_stream_progress(account_map: dict[str, str]):
+    """Listen to SSE events and print real-time progress."""
+    import httpx
+    import json
+    from .config import ADMIN_PASSWORD
+
+    url = f"http://localhost:{LISTEN_PORT}/api/events?token={ADMIN_PASSWORD}"
+    done_count = 0
+    total = len(account_map)
+
+    try:
+        with httpx.Client(timeout=None) as client:
+            with client.stream("GET", url) as resp:
+                for line in resp.iter_lines():
+                    if not line or not line.startswith("data: "):
+                        continue
+                    try:
+                        data = json.loads(line[6:])
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    etype = data.get("type", "")
+
+                    if etype == "batch_start":
+                        _aa_log(f"Batch started: {data.get('total', '?')} jobs, concurrency={data.get('concurrency', 1)}")
+
+                    elif etype == "batch_skipped":
+                        _aa_log(f"Skipped {data.get('count', 0)} accounts (already OK)")
+
+                    elif etype == "job_start":
+                        email = data.get("email", "?")
+                        proxy = data.get("proxy_used", "") or "direct"
+                        if "@" in proxy:
+                            proxy = proxy.split("@")[-1]
+                        idx = data.get("index", 0) + 1
+                        _aa_log(f"  {_CYAN}[{idx}/{total}]{_NC} {email} {_DIM}(proxy: {proxy}){_NC}")
+
+                    elif etype == "job_log":
+                        provider = data.get("provider", "")
+                        step = data.get("step", "")
+                        msg = data.get("message", "")
+                        _aa_log(f"    {_DIM}[{provider}:{step}]{_NC} {msg}")
+
+                    elif etype == "provider_done":
+                        email = data.get("email", "?")
+                        provider = data.get("provider", "")
+                        ok = data.get("success", False)
+                        color = _GREEN if ok else _RED
+                        status = "OK" if ok else "FAIL"
+                        _aa_log(f"    {color}[{provider}] {status}{_NC}")
+
+                    elif etype == "import_ok":
+                        provider = data.get("provider", "")
+                        _aa_log(f"    {_GREEN}[{provider}] imported{_NC}")
+
+                    elif etype == "import_error":
+                        email = data.get("email", "?")
+                        provider = data.get("provider", "")
+                        error = data.get("error", "unknown")
+                        _aa_log(f"    {_RED}[{provider}] import FAILED: {error}{_NC}")
+                        pw = account_map.get(email, "?")
+                        _aa_log_fail(email, pw, f"{provider}: {error}")
+
+                    elif etype == "job_done":
+                        email = data.get("email", "?")
+                        status = data.get("status", "?")
+                        done_count += 1
+                        color = _GREEN if status == "success" else _RED
+                        _aa_log(f"  {color}[{done_count}/{total}] {email} — {status.upper()}{_NC}")
+                        if status == "failed":
+                            errors = data.get("errors", {})
+                            for prov, err in errors.items():
+                                pw = account_map.get(email, "?")
+                                _aa_log_fail(email, pw, f"{prov}: {err}")
+
+                    elif etype == "job_cancelled":
+                        email = data.get("email", "?")
+                        done_count += 1
+                        _aa_log(f"  {_YELLOW}[{done_count}/{total}] {email} — CANCELLED{_NC}")
+
+                    elif etype == "batch_done":
+                        ok = data.get("success", 0)
+                        fail = data.get("failed", 0)
+                        cancelled = data.get("cancelled", 0)
+                        _aa_log(f"\n  {_WHITE}Batch complete: {_GREEN}{ok} OK{_NC}, {_RED}{fail} failed{_NC}, {_YELLOW}{cancelled} cancelled{_NC}")
+                        return
+
+    except KeyboardInterrupt:
+        print(f"\n  {_DIM}Detached from progress stream. Batch continues on server.{_NC}")
+        print(f"  Re-attach: {CMD} addaccounts status")
+        print(f"  Stop:      {CMD} addaccounts stop")
+    except Exception as e:
+        _aa_log(f"SSE error: {e}")
+
+
+def cmd_addaccounts_add():
+    """Interactive batch add accounts."""
+    print()
+    print(f"  {_CYAN}{'='*50}{_NC}")
+    print(f"  {_WHITE}UnifiedMe — Add Accounts{_NC}")
+    print(f"  {_CYAN}{'='*50}{_NC}")
+
+    # ── Check server ──
+    print(f"\n  Checking proxy server...", end=" ", flush=True)
+    if not _aa_check_server():
+        print(f"{_RED}NOT RUNNING{_NC}")
+        print(f"\n  Start the proxy first:")
+        print(f"    {CMD} start")
+        print(f"    {CMD} run")
+        sys.exit(1)
+    print(f"{_GREEN}OK{_NC}")
+
+    # ── Show license ──
+    lic = _aa_get_license_info()
+    if lic:
+        print(f"\n  {_DIM}License:{_NC}  {lic['key'][:20]}...")
+        print(f"  {_DIM}Owner:{_NC}    {lic['owner']}")
+        print(f"  {_DIM}Tier:{_NC}     {lic['tier']}")
+        print(f"  {_DIM}Max Acct:{_NC} {lic['max_accounts']}")
+    else:
+        print(f"\n  {_RED}No valid license found.{_NC}")
+        print(f"  Run '{CMD} start' or '{CMD} run' to set up license first.")
+        sys.exit(1)
+
+    # ── Show current account stats ──
+    stats = _get_account_stats()
+    if stats:
+        print(f"\n  {_DIM}Current accounts:{_NC} KR:{stats['kr']}  CB:{stats['cb']}  WS:{stats['ws']}  GL:{stats['gl']}  Total:{stats['total']}")
+
+    # ── Step 1: Proxy ──
+    print(f"\n  {_CYAN}--- Step 1: Proxy ---{_NC}")
+    proxy_file = _aa_prompt("Proxy file (.txt) or 'n' for direct", "n")
+
+    proxies = []
+    proxy_method = "direct"
+    if proxy_file.lower() != "n":
+        raw = _aa_load_file(proxy_file, "proxies")
+        if raw:
+            print(f"\n  Loaded {len(raw)} proxies. Checking...", flush=True)
+            results = _aa_check_proxies(raw)
+            alive = [r for r in results if r["ok"]]
+            dead = [r for r in results if not r["ok"]]
+            print(f"  {_GREEN}Active: {len(alive)}{_NC}  |  {_RED}Dead: {len(dead)}{_NC}")
+            for r in alive:
+                p_display = r["url"].split("@")[-1] if "@" in r["url"] else r["url"]
+                print(f"    {_GREEN}[OK]{_NC}   {p_display} -> {r['ip']}")
+            for r in dead:
+                p_display = r["url"].split("@")[-1] if "@" in r["url"] else r["url"]
+                print(f"    {_RED}[FAIL]{_NC} {p_display} — {r['ip']}")
+
+            if alive:
+                proxies = [r["url"] for r in alive]
+                print(f"\n  Proxy method:")
+                print(f"    1. sticky")
+                print(f"    2. smart_rotate (recommended)")
+                choice = _aa_prompt("Choose [1-2]", "2")
+                proxy_method = "smart_rotate" if choice == "2" else "sticky"
+            else:
+                print(f"  {_YELLOW}No working proxies. Using direct.{_NC}")
+        else:
+            print(f"  No proxies loaded. Using direct.")
+
+    if proxies:
+        print(f"\n  {_DIM}Proxy: {proxy_method} ({len(proxies)} active){_NC}")
+    else:
+        print(f"\n  {_DIM}Proxy: direct{_NC}")
+
+    print(f"  {_DIM}Note: Proxy rotation uses server's batch proxy settings.{_NC}")
+
+    # ── Step 2: Accounts ──
+    print(f"\n  {_CYAN}--- Step 2: Accounts ---{_NC}")
+    while True:
+        account_file = _aa_prompt("Account file (.txt, email:password)")
+        if not account_file:
+            print("  Required.")
+            continue
+        raw_lines = _aa_load_file(account_file, "accounts")
+        accounts = []
+        for line in raw_lines:
+            if ":" in line:
+                parts = line.split(":", 1)
+                accounts.append((parts[0].strip(), parts[1].strip()))
+        if accounts:
+            break
+        print(f"  {_RED}No valid email:password pairs found.{_NC}")
+
+    print(f"\n  {_WHITE}Loaded {len(accounts)} accounts{_NC}")
+    for i, (email, _) in enumerate(accounts[:5], 1):
+        print(f"    {i}. {email}")
+    if len(accounts) > 5:
+        print(f"    {_DIM}... and {len(accounts) - 5} more{_NC}")
+
+    # ── Step 3: Providers ──
+    print(f"\n  {_CYAN}--- Step 3: Providers ---{_NC}")
+    providers = []
+    if _aa_yn("Kiro?", False):
+        providers.append("kiro")
+    if _aa_yn("CodeBuddy?", True):
+        providers.append("codebuddy")
+    if _aa_yn("WaveSpeed?", False):
+        providers.append("wavespeed")
+    gumloop = _aa_yn("Gumloop?", False)
+    if gumloop:
+        providers.append("gumloop")
+
+    if not providers:
+        print(f"  {_RED}Select at least one provider.{_NC}")
+        sys.exit(1)
+
+    # ── Step 4: MCP ──
+    mcp_urls = []
+    if gumloop:
+        print(f"\n  {_CYAN}--- Step 4: MCP Server ---{_NC}")
+        mcp_input = _aa_prompt("MCP URL(s), comma-separated, or 'n' to skip", "n")
+        if mcp_input.lower() != "n":
+            mcp_urls = [u.strip() for u in mcp_input.split(",") if u.strip()]
+            if mcp_urls:
+                for u in mcp_urls:
+                    print(f"    - {u}")
+
+    # ── Step 5: Concurrency ──
+    print(f"\n  {_CYAN}--- Step 5: Parallel ---{_NC}")
+    concurrency = int(_aa_prompt("Parallel Camoufox instances", "1"))
+    concurrency = max(1, min(10, concurrency))
+
+    # ── Summary ──
+    print(f"\n  {_CYAN}{'='*50}{_NC}")
+    print(f"  {_WHITE}SUMMARY{_NC}")
+    print(f"  {_CYAN}{'='*50}{_NC}")
+    print(f"  Accounts:    {_WHITE}{len(accounts)}{_NC}")
+    print(f"  Providers:   {_WHITE}{', '.join(providers)}{_NC}")
+    if proxies:
+        print(f"  Proxy:       {_WHITE}{proxy_method} ({len(proxies)}){_NC}")
+    else:
+        print(f"  Proxy:       {_DIM}direct{_NC}")
+    if mcp_urls:
+        print(f"  MCP servers: {_WHITE}{len(mcp_urls)}{_NC}")
+    else:
+        print(f"  MCP servers: {_DIM}none{_NC}")
+    print(f"  Concurrency: {_WHITE}{concurrency}{_NC}")
+    print(f"  Log:         {_DIM}{_AA_LOG}{_NC}")
+    print(f"  Failed:      {_DIM}{_AA_FAIL}{_NC}")
+    print(f"  {_CYAN}{'='*50}{_NC}")
+
+    if not _aa_yn("Start batch?", True):
+        print("  Cancelled.")
+        return
+
+    # ── Init logs ──
+    with open(_AA_LOG, "a", encoding="utf-8") as f:
+        f.write(f"\n{'='*60}\n")
+        f.write(f"[{_aa_ts()}] Batch: {len(accounts)} accounts, providers={providers}\n")
+        f.write(f"[{_aa_ts()}] Proxy: {proxy_method} ({len(proxies)}), MCP: {len(mcp_urls)}, Concurrency: {concurrency}\n")
+
+    # ── Start ──
+    print()
+    account_lines = [f"{e}:{p}" for e, p in accounts]
+    account_map = {e: p for e, p in accounts}
+
+    try:
+        result = _aa_api("POST", "/batch/start", {
+            "accounts": account_lines,
+            "providers": providers,
+            "headless": True,
+            "concurrency": concurrency,
+            "mcp_urls": mcp_urls,
+        })
+        queued = result.get("count", 0)
+        _aa_log(f"Queued {queued} jobs")
+    except RuntimeError as e:
+        _aa_log(f"{_RED}[ERROR] {e}{_NC}")
+        sys.exit(1)
+
+    # ── Stream ──
+    _aa_stream_progress(account_map)
+
+    # ── Done ──
+    fail_count = 0
+    if _AA_FAIL.exists():
+        fail_count = len([l for l in _AA_FAIL.read_text(encoding="utf-8").strip().splitlines() if l.strip()])
+
+    print()
+    print(f"  {_CYAN}{'='*50}{_NC}")
+    if fail_count:
+        print(f"  {_RED}Failed: {_AA_FAIL} ({fail_count} entries){_NC}")
+    else:
+        print(f"  {_GREEN}No failures!{_NC}")
+    print(f"  {_DIM}Full log: {_AA_LOG}{_NC}")
+    print(f"  {_CYAN}{'='*50}{_NC}")
+
+
+def cmd_addaccounts_status():
+    """Attach to running batch progress stream."""
+    print(f"\n  Connecting to batch progress...", end=" ", flush=True)
+    if not _aa_check_server():
+        print(f"{_RED}Server not running{_NC}")
+        sys.exit(1)
+
+    try:
+        status = _aa_api("GET", "/batch/status", timeout=5)
+    except Exception:
+        print(f"{_RED}Failed{_NC}")
+        sys.exit(1)
+
+    running = status.get("running", False)
+    jobs = status.get("jobs", [])
+    total = len(jobs)
+    done = sum(1 for j in jobs if j.get("status") in ("success", "failed", "cancelled"))
+
+    if not running and done == total and total > 0:
+        print(f"{_YELLOW}Batch already finished{_NC}")
+        ok = sum(1 for j in jobs if j.get("status") == "success")
+        fail = sum(1 for j in jobs if j.get("status") == "failed")
+        print(f"  Result: {_GREEN}{ok} OK{_NC}, {_RED}{fail} failed{_NC}, total {total}")
+        return
+    elif not running and total == 0:
+        print(f"{_DIM}No batch running{_NC}")
+        return
+
+    print(f"{_GREEN}Connected{_NC} ({done}/{total} done)")
+    print(f"  {_DIM}Press Ctrl+C to detach (batch keeps running){_NC}\n")
+
+    # Build account map from jobs for fail logging
+    account_map = {j.get("email", "?"): "?" for j in jobs}
+    _aa_stream_progress(account_map)
+
+
+def cmd_addaccounts_stop():
+    """Force stop running batch."""
+    print(f"\n  Stopping batch...", end=" ", flush=True)
+    if not _aa_check_server():
+        print(f"{_RED}Server not running{_NC}")
+        sys.exit(1)
+
+    try:
+        _aa_api("POST", "/batch/cancel")
+        print(f"{_GREEN}Cancelled{_NC}")
+        print(f"  Running jobs will finish, queued jobs will be skipped.")
+    except Exception as e:
+        print(f"{_RED}Failed: {e}{_NC}")
+
+
+def cmd_addaccounts():
+    """Route addaccounts subcommands."""
+    args = sys.argv[2:]
+    subcmd = args[0] if args else ""
+
+    subcmds = {
+        "add": cmd_addaccounts_add,
+        "status": cmd_addaccounts_status,
+        "stop": cmd_addaccounts_stop,
+    }
+
+    if subcmd in subcmds:
+        subcmds[subcmd]()
+    else:
+        print(f"\n  Usage:")
+        print(f"    {CMD} addaccounts add      Batch add accounts (interactive)")
+        print(f"    {CMD} addaccounts status   Show batch progress (real-time)")
+        print(f"    {CMD} addaccounts stop     Force stop running batch")
+
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -713,6 +1201,7 @@ def cli_main():
         "fix": cmd_fix,
         "kill-port": cmd_kill_port,
         "logout": cmd_logout,
+        "addaccounts": cmd_addaccounts,
     }
 
     if cmd in ("-h", "--help", "help"):
