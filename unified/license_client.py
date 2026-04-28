@@ -619,8 +619,8 @@ async def push_sync(
     total_upserted = 0
     total_deleted = 0
 
-    # Push accounts in chunks of 50 to avoid D1 "Too many API requests" error
-    CHUNK_SIZE = 50
+    # Push accounts in chunks of 30 to avoid D1 "Too many API requests" error
+    CHUNK_SIZE = 30
     if accounts:
         for i in range(0, len(accounts), CHUNK_SIZE):
             chunk = accounts[i:i + CHUNK_SIZE]
@@ -640,21 +640,22 @@ async def push_sync(
                 if proxies:
                     payload["proxies"] = proxies
 
-            result = await _api_post("/api/sync/push", payload, timeout=30)
+            result = await _api_post("/api/sync/push", payload, timeout=60)
             if result.get("error"):
                 if i == 0:
                     _usage_buffer.extend(logs)
                     _alert_buffer.extend(alerts)
                 log.warning("Sync push chunk %d-%d failed: %s", i, i + len(chunk), result["error"])
-                return result
+                # Continue with next chunk instead of failing entirely
+                continue
 
             total_upserted += result.get("accounts_upserted", 0)
             total_deleted += result.get("accounts_deleted", 0)
 
-            # Small delay between chunks to avoid rate limit
+            # Delay between chunks
             if i + CHUNK_SIZE < len(accounts):
                 import asyncio as _aio
-                await _aio.sleep(0.5)
+                await _aio.sleep(1)
     else:
         # No accounts — just push logs/alerts
         payload = {
@@ -670,7 +671,7 @@ async def push_sync(
         if proxies:
             payload["proxies"] = proxies
 
-        result = await _api_post("/api/sync/push", payload, timeout=30)
+        result = await _api_post("/api/sync/push", payload, timeout=60)
         if result.get("error"):
             _usage_buffer.extend(logs)
             _alert_buffer.extend(alerts)

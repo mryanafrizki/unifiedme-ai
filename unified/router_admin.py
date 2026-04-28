@@ -415,19 +415,35 @@ async def restore_account(account_id: int, request: Request, _: bool = Depends(v
 
 @router.post("/accounts/sync-d1/push")
 async def sync_d1_push(request: Request, _: bool = Depends(verify_admin)):
-    """Step 1: Push all local accounts to D1."""
+    """Step 1: Push all local accounts to D1 (chunked, with progress)."""
     from . import license_client
     if not license_client.is_licensed():
         return JSONResponse({"error": "Not licensed"}, status_code=400)
 
     local_accounts = await db.get_accounts()
-    push_result = await license_client.push_sync(accounts=local_accounts)
-    pushed = push_result.get("accounts_upserted", 0) if not push_result.get("error") else 0
 
-    if push_result.get("error"):
-        return JSONResponse({"error": f"Push failed: {push_result['error']}"}, status_code=502)
+    # Push in smaller chunks to avoid D1 timeout
+    CHUNK = 30
+    total_pushed = 0
+    errors = []
+    for i in range(0, len(local_accounts), CHUNK):
+        chunk = local_accounts[i:i + CHUNK]
+        try:
+            result = await license_client.push_sync(accounts=chunk)
+            if result.get("error"):
+                errors.append(f"Chunk {i}-{i+len(chunk)}: {result['error']}")
+            else:
+                total_pushed += result.get("accounts_upserted", 0)
+        except Exception as e:
+            errors.append(f"Chunk {i}-{i+len(chunk)}: {e}")
+        # Small delay between chunks
+        import asyncio
+        await asyncio.sleep(0.3)
 
-    return {"ok": True, "pushed": pushed, "total_local": len(local_accounts)}
+    if errors and total_pushed == 0:
+        return JSONResponse({"error": f"Push failed: {'; '.join(errors[:3])}"}, status_code=502)
+
+    return {"ok": True, "pushed": total_pushed, "total_local": len(local_accounts), "errors": errors[:5] if errors else []}
 
 
 @router.get("/accounts/sync-d1/preview")

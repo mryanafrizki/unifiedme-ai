@@ -3131,10 +3131,21 @@ async function syncFromD1() {
 
   let pushData;
   try {
-    pushData = await apiFetch('/api/accounts/sync-d1/push', { method: 'POST' });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+    const resp = await fetch('/api/accounts/sync-d1/push', {
+      method: 'POST',
+      headers: adminHeaders(),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    pushData = await resp.json();
+    if (!resp.ok) throw new Error(pushData.error || 'HTTP ' + resp.status);
   } catch (e) {
+    const msg = e.name === 'AbortError' ? 'Push timed out (>2min). D1 may be slow. Try again.' : e.message;
     _syncModal(
-      _syncStep('&#x1F4E4;', 'Push failed: ' + e.message, 'error') +
+      _syncStep('&#x1F4E4;', 'Push failed: ' + msg, 'error') +
+      (pushData && pushData.errors ? '<div style="margin:.5rem 0;font-size:.8rem;color:var(--text-muted)">' + pushData.errors.join('<br>') + '</div>' : '') +
       '<div style="margin-top:1rem;text-align:right"><button class="btn" onclick="closeSyncModal()">Close</button></div>'
     );
     btn.disabled = false;
