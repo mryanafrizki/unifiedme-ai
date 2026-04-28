@@ -749,6 +749,7 @@ a:hover{text-decoration:underline}
         <button class="btn btn-sm" id="approve-all-btn" onclick="approveAllAccounts()">&#x2705; Approve All</button>
         <button class="btn btn-sm btn-danger" id="delete-fix-btn" onclick="deleteFixAccounts()">&#x1f5d1; Delete Fix</button>
         <button class="btn btn-sm" id="refresh-accounts-btn">&#x21bb; Refresh</button>
+        <button class="btn btn-sm" id="sync-d1-btn" onclick="syncFromD1()" style="background:#6c8aff;color:#fff">&#x2601; Sync D1</button>
       </div>
     </div>
 
@@ -3078,6 +3079,83 @@ async function deleteFixAccounts() {
     toast('Delete fix failed: ' + e.message, 'error');
   }
   btn.disabled = false;
+}
+
+async function syncFromD1() {
+  const btn = document.getElementById('sync-d1-btn');
+  const origText = btn.innerHTML;
+
+  // Step 1: Push local to D1
+  btn.disabled = true;
+  btn.innerHTML = '&#x2601; Pushing local → D1...';
+  
+  let pushData;
+  try {
+    pushData = await apiFetch('/api/accounts/sync-d1/push', { method: 'POST' });
+  } catch (e) {
+    toast('Push to D1 failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = origText;
+    return;
+  }
+
+  // Step 2: Preview what D1 has (before pulling)
+  btn.innerHTML = '&#x2601; Checking D1...';
+  
+  let previewData;
+  try {
+    previewData = await apiFetch('/api/accounts/sync-d1/preview', { method: 'GET' });
+  } catch (e) {
+    toast('D1 preview failed: ' + e.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = origText;
+    return;
+  }
+
+  // Step 3: Show confirm dialog with data comparison
+  const local = previewData.local || {};
+  const d1 = previewData.d1 || {};
+  const newAccounts = previewData.new_from_d1 || 0;
+
+  let msg = `📤 Pushed ${pushData.pushed || 0} accounts to D1\n\n`;
+  msg += `Current Local:\n`;
+  msg += `  KR: ${local.kr}  CB: ${local.cb}  WS: ${local.ws}  GL: ${local.gl}  Total: ${local.total}\n\n`;
+  msg += `D1 Database:\n`;
+  msg += `  KR: ${d1.kr}  CB: ${d1.cb}  WS: ${d1.ws}  GL: ${d1.gl}  Total: ${d1.total}\n\n`;
+  
+  if (newAccounts > 0) {
+    msg += `🆕 ${newAccounts} new account(s) from other devices will be added.\n\n`;
+    msg += `Pull ${newAccounts} new accounts from D1?`;
+  } else {
+    msg += `✅ No new accounts from other devices.\n`;
+    msg += `Local is up to date.`;
+    toast(msg.replace(/\n/g, ' | '), 'success');
+    btn.disabled = false;
+    btn.innerHTML = origText;
+    await loadAccounts();
+    return;
+  }
+
+  if (!confirm(msg)) {
+    toast('Sync cancelled by user', 'info');
+    btn.disabled = false;
+    btn.innerHTML = origText;
+    return;
+  }
+
+  // Step 4: Pull new accounts
+  btn.innerHTML = '&#x2601; Pulling new accounts...';
+  try {
+    const pullData = await apiFetch('/api/accounts/sync-d1/pull', { method: 'POST' });
+    const result = `D1 Sync complete! Added ${pullData.new_accounts || 0} new accounts. KR:${pullData.kr} CB:${pullData.cb} WS:${pullData.ws} GL:${pullData.gl} Total:${pullData.total}`;
+    toast(result, 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Pull from D1 failed: ' + e.message, 'error');
+  }
+  
+  btn.disabled = false;
+  btn.innerHTML = origText;
 }
 
 // ── Models ──

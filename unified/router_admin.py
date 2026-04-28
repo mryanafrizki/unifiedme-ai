@@ -385,6 +385,89 @@ async def restore_account(account_id: int, request: Request, _: bool = Depends(v
     return {"ok": True}
 
 
+@router.post("/accounts/sync-d1/push")
+async def sync_d1_push(request: Request, _: bool = Depends(verify_admin)):
+    """Step 1: Push all local accounts to D1."""
+    from . import license_client
+    if not license_client.is_licensed():
+        return JSONResponse({"error": "Not licensed"}, status_code=400)
+
+    local_accounts = await db.get_accounts()
+    push_result = await license_client.push_sync(accounts=local_accounts)
+    pushed = push_result.get("accounts_upserted", 0) if not push_result.get("error") else 0
+
+    if push_result.get("error"):
+        return JSONResponse({"error": f"Push failed: {push_result['error']}"}, status_code=502)
+
+    return {"ok": True, "pushed": pushed, "total_local": len(local_accounts)}
+
+
+@router.get("/accounts/sync-d1/preview")
+async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
+    """Step 2: Preview — compare local vs D1, show what would change."""
+    from . import license_client
+    if not license_client.is_licensed():
+        return JSONResponse({"error": "Not licensed"}, status_code=400)
+
+    # Get local counts
+    local_accounts = await db.get_accounts()
+    local_emails = {a["email"] for a in local_accounts}
+    l_kr = sum(1 for a in local_accounts if a.get("kiro_status") == "ok")
+    l_cb = sum(1 for a in local_accounts if a.get("cb_status") == "ok")
+    l_ws = sum(1 for a in local_accounts if a.get("ws_status") == "ok")
+    l_gl = sum(1 for a in local_accounts if a.get("gl_status") == "ok")
+
+    # Get D1 counts
+    d1_result = await license_client._api_get("/api/sync/pull", {
+        "license_key": license_client.LICENSE_KEY,
+        "device_fingerprint": license_client._device_fingerprint,
+    })
+    if d1_result.get("error"):
+        return JSONResponse({"error": f"D1 pull failed: {d1_result['error']}"}, status_code=502)
+
+    d1_accounts = d1_result.get("accounts", [])
+    d_kr = sum(1 for a in d1_accounts if a.get("kiro_status") == "ok")
+    d_cb = sum(1 for a in d1_accounts if a.get("cb_status") == "ok")
+    d_ws = sum(1 for a in d1_accounts if a.get("ws_status") == "ok")
+    d_gl = sum(1 for a in d1_accounts if a.get("gl_status") == "ok")
+
+    # Count new accounts (in D1 but not local)
+    new_from_d1 = sum(1 for a in d1_accounts
+                      if a.get("email") and a["email"] not in local_emails
+                      and a.get("status") != "deleted")
+
+    return {
+        "ok": True,
+        "local": {"kr": l_kr, "cb": l_cb, "ws": l_ws, "gl": l_gl, "total": len(local_accounts)},
+        "d1": {"kr": d_kr, "cb": d_cb, "ws": d_ws, "gl": d_gl, "total": len(d1_accounts)},
+        "new_from_d1": new_from_d1,
+    }
+
+
+@router.post("/accounts/sync-d1/pull")
+async def sync_d1_pull(request: Request, _: bool = Depends(verify_admin)):
+    """Step 3: Pull new accounts from D1 (user confirmed)."""
+    from . import license_client
+    if not license_client.is_licensed():
+        return JSONResponse({"error": "Not licensed"}, status_code=400)
+
+    pull_result = await license_client.pull_new_accounts_only()
+    new_accounts = pull_result.get("new_accounts", 0)
+
+    all_accounts = await db.get_accounts()
+    kr = sum(1 for a in all_accounts if a.get("kiro_status") == "ok")
+    cb = sum(1 for a in all_accounts if a.get("cb_status") == "ok")
+    ws = sum(1 for a in all_accounts if a.get("ws_status") == "ok")
+    gl = sum(1 for a in all_accounts if a.get("gl_status") == "ok")
+
+    return {
+        "ok": True,
+        "new_accounts": new_accounts,
+        "total": len(all_accounts),
+        "kr": kr, "cb": cb, "ws": ws, "gl": gl,
+    }
+
+
 @router.get("/accounts/refresh-credits")
 async def refresh_all_credits_get(request: Request, _: bool = Depends(verify_admin)):
     """Refresh credits for all active accounts (GET)."""

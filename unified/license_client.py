@@ -28,7 +28,7 @@ log = logging.getLogger("unified.license_client")
 CENTRAL_API_URL = os.getenv("CENTRAL_API_URL", "https://unified-api.roubot71.workers.dev")
 LICENSE_KEY = os.getenv("LICENSE_KEY", "")
 DEVICE_NAME = os.getenv("DEVICE_NAME", platform.node() or "unknown")
-SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "300"))  # 5 minutes
+SYNC_INTERVAL = int(os.getenv("SYNC_INTERVAL", "1800"))  # 30 minutes (safety net only)
 
 # ─── State ───────────────────────────────────────────────────────────────────
 
