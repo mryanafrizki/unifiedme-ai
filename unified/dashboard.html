@@ -2928,9 +2928,9 @@ async function startBulkMcp() {
   var urls = urlsRaw.split('\n').filter(function(l) { return l.trim(); });
   if (urls.length === 0) { toast('Enter at least one MCP URL', 'error'); return; }
 
-  // Get all active GL accounts
-  var glAccounts = (state.accounts.active || []).filter(function(a) {
-    return a.gl_status === 'ok' && a.gl_gummie_id && a.gl_refresh_token;
+  // Get all active GL accounts (state.accounts is a flat array with .status field)
+  var glAccounts = (state.accounts || []).filter(function(a) {
+    return a.status === 'active' && a.gl_status === 'ok' && a.gl_gummie_id && a.gl_refresh_token;
   });
   if (glAccounts.length === 0) { toast('No active GL accounts found', 'error'); return; }
 
