@@ -313,17 +313,27 @@ async def proxy_chat_completions(
     mcp_rules = (
         "You are a coding assistant. You have MCP tools connected to the user's LOCAL workspace.\n\n"
         "MANDATORY RULES (never violate):\n"
-        "1. For ALL file operations: ONLY use MCP tools (read_file, write_file, edit_file, bash, list_directory, glob, grep, download_image).\n"
-        "2. NEVER use sandbox_python, sandbox_file, sandbox_download, or ANY sandbox tool. They are on a remote server, NOT the user's machine.\n"
+        "1. For ALL file operations: ONLY use MCP tools. NEVER use sandbox_python, sandbox_file, sandbox_download, or ANY sandbox tool.\n"
+        "2. Sandbox tools run on a remote server, NOT the user's machine. MCP tools operate on the user's LOCAL filesystem.\n"
         "3. ALL output files (code, html, text) → write_file.\n"
         "4. ALL shell commands → bash.\n"
         "5. IMAGE WORKFLOW (critical):\n"
         "   a. Generate image with image_generator tool → you get a response with storage_link (gl:// URL)\n"
-        "   b. Immediately call download_image with the EXACT gl:// URL and a filename\n"
-        "   c. Example: download_image(url=\"gl://uid-xxx/custom_agent_interactions/.../image.png\", filename=\"output.png\")\n"
+        "   b. Immediately call download_file with the EXACT gl:// URL and a filename\n"
+        "   c. Example: download_file(url=\"gl://uid-xxx/custom_agent_interactions/.../image.png\", filename=\"output.png\")\n"
         "   d. NEVER use sandbox_download. NEVER convert gl:// URLs to gumloop.com/files/ URLs.\n"
-        "   e. The download_image MCP tool handles gl:// authentication internally.\n"
-        "6. Respond in the same language as the user.\n"
+        "   e. The download_file MCP tool handles gl:// authentication internally.\n"
+        "6. Respond in the same language as the user.\n\n"
+        "AVAILABLE MCP TOOLS:\n"
+        "- File: read_file, write_file, edit_file, delete_file, rename_file, copy_file, file_info\n"
+        "- Directory: list_directory, tree, create_directory\n"
+        "- Search: glob_search, grep\n"
+        "- Shell: bash, run_python\n"
+        "- Git: git (run any git subcommand)\n"
+        "- Network: http_request, download_file (supports gl:// and http/https)\n"
+        "- Archive: zip_files, unzip_file\n"
+        "- Text: diff, patch\n"
+        "- Research: search_docs (library documentation via Context7), web_search (DuckDuckGo), fetch_url (read web pages), search_github_code (grep.app)\n"
     )
     full_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
 
@@ -514,14 +524,25 @@ def _stream_gumloop(
                         _stream_state["error"] = f"CREDIT_EXHAUSTED: {error_msg}"
                         from . import database as _db
                         try:
+                            acct_id = _stream_state.get("_account_id", 0)
                             await _db.update_account(
-                                _stream_state.get("_account_id", 0),
+                                acct_id,
                                 gl_status="exhausted",
                                 gl_error=f"Credit exhausted: {error_msg[:150]}",
                             )
                             await _db.clear_sticky_account("max_gl")
                             log.warning("[GL stream] Account %s credit exhausted — marked immediately",
                                         _stream_state.get("_account_email", "?"))
+                            # Push to D1 immediately so sync doesn't overwrite
+                            try:
+                                from . import license_client as _lc
+                                updated_acct = await _db.get_account(acct_id)
+                                if updated_acct:
+                                    await _lc.push_account_now(updated_acct)
+                                    log.info("[GL stream] Pushed exhausted status to D1 for %s",
+                                             _stream_state.get("_account_email", "?"))
+                            except Exception:
+                                pass
                         except Exception as db_err:
                             log.warning("[GL stream] Failed to mark exhausted: %s", db_err)
                     else:
