@@ -2958,36 +2958,43 @@ async function startBulkMcp() {
 
   addMcpLog('Starting MCP binding for ' + glAccounts.length + ' accounts, ' + urls.length + ' MCP URL(s)...', 'var(--cyan)');
 
-  try {
-    var res = await apiFetch('/api/accounts/bind-mcp-bulk', {
-      method: 'POST',
-      body: JSON.stringify({ mcp_urls: urls, account_ids: glAccounts.map(function(a) { return a.id; }) }),
-    });
+  // Process accounts one-by-one for real-time progress
+  for (var i = 0; i < glAccounts.length; i++) {
+    var acct = glAccounts[i];
+    var email = acct.email || '?';
+    addMcpLog('[' + (i+1) + '/' + glAccounts.length + '] ' + email + '...', 'var(--text)');
 
-    var results = res.results || [];
-    for (var i = 0; i < results.length; i++) {
-      var r = results[i];
+    try {
+      var res = await apiFetch('/api/accounts/' + acct.id + '/bind-mcp', {
+        method: 'POST',
+        body: JSON.stringify({ mcp_urls: urls }),
+      });
+
       done++;
       var pct = Math.round((done / glAccounts.length) * 100);
       document.getElementById('mcp-prog-done').textContent = done;
       document.getElementById('mcp-prog-bar').style.width = pct + '%';
-      document.getElementById('mcp-prog-proxy').textContent = r.proxy ? 'via ' + r.proxy : 'direct';
 
-      if (r.ok) {
+      if (res.ok) {
         okCount++;
-        addMcpLog('[OK] ' + r.email + ' - attached ' + (r.attached || 0) + ' MCP(s)', 'var(--green)');
+        var proxy = res.proxy || 'direct';
+        document.getElementById('mcp-prog-proxy').textContent = 'via ' + proxy;
+        addMcpLog('  OK: attached ' + (res.attached || 0) + ' MCP(s) [' + proxy + ']', 'var(--green)');
       } else {
-        addMcpLog('[FAIL] ' + r.email + ' - ' + (r.error || 'unknown'), 'var(--red)');
+        addMcpLog('  FAIL: ' + (res.error || 'unknown'), 'var(--red)');
       }
+    } catch (e) {
+      done++;
+      var pct2 = Math.round((done / glAccounts.length) * 100);
+      document.getElementById('mcp-prog-done').textContent = done;
+      document.getElementById('mcp-prog-bar').style.width = pct2 + '%';
+      addMcpLog('  FAIL: ' + e.message, 'var(--red)');
     }
-
-    addMcpLog('', null);
-    addMcpLog('Done: ' + okCount + '/' + glAccounts.length + ' succeeded', okCount === glAccounts.length ? 'var(--green)' : 'var(--yellow)');
-    toast('MCP binding complete: ' + okCount + '/' + glAccounts.length, okCount > 0 ? 'success' : 'error');
-  } catch (e) {
-    addMcpLog('Error: ' + e.message, 'var(--red)');
-    toast('MCP binding failed: ' + e.message, 'error');
   }
+
+  addMcpLog('', null);
+  addMcpLog('Done: ' + okCount + '/' + glAccounts.length + ' succeeded', okCount === glAccounts.length ? 'var(--green)' : 'var(--yellow)');
+  toast('MCP binding complete: ' + okCount + '/' + glAccounts.length, okCount > 0 ? 'success' : 'error');
 
   document.getElementById('mcp-modal-start').disabled = false;
 }

@@ -459,12 +459,14 @@ async def bind_mcp_endpoint(account_id: int, request: Request, _: bool = Depends
 
     proxy_info = await db.get_proxy_for_batch()
     proxy_url = proxy_info["url"] if proxy_info else None
+    proxy_display = proxy_url.split("@")[-1] if proxy_url and "@" in proxy_url else (proxy_url or "direct")
 
     from .batch_runner import attach_mcp_to_account
     result = await attach_mcp_to_account(account, mcp_urls, proxy_url=proxy_url)
+    result["proxy"] = proxy_display
 
     if result.get("error"):
-        return JSONResponse({"error": result["error"]}, status_code=500)
+        return JSONResponse({"error": result["error"], "proxy": proxy_display}, status_code=500)
     return result
 
 
