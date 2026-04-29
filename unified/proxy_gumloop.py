@@ -325,7 +325,7 @@ async def proxy_chat_completions(
         "   e. The download_file MCP tool handles gl:// authentication internally.\n"
         "6. Respond in the same language as the user.\n\n"
         "AVAILABLE MCP TOOLS:\n"
-        "- File: read_file, write_file, edit_file, delete_file, rename_file, copy_file, file_info\n"
+        "- File: read_file, write_file, edit_file, delete_file, rename_file, copy_file, file_info, read_image\n"
         "- Directory: list_directory, tree, create_directory\n"
         "- Search: glob_search, grep\n"
         "- Shell: bash, run_python\n"
@@ -333,7 +333,8 @@ async def proxy_chat_completions(
         "- Network: http_request, download_file (supports gl:// and http/https)\n"
         "- Archive: zip_files, unzip_file\n"
         "- Text: diff, patch\n"
-        "- Research: search_docs (library documentation via Context7), web_search (DuckDuckGo), fetch_url (read web pages), search_github_code (grep.app)\n"
+        "- Research: search_docs (library documentation via Context7), web_search (DuckDuckGo), fetch_url (read web pages), search_github_code (grep.app)\n\n"
+        "IMPORTANT: To VIEW/ANALYZE images, use read_image (returns visual content you can see). Do NOT use read_file for images.\n"
     )
     full_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
 

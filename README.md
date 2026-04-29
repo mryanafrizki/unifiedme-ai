@@ -120,10 +120,93 @@ app/                  Browser automation (Camoufox + Playwright)
   providers/
     kiro.py           Kiro Google OAuth login
     codebuddy.py      CodeBuddy Google OAuth login
+mcp_server.py         MCP server for Gumloop (26 tools, FastMCP)
 VERSION               Current version
 install.sh            Auto-installer
 migrate_to_d1.py      SQLite -> D1 migration tool
 ```
+
+## MCP Server (Gumloop)
+
+Built-in MCP server that gives Gumloop AI agents full access to your local filesystem, shell, git, web search, and more. Powered by [FastMCP](https://gofastmcp.com).
+
+### Quick Start
+
+```bash
+python mcp_server.py
+```
+
+Interactive CLI will ask for:
+1. **API Key** — your unified proxy API key (`sk-xxx`) for `gl://` image downloads
+2. **Workspace** — folder the AI agent can read/write
+3. **Port** — default `9876`
+
+Then it auto-starts a [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) tunnel and prints the public URL. Add that URL to your Gumloop MCP settings.
+
+### CLI Options
+
+```bash
+# Interactive mode (default)
+python mcp_server.py
+
+# Direct mode (skip prompts)
+python mcp_server.py --workspace /path/to/project --api-key sk-xxx --port 9876
+
+# No tunnel (manual cloudflared)
+python mcp_server.py --workspace /path/to/project --no-tunnel --no-interactive
+
+# Switch workspace (just change the path)
+python mcp_server.py --workspace D:\PROJECT\another-project
+```
+
+### Available Tools (26)
+
+| Category | Tools | Description |
+|----------|-------|-------------|
+| **File** | `read_file`, `write_file`, `edit_file`, `delete_file`, `rename_file`, `copy_file`, `file_info`, `read_image` | Full file CRUD + image viewing |
+| **Directory** | `list_directory`, `tree`, `create_directory` | Browse and create folders |
+| **Search** | `glob_search`, `grep` | Find files by pattern, search content by regex |
+| **Shell** | `bash`, `run_python` | Execute shell commands and Python code |
+| **Git** | `git` | Run any git subcommand (status, diff, commit, etc.) |
+| **Network** | `http_request`, `download_file` | HTTP requests, download files (supports `gl://` URLs) |
+| **Archive** | `zip_files`, `unzip_file` | Create and extract zip archives |
+| **Text** | `diff`, `patch` | Unified diff between files, apply patches |
+| **Research** | `search_docs`, `web_search`, `fetch_url`, `search_github_code` | Library docs (Context7), web search (DuckDuckGo), read web pages, search GitHub code (grep.app) |
+
+### Architecture (with Gumloop)
+
+```
+Client (OpenCode / IDE)
+  → POST /v1/chat/completions (model: gl-claude-opus-4-7)
+  → Unified Proxy (:1430)
+    → Gumloop WebSocket (agent processes request)
+      → Agent calls MCP tools natively
+        → Cloudflare Tunnel (trycloudflare.com)
+          → MCP Server (:9876)
+            → Executes on local filesystem
+            → Returns results to agent
+      → Agent streams response
+    → Proxy converts WS events → OpenAI SSE
+  → Client receives streaming response
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PROXY_API_KEY` | (from config file) | Unified proxy API key for `gl://` downloads |
+| `PROXY_BASE_URL` | `http://127.0.0.1:1430` | Unified proxy URL |
+| `CONTEXT7_API_KEY` | (optional) | Context7 API key for higher rate limits on `search_docs` |
+
+### API Key Persistence
+
+The API key is saved to `unified/data/.mcp_api_key` after first input. Priority order:
+
+```
+--api-key CLI arg  >  PROXY_API_KEY env var  >  saved config file
+```
+
+---
 
 ## Version
 
