@@ -250,21 +250,29 @@ async def rename_item(request: Request, _: bool = Depends(verify_admin)):
 async def delete_item(request: Request, _: bool = Depends(verify_admin)):
     """Delete a file or directory. Body: {path}."""
     import shutil
-    body = await request.json()
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
     path_str = str(body.get("path", "")).strip()
     if not path_str:
         return JSONResponse({"error": "path is required"}, status_code=400)
-    p = Path(path_str).expanduser().resolve()
+    try:
+        p = Path(path_str).expanduser().resolve()
+    except Exception as e:
+        return JSONResponse({"error": f"Invalid path: {e}"}, status_code=400)
     if not p.exists():
-        return JSONResponse({"error": "Not found"}, status_code=404)
+        return JSONResponse({"error": f"Not found: {path_str}"}, status_code=404)
     try:
         if p.is_dir():
             shutil.rmtree(p)
         else:
             p.unlink()
         return {"ok": True, "deleted": str(p)}
+    except PermissionError:
+        return JSONResponse({"error": f"Permission denied: {p.name}"}, status_code=403)
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": f"Delete failed: {e}"}, status_code=500)
 
 
 @router.post("/copy")

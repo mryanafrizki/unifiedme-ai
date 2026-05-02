@@ -364,9 +364,10 @@ async function deleteSelected() {
   if (!confirm('Delete "' + selectedEntry.name + '"?')) return;
   try {
     var resp = await fetch('/api/explorer/delete', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntry.fullPath }) });
-    var data = await resp.json();
+    var text = await resp.text();
+    try { var data = JSON.parse(text); } catch(pe) { alert('Server error: ' + text.substring(0, 100)); return; }
     if (data.ok) { closePreview(); loadDir(currentPath); }
-    else alert('Error: ' + (data.error || ''));
+    else alert('Error: ' + (data.error || 'Unknown error'));
   } catch(e) { alert('Error: ' + e.message); }
 }
 
