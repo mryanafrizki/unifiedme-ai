@@ -1889,12 +1889,14 @@ def cmd_mcp():
         subcmds[subcmd]()
     else:
         print(f"\n  Usage:")
+        print(f"    {CMD} mcp apikey [key]              Show or set MCP API key")
         print(f"    {CMD} mcp add <path> [--port N]     Add MCP server for a folder")
-        print(f"    {CMD} mcp remove <id>               Remove MCP server")
+        print(f"    {CMD} mcp remove <id>               Remove MCP server instance")
         print(f"    {CMD} mcp start [id]                Start MCP server(s)")
         print(f"    {CMD} mcp stop [id]                 Stop MCP server(s)")
         print(f"    {CMD} mcp status                    Show all MCP instances")
         print(f"    {CMD} mcp list                      List MCP on Gumloop accounts")
+        print(f"    {CMD} mcp toggle                    Enable/disable MCP on GL account")
         print(f"    {CMD} mcp bind <url> [--account N]  Bind MCP URL to GL accounts")
         print(f"    {CMD} mcp delete <url>              Delete MCP URL from GL accounts")
 
