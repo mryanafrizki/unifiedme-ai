@@ -233,45 +233,46 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
         }
 
     # Start cloudflared as a detached process
+    # Key: stderr goes to a LOG FILE, not a pipe.
+    # If we use PIPE, the pipe closes when CLI exits → cloudflared gets broken pipe → crashes.
+    _TUNNEL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log_file_path = _TUNNEL_STATE_DIR / f"{target}.log"
+
     try:
+        log_fh = open(log_file_path, "w")
+
         if platform.system() == "Windows":
             proc = subprocess.Popen(
                 [cf_path, "tunnel", "--url", f"http://localhost:{actual_port}"],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=log_fh,
                 creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
             )
         else:
             proc = subprocess.Popen(
                 [cf_path, "tunnel", "--url", f"http://localhost:{actual_port}"],
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
+                stderr=log_fh,
                 start_new_session=True,  # Detach from parent — survives CLI exit
+                close_fds=True,
             )
 
-        # Read stderr in background thread to find tunnel URL
+        # Poll the log file for the tunnel URL (cloudflared writes it to stderr)
         tunnel_url = ""
-        lines_buf: list[str] = []
-
-        def _read_stderr():
-            nonlocal tunnel_url
+        for _ in range(50):  # 25 seconds max (50 * 0.5s)
+            time.sleep(0.5)
+            if proc.poll() is not None:
+                break  # Process died
             try:
-                for raw_line in proc.stderr:  # type: ignore
-                    line = raw_line.decode("utf-8", errors="replace")
-                    lines_buf.append(line)
-                    match = re.search(r'(https://[a-z0-9\-]+\.trycloudflare\.com)', line)
-                    if match:
-                        tunnel_url = match.group(1)
-                        break
+                content = log_file_path.read_text(errors="replace")
+                match = re.search(r'(https://[a-z0-9\-]+\.trycloudflare\.com)', content)
+                if match:
+                    tunnel_url = match.group(1)
+                    break
             except Exception:
                 pass
 
-        reader = threading.Thread(target=_read_stderr, daemon=True)
-        reader.start()
-        reader.join(timeout=25)
-
         if tunnel_url:
-            # Persist state to disk
             state = {
                 "pid": proc.pid,
                 "url": tunnel_url,
@@ -284,8 +285,8 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
             return {"ok": True, "url": tunnel_url, "port": actual_port, "pid": proc.pid}
         else:
             if proc.poll() is not None:
-                stderr_text = "\n".join(lines_buf)[:500]
-                return {"ok": False, "error": f"cloudflared exited: {stderr_text}"}
+                content = log_file_path.read_text(errors="replace")[:500]
+                return {"ok": False, "error": f"cloudflared exited: {content}"}
 
             # Process running but no URL yet — save PID anyway
             _save_tunnel_state(target, {
