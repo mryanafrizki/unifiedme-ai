@@ -839,6 +839,8 @@ def _aa_api(method: str, path: str, json_body=None, timeout: float = 30) -> dict
     with httpx.Client(timeout=timeout) as client:
         if method == "GET":
             resp = client.get(url, headers=headers)
+        elif method == "DELETE":
+            resp = client.delete(url, headers=headers)
         else:
             resp = client.post(url, headers=headers, json=json_body or {})
         if resp.status_code != 200:
