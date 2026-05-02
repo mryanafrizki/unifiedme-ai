@@ -50,7 +50,7 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 .msg{margin-bottom:1.5rem;max-width:900px;margin-left:auto;margin-right:auto}
 .msg-user{display:flex;justify-content:flex-end}
 .msg-user .msg-bubble{background:var(--accent-dim);color:#fff;border-radius:var(--radius) var(--radius) 4px var(--radius);padding:.75rem 1rem;max-width:75%;font-size:.9rem;line-height:1.6}
-.msg-assistant .msg-bubble{background:var(--surface2);border:1px solid var(--border);border-radius:4px var(--radius) var(--radius) var(--radius);padding:1rem 1.25rem;font-size:.9rem;line-height:1.7}
+.msg-assistant .msg-bubble{background:var(--surface2);border:1px solid var(--border);border-radius:4px var(--radius) var(--radius) var(--radius);padding:1rem 1.25rem;font-size:.9rem;line-height:1.7;overflow:hidden}
 .msg-thinking{margin-bottom:.5rem}
 .msg-thinking .msg-bubble{background:var(--thinking-bg);border:1px solid var(--thinking-border);border-radius:var(--radius-sm);padding:.6rem 1rem;font-size:.82rem;color:var(--text-dim);font-style:italic;position:relative}
 .msg-thinking .msg-bubble::before{content:'thinking';position:absolute;top:-.5rem;left:.75rem;background:var(--thinking-bg);padding:0 .4rem;font-size:.65rem;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em}
@@ -84,16 +84,16 @@ details[open] .thinking-header::before{transform:rotate(90deg)}
 .thinking-body p{margin:.3rem 0}
 .thinking-body ol,.thinking-body ul{margin:.3rem 0 .3rem 1.2rem}
 
-/* Tool calls */
-.tool-call{background:var(--surface3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.45rem .75rem;margin:.4rem 0;font-size:.82rem;display:flex;align-items:baseline;gap:.4rem;flex-wrap:wrap}
-.tool-label{font-weight:600;color:var(--cyan);font-size:.75rem}
+/* Tool calls — inline, no box */
+.tool-call{padding:.2rem 0;margin:.3rem 0;font-size:.82rem;display:flex;align-items:baseline;gap:.4rem;flex-wrap:wrap;color:var(--text-dim)}
+.tool-label{font-weight:600;color:var(--cyan);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em}
 .tool-name{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:.8rem;background:none;padding:0}
-.tool-args{color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-size:.78rem;word-break:break-all}
+.tool-args{color:var(--text-muted);font-family:'JetBrains Mono',monospace;font-size:.75rem;word-break:break-all}
 
-/* Tool results */
-.tool-result{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.45rem .75rem;margin:.2rem 0 .6rem;font-size:.82rem}
-.tool-result .tool-label{color:var(--green)}
-.tool-result-content{margin-top:.3rem;padding:.4rem .6rem;background:var(--surface);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--text-dim);overflow-x:auto;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+/* Tool results — flat, no nested scroll */
+.tool-result{margin:0 0 .3rem;font-size:.82rem}
+.tool-result .tool-label{color:var(--green);font-size:.72rem;text-transform:uppercase;letter-spacing:.03em}
+.tool-result-content{font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--text-dim);white-space:pre-wrap;word-break:break-word}
 
 /* Input area */
 .input-area{padding:1rem 2rem 1.25rem;background:var(--surface);border-top:1px solid var(--border)}
@@ -383,10 +383,10 @@ function renderMd(text) {
     // Render thinking blocks
     html = html.replace(/%%THINKING_START%%/g, '<details class="thinking-block" open><summary class="thinking-header">Thinking</summary><div class="thinking-body">');
     html = html.replace(/%%THINKING_END%%/g, '</div></details>');
-    // Render tool calls
-    html = html.replace(/%%TOOL_CALL%%(.*?)%%TOOL_ARGS%%(.*?)%%TOOL_END%%/g, '<div class="tool-call"><span class="tool-label">[Tool]</span> <code class="tool-name">$1</code><span class="tool-args">($2)</span></div>');
-    // Render tool results
-    html = html.replace(/%%RESULT_START%%(.*?)%%RESULT_CONTENT%%/g, '<div class="tool-result"><span class="tool-label">[Result]</span> <code class="tool-name">$1</code> →<div class="tool-result-content">');
+    // Render tool calls — TUI-style: bullet + tool name + args
+    html = html.replace(/%%TOOL_CALL%%(.*?)%%TOOL_ARGS%%(.*?)%%TOOL_END%%/g, '<div class="tool-call"><span style="color:var(--cyan)">▸</span> <code class="tool-name">$1</code> <span class="tool-args">$2</span></div>');
+    // Render tool results — minimal label, content flows inline
+    html = html.replace(/%%RESULT_START%%(.*?)%%RESULT_CONTENT%%/g, '<div class="tool-result"><span class="tool-label">result</span> <code class="tool-name">$1</code><div class="tool-result-content">');
     html = html.replace(/%%RESULT_END%%/g, '</div></div>');
     return html;
   } catch(e) { return escHtml(text); }
