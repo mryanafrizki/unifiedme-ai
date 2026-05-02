@@ -2016,6 +2016,7 @@ def cmd_mcp():
         "toggle": cmd_mcp_toggle,
         "bind": cmd_mcp_bind,
         "delete": cmd_mcp_delete_links,
+        "delbind": cmd_mcp_delete_links,
     }
 
     if subcmd in subcmds:
@@ -2032,6 +2033,7 @@ def cmd_mcp():
         print(f"    {CMD} mcp toggle                    Enable/disable MCP on GL account")
         print(f"    {CMD} mcp bind <url> [--account N]  Bind MCP URL to GL accounts")
         print(f"    {CMD} mcp delete <url>              Delete MCP URL from GL accounts")
+        print(f"    {CMD} mcp delbind <url>             Alias for delete")
 
 
 # ─── Tunnel CLI ──────────────────────────────────────────────────────────────
