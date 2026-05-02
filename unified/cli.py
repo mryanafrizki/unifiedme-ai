@@ -14,6 +14,7 @@ Usage:
     unifiedme addaccounts stop     Force stop running batch
     unifiedme mcp list             List MCP servers for all GL accounts
     unifiedme mcp toggle           Enable/disable MCP on an account
+    unifiedme mcp bind <url>       Bind MCP URL to all GL accounts (or --account N)
     unifiedme tunnel status        Show tunnel status
     unifiedme tunnel start         Start cloudflared tunnel (proxy or mcp)
     unifiedme tunnel stop          Stop cloudflared tunnel
@@ -1486,6 +1487,83 @@ def cmd_mcp_toggle():
         print(f"{_RED}Failed: {e}{_NC}")
 
 
+def cmd_mcp_bind():
+    """Bind MCP server URL(s) to Gumloop accounts.
+
+    Usage:
+        unifiedme mcp bind <url>                    Bind to ALL active GL accounts
+        unifiedme mcp bind <url> --account <id>     Bind to specific account
+        unifiedme mcp bind <url1>,<url2>            Multiple URLs (comma-separated)
+    """
+    args = sys.argv[3:]
+    if not args:
+        print(f"  Usage: {CMD} mcp bind <url> [--account <id>]")
+        print(f"  Example: {CMD} mcp bind https://xxx.trycloudflare.com/mcp")
+        return
+
+    # Parse URL(s) — first arg, comma-separated
+    raw_urls = args[0]
+    mcp_urls = [u.strip() for u in raw_urls.split(",") if u.strip()]
+    if not mcp_urls:
+        print(f"  {_RED}No valid MCP URLs provided.{_NC}")
+        return
+
+    # Parse --account flag
+    account_id = None
+    if "--account" in args:
+        idx = args.index("--account")
+        if idx + 1 < len(args):
+            try:
+                account_id = int(args[idx + 1])
+            except ValueError:
+                print(f"  {_RED}Invalid account ID.{_NC}")
+                return
+
+    # Check server running
+    if not _aa_check_server():
+        print(f"  {_RED}Proxy not running. Start with: {CMD} start{_NC}")
+        sys.exit(1)
+
+    print(f"\n  {_CYAN}MCP Bind{_NC}")
+    print(f"  {'='*50}")
+    for u in mcp_urls:
+        print(f"  URL: {_WHITE}{u}{_NC}")
+
+    if account_id:
+        # Single account
+        print(f"  Target: account #{account_id}")
+        print(f"\n  Binding...", end=" ", flush=True)
+        try:
+            res = _aa_api("POST", f"/accounts/{account_id}/bind-mcp", json_body={"mcp_urls": mcp_urls}, timeout=30)
+            if res.get("ok"):
+                print(f"{_GREEN}OK{_NC}")
+                print(f"  Active MCP: {res.get('active_mcp', '?')}")
+            else:
+                print(f"{_RED}Failed: {res.get('error', '?')}{_NC}")
+        except Exception as e:
+            print(f"{_RED}Failed: {e}{_NC}")
+    else:
+        # All GL accounts
+        print(f"  Target: ALL active Gumloop accounts")
+        print()
+        try:
+            res = _aa_api("POST", "/accounts/bind-mcp-bulk", json_body={"mcp_urls": mcp_urls}, timeout=120)
+            total = res.get("total", 0)
+            success = res.get("success", 0)
+            results = res.get("results", [])
+
+            for r in results:
+                email = r.get("email", "?")
+                if r.get("ok"):
+                    print(f"  {_GREEN}[OK]{_NC}   {email} — {r.get('active_mcp', '?')} MCP active")
+                else:
+                    print(f"  {_RED}[FAIL]{_NC} {email} — {r.get('error', '?')}")
+
+            print(f"\n  {_WHITE}Result: {_GREEN}{success}{_NC}/{total} accounts bound{_NC}")
+        except Exception as e:
+            print(f"  {_RED}Failed: {e}{_NC}")
+
+
 def cmd_mcp():
     """Route mcp subcommands."""
     args = sys.argv[2:]
@@ -1494,14 +1572,16 @@ def cmd_mcp():
     subcmds = {
         "list": cmd_mcp_list,
         "toggle": cmd_mcp_toggle,
+        "bind": cmd_mcp_bind,
     }
 
     if subcmd in subcmds:
         subcmds[subcmd]()
     else:
         print(f"\n  Usage:")
-        print(f"    {CMD} mcp list     List MCP servers for all GL accounts")
-        print(f"    {CMD} mcp toggle   Enable/disable MCP on an account")
+        print(f"    {CMD} mcp list                     List MCP servers for all GL accounts")
+        print(f"    {CMD} mcp toggle                   Enable/disable MCP on an account")
+        print(f"    {CMD} mcp bind <url> [--account N]  Bind MCP URL to GL accounts")
 
 
 # ─── Tunnel CLI ──────────────────────────────────────────────────────────────
