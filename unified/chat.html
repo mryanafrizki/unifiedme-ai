@@ -154,6 +154,8 @@ details[open] .thinking-header::before{transform:rotate(90deg)}
 <div class="main" id="main-area" style="display:none">
   <div class="topbar">
     <select id="model-select" onchange="changeModel(this.value)"></select>
+    <span style="color:var(--text-muted);font-size:.78rem">or</span>
+    <input type="text" id="custom-model" placeholder="Custom model..." onchange="changeModel(this.value)" onkeydown="if(event.key==='Enter'){changeModel(this.value);this.blur()}" style="width:180px;padding:.35rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;font-family:'JetBrains Mono',monospace">
     <span id="stream-status" style="font-size:.75rem;color:var(--text-muted)"></span>
   </div>
   <div class="messages" id="messages">
@@ -222,12 +224,26 @@ async function loadModels() {
   var data = await resp.json();
   var select = document.getElementById('model-select');
   var models = data.models || [];
-  select.innerHTML = models.map(function(m) {
+  select.innerHTML = '<option value="">— select model —</option>' + models.map(function(m) {
     return '<option value="' + m.id + '"' + (m.id === currentModel ? ' selected' : '') + '>' + m.id + ' (' + m.tier + ')</option>';
   }).join('');
 }
 
-function changeModel(m) { currentModel = m; }
+function changeModel(m) {
+  if (!m) return;
+  currentModel = m;
+  // Sync: if custom input was used, clear dropdown selection (and vice versa)
+  var select = document.getElementById('model-select');
+  var custom = document.getElementById('custom-model');
+  var opts = Array.from(select.options).map(function(o) { return o.value; });
+  if (opts.indexOf(m) >= 0) {
+    select.value = m;
+    custom.value = '';
+  } else {
+    select.value = '';
+    custom.value = m;
+  }
+}
 
 // ── Sessions ──
 async function loadSessions() {
