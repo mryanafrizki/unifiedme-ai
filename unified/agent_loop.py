@@ -83,35 +83,18 @@ def _format_tool_result_text(name: str, result: Any) -> str:
     return f"\n[Result] **`{name}`** →\n```\n{result_str}\n```\n\n"
 
 
-async def _call_llm_streaming(
-    api_key: str,
-    model: str,
-    messages: list[dict],
-    tools: list[dict] | None = None,
+async def _do_llm_request(
+    proxy_url: str,
+    req_headers: dict,
+    payload: dict,
 ) -> AsyncIterator[dict]:
-    """Call local /v1/chat/completions with streaming, yield parsed SSE chunks.
-
-    Yields dicts with keys: content, thinking, tool_calls, finish_reason, error.
-    """
-    proxy_url = f"http://127.0.0.1:{LISTEN_PORT}/v1/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "stream": True,
-    }
-    if tools:
-        payload["tools"] = tools
-
+    """Single LLM streaming request. Yields parsed chunks or error."""
     async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15, read=300, write=30, pool=10)) as client:
-        async with client.stream("POST", proxy_url, json=payload, headers=headers) as resp:
+        async with client.stream("POST", proxy_url, json=payload, headers=req_headers) as resp:
             if resp.status_code >= 400:
                 body = await resp.aread()
                 error_text = body.decode("utf-8", errors="replace")
-                yield {"error": f"LLM API error HTTP {resp.status_code}: {error_text[:500]}"}
+                yield {"error": f"LLM API error HTTP {resp.status_code}: {error_text[:500]}", "_status": resp.status_code}
                 return
 
             async for line in resp.aiter_lines():
@@ -127,7 +110,6 @@ async def _call_llm_streaming(
                 except json.JSONDecodeError:
                     continue
 
-                # Check for error in chunk
                 if "error" in chunk:
                     err = chunk["error"]
                     msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
@@ -153,6 +135,56 @@ async def _call_llm_streaming(
 
                 if result:
                     yield result
+
+
+async def _call_llm_streaming(
+    api_key: str,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None = None,
+) -> AsyncIterator[dict]:
+    """Call local /v1/chat/completions with streaming, yield parsed SSE chunks.
+
+    Yields dicts with keys: content, thinking, tool_calls, finish_reason, error.
+    If the provider returns 400 with tools, retries without tools param.
+    """
+    proxy_url = f"http://127.0.0.1:{LISTEN_PORT}/v1/chat/completions"
+    req_headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    # First attempt — with tools
+    got_400 = False
+    async for item in _do_llm_request(proxy_url, req_headers, payload):
+        if item.get("_status") == 400 and tools:
+            # Provider rejected tools — will retry without
+            log.warning("LLM rejected tools param (HTTP 400), retrying without tools")
+            got_400 = True
+            break
+        item.pop("_status", None)
+        yield item
+
+    if not got_400:
+        return
+
+    # Retry without tools
+    payload_no_tools: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+    }
+    async for item in _do_llm_request(proxy_url, req_headers, payload_no_tools):
+        item.pop("_status", None)
+        yield item
 
 
 async def run_agent_loop(
@@ -200,7 +232,15 @@ async def run_agent_loop(
         yield _sse_chunk(content=f"_Connected to MCP server ({tool_count} tools available)_\n\n", model=model)
 
         # Step 2: Agent loop — call LLM, execute tools, repeat
-        working_messages = list(messages)  # Copy to avoid mutating original
+        # Inject system prompt that instructs the model to use tools
+        tool_names = ", ".join(t["function"]["name"] for t in openai_tools)
+        system_prompt = (
+            "You are an AI assistant with access to tools. "
+            "When the user asks you to do something, USE the tools to accomplish it. "
+            "Do NOT just describe what you would do — actually call the tools. "
+            f"Available tools: {tool_names}"
+        )
+        working_messages = [{"role": "system", "content": system_prompt}] + list(messages)
         iteration = 0
 
         while True:

@@ -241,6 +241,37 @@ class MCPError(Exception):
         super().__init__(message)
 
 
+def _clean_schema(schema: dict) -> dict:
+    """Deep-clean a JSON Schema for OpenAI/CodeBuddy compatibility.
+
+    Removes fields that cause parse errors on some providers:
+    $schema, title, additionalProperties, $defs, allOf wrappers, etc.
+    """
+    if not isinstance(schema, dict):
+        return schema
+
+    cleaned: dict = {}
+    # Fields to strip at every level
+    _STRIP_KEYS = {"$schema", "title", "additionalProperties", "$defs", "definitions", "default"}
+
+    for k, v in schema.items():
+        if k in _STRIP_KEYS:
+            continue
+        if k == "properties" and isinstance(v, dict):
+            cleaned[k] = {pk: _clean_schema(pv) for pk, pv in v.items()}
+        elif k == "items" and isinstance(v, dict):
+            cleaned[k] = _clean_schema(v)
+        elif k == "allOf" and isinstance(v, list) and len(v) == 1:
+            # Unwrap single-item allOf (common in Pydantic/FastMCP schemas)
+            cleaned.update(_clean_schema(v[0]))
+        elif k == "anyOf" and isinstance(v, list):
+            cleaned[k] = [_clean_schema(item) for item in v]
+        else:
+            cleaned[k] = v
+
+    return cleaned
+
+
 def mcp_tools_to_openai(mcp_tools: list[dict]) -> list[dict]:
     """Convert MCP tool definitions to OpenAI function calling format.
 
@@ -253,13 +284,14 @@ def mcp_tools_to_openai(mcp_tools: list[dict]) -> list[dict]:
     openai_tools = []
     for tool in mcp_tools:
         schema = tool.get("inputSchema", {})
-        # Clean up schema — remove fields OpenAI doesn't expect
+        # Deep-clean schema for provider compatibility
+        cleaned = _clean_schema(schema)
         params = {
-            "type": schema.get("type", "object"),
-            "properties": schema.get("properties", {}),
+            "type": cleaned.get("type", "object"),
+            "properties": cleaned.get("properties", {}),
         }
-        if "required" in schema:
-            params["required"] = schema["required"]
+        if "required" in cleaned:
+            params["required"] = cleaned["required"]
 
         openai_tools.append({
             "type": "function",
