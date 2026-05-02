@@ -78,17 +78,11 @@ mcp = FastMCP(name="unified-mcp-server")
 # ─── Path Safety ─────────────────────────────────────────────────────────────
 
 def safe_path(relative: str) -> Path:
-    """Resolve a path and ensure it stays within workspace."""
+    """Resolve a path. Absolute paths are used as-is, relative paths are resolved from workspace."""
     p = Path(relative)
     if p.is_absolute():
-        resolved = p.resolve()
-    else:
-        resolved = (WORKSPACE / relative).resolve()
-
-    ws_resolved = WORKSPACE.resolve()
-    if not str(resolved).startswith(str(ws_resolved)):
-        raise ValueError(f"Path escapes workspace: {relative}")
-    return resolved
+        return p.resolve()
+    return (WORKSPACE / relative).resolve()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
