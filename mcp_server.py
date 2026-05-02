@@ -699,19 +699,24 @@ async def download_file(
                              f"Config file: {_MCP_CONFIG_FILE} (exists: {_MCP_CONFIG_FILE.exists()}). "
                              f"Fix: run 'unifiedme mcp apikey sk-YOUR_KEY' on the VPS, then retry."
                 }
-            log.info("[download] gl:// via proxy: %s", url[:80])
-            async with httpx.AsyncClient(timeout=60) as client:
-                resp = await client.post(
-                    f"{PROXY_BASE_URL}/v1/gl-download",
-                    json={"gl_url": url},
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json",
-                    },
-                )
-                if resp.status_code != 200:
-                    return {"error": f"Gumloop download failed: HTTP {resp.status_code} — {resp.text[:200]}"}
-                data = resp.content
+            log.info("[download] gl:// via proxy (key=%s...): %s", api_key[:8], url[:80])
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    resp = await client.post(
+                        f"{PROXY_BASE_URL}/v1/gl-download",
+                        json={"gl_url": url},
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": "application/json",
+                        },
+                    )
+                    if resp.status_code != 200:
+                        return {"error": f"Gumloop download failed: HTTP {resp.status_code} — {resp.text[:200]}"}
+                    data = resp.content
+            except ValueError as ve:
+                return {"error": f"API key invalid or empty. Key file: {_MCP_CONFIG_FILE}. Run: unifiedme mcp apikey sk-YOUR_KEY. Detail: {ve}"}
+            except Exception as he:
+                return {"error": f"gl:// proxy request failed: {he}"}
         else:
             # Regular HTTP/HTTPS URL
             async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
