@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>enowXAI - Unified AI Proxy Dashboard</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.min.css">
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap');
 
@@ -728,6 +731,8 @@ a:hover{text-decoration:underline}
     <button class="tab-btn" data-tab="batch">Batch Login</button>
 <button class="tab-btn" data-tab="proxy">Proxy</button>
 <button class="tab-btn" data-tab="filter">Filter</button>
+<button class="tab-btn" data-tab="tunnel">Tunnel & MCP</button>
+<button class="tab-btn" data-tab="vps">VPS Manager</button>
 <button class="tab-btn" data-tab="docs">API Docs</button>
   </div>
 
@@ -1248,6 +1253,159 @@ a:hover{text-decoration:underline}
   <!-- ═══════════════════════════════════════════ -->
   <!-- TAB: API Docs                               -->
   <!-- ═══════════════════════════════════════════ -->
+  <!-- TAB: Tunnel & MCP -->
+  <div class="tab-content" id="tab-tunnel">
+    <!-- System Status -->
+    <div class="cards-row" id="tunnel-sys-cards">
+      <div class="stat-card" id="tc-cf"><div class="card-label">Cloudflared</div><div class="card-value" id="tc-cf-val">...</div><div class="card-sub" id="tc-cf-sub"></div></div>
+      <div class="stat-card" id="tc-ng"><div class="card-label">Nginx</div><div class="card-value" id="tc-ng-val">...</div><div class="card-sub" id="tc-ng-sub"></div></div>
+      <div class="stat-card" id="tc-os"><div class="card-label">System</div><div class="card-value" id="tc-os-val" style="font-size:1rem">...</div></div>
+    </div>
+
+    <!-- Install buttons -->
+    <div id="tunnel-install-bar" style="display:none;margin-bottom:1rem;display:flex;gap:.5rem;flex-wrap:wrap">
+      <button class="btn btn-accent btn-sm" id="btn-install-cf" style="display:none" onclick="installCloudflared()">Install cloudflared</button>
+      <button class="btn btn-accent btn-sm" id="btn-install-ng" style="display:none" onclick="installNginx()">Install nginx</button>
+    </div>
+
+    <!-- Tunnels -->
+    <div class="section-title" style="margin-bottom:.75rem">Cloudflare Tunnels</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1.5rem">
+      <!-- Proxy Tunnel -->
+      <div class="stat-card" style="padding:1.25rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+          <div><span style="font-weight:600;font-size:.95rem">Proxy Server</span><span class="badge badge-queued" id="tn-proxy-badge" style="margin-left:.5rem">stopped</span></div>
+          <div style="display:flex;gap:.4rem;align-items:center">
+            <span class="text-dim" style="font-size:.75rem">Port:</span>
+            <input type="number" id="tn-proxy-port" value="1430" style="width:65px;padding:.25rem .4rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.8rem;font-family:'JetBrains Mono',monospace;text-align:center">
+          </div>
+        </div>
+        <div id="tn-proxy-url" style="display:none;margin-bottom:.75rem;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'JetBrains Mono',monospace;font-size:.8rem;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent).then(()=>toast('URL copied','success'))"></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-accent btn-sm" id="btn-tn-proxy-start" onclick="startTunnel('proxy')">Start Tunnel</button>
+          <button class="btn btn-danger btn-sm" id="btn-tn-proxy-stop" onclick="stopTunnel('proxy')" style="display:none">Stop</button>
+        </div>
+        <div class="text-dim" style="font-size:.72rem;margin-top:.5rem" id="tn-proxy-info"></div>
+      </div>
+      <!-- MCP Tunnel -->
+      <div class="stat-card" style="padding:1.25rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">
+          <div><span style="font-weight:600;font-size:.95rem">MCP Server</span><span class="badge badge-queued" id="tn-mcp-badge" style="margin-left:.5rem">stopped</span></div>
+          <div style="display:flex;gap:.4rem;align-items:center">
+            <span class="text-dim" style="font-size:.75rem">Port:</span>
+            <input type="number" id="tn-mcp-port" value="9876" style="width:65px;padding:.25rem .4rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.8rem;font-family:'JetBrains Mono',monospace;text-align:center">
+          </div>
+        </div>
+        <div id="tn-mcp-url" style="display:none;margin-bottom:.75rem;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);font-family:'JetBrains Mono',monospace;font-size:.8rem;word-break:break-all;cursor:pointer" onclick="copyToClipboard(this.textContent).then(()=>toast('URL copied','success'))"></div>
+        <div style="display:flex;gap:.5rem">
+          <button class="btn btn-accent btn-sm" id="btn-tn-mcp-start" onclick="startTunnel('mcp')">Start Tunnel</button>
+          <button class="btn btn-danger btn-sm" id="btn-tn-mcp-stop" onclick="stopTunnel('mcp')" style="display:none">Stop</button>
+        </div>
+        <div class="text-dim" style="font-size:.72rem;margin-top:.5rem" id="tn-mcp-info"></div>
+      </div>
+    </div>
+
+    <!-- Nginx Config Generator -->
+    <div class="section-title" style="margin-bottom:.75rem">Nginx Config Generator</div>
+    <div class="stat-card" style="padding:1.25rem;margin-bottom:1.5rem">
+      <div class="filter-bar" style="margin-bottom:1rem">
+        <button class="filter-btn active" id="ng-mode-trycloudflare" onclick="setNginxMode('trycloudflare')">TryCloudflare</button>
+        <button class="filter-btn" id="ng-mode-ip" onclick="setNginxMode('ip')">IP VPS</button>
+        <button class="filter-btn" id="ng-mode-domain" onclick="setNginxMode('domain')">Custom Domain</button>
+      </div>
+
+      <!-- IP mode inputs -->
+      <div id="ng-ip-inputs" style="display:none;margin-bottom:1rem">
+        <div style="display:flex;gap:.5rem;align-items:center">
+          <input type="text" id="ng-server-ip" placeholder="Server IP (e.g. 123.45.67.89)" style="flex:1;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem;font-family:'JetBrains Mono',monospace">
+          <button class="btn btn-sm" onclick="detectVpsIp()">Detect IP</button>
+        </div>
+      </div>
+
+      <!-- Domain mode inputs -->
+      <div id="ng-domain-inputs" style="display:none;margin-bottom:1rem">
+        <div style="display:flex;flex-direction:column;gap:.5rem">
+          <input type="text" id="ng-domain" placeholder="Domain (e.g. api.example.com)" style="padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem">
+          <div style="display:flex;gap:.75rem;align-items:center">
+            <label style="display:flex;align-items:center;gap:.35rem;font-size:.82rem;color:var(--text-dim);cursor:pointer">
+              <input type="checkbox" id="ng-ssl" style="accent-color:var(--accent)"> Enable SSL (Let's Encrypt)
+            </label>
+            <input type="email" id="ng-ssl-email" placeholder="SSL email" style="flex:1;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;display:none">
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-accent" onclick="generateNginxConfig()">Generate Config</button>
+        <button class="btn btn-sm" onclick="applyNginxLocal()">Apply Locally</button>
+      </div>
+
+      <!-- Output -->
+      <div id="ng-output" style="display:none;margin-top:1rem">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+          <span style="font-weight:500;font-size:.85rem">Generated Config</span>
+          <button class="btn btn-sm" onclick="copyToClipboard(document.getElementById('ng-config-text').textContent).then(()=>toast('Config copied','success'))">Copy</button>
+        </div>
+        <pre id="ng-config-text" style="padding:.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem;line-height:1.5;overflow-x:auto;max-height:400px;color:var(--text-dim);white-space:pre-wrap"></pre>
+        <div id="ng-instructions" style="margin-top:.75rem;padding:.75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem;line-height:1.6;white-space:pre-wrap;color:var(--text-dim);max-height:300px;overflow-y:auto"></div>
+        <div id="ng-access-urls" style="display:none;margin-top:.75rem"></div>
+      </div>
+    </div>
+
+    <!-- MCP Workspaces -->
+    <div class="section-title" style="margin-bottom:.75rem">MCP Workspaces</div>
+    <div class="stat-card" style="padding:1.25rem">
+      <p class="text-dim" style="font-size:.82rem;margin-bottom:1rem">MCP workspace folders are directories that the MCP server can read/write. Create a workspace for each project you want Gumloop agents to access.</p>
+      <div style="display:flex;gap:.5rem;margin-bottom:1rem">
+        <input type="text" id="mcp-ws-name" placeholder="Folder name (e.g. my-project)" style="flex:1;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem">
+        <button class="btn btn-accent btn-sm" onclick="createMcpWorkspace()">Create</button>
+      </div>
+      <div id="mcp-ws-list"></div>
+    </div>
+  </div>
+
+  <!-- TAB: VPS Manager -->
+  <div class="tab-content" id="tab-vps">
+    <!-- Add VPS -->
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">
+      <div class="section-title" style="margin:0">Remote VPS Servers</div>
+      <button class="btn btn-accent btn-sm" onclick="showAddVpsModal()">+ Add VPS</button>
+    </div>
+
+    <!-- VPS List -->
+    <div id="vps-list"></div>
+
+    <!-- Terminal Modal -->
+    <div id="terminal-modal" style="display:none;position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,.85);padding:1rem">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+        <span style="color:var(--green);font-weight:600;font-size:.9rem" id="terminal-title">Terminal</span>
+        <button class="btn btn-sm btn-danger" onclick="closeTerminal()">Close</button>
+      </div>
+      <div id="terminal-container" style="width:100%;height:calc(100vh - 80px);border-radius:var(--radius);overflow:hidden;background:#1e1e1e"></div>
+    </div>
+
+    <!-- Add VPS Modal -->
+    <div id="add-vps-modal" style="display:none;position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:2rem;width:420px;max-width:90vw">
+        <h3 style="margin-bottom:1rem;font-size:1.1rem">Add VPS Server</h3>
+        <div style="display:flex;flex-direction:column;gap:.75rem">
+          <input type="text" id="vps-add-host" placeholder="IP Address (e.g. 123.45.67.89)" style="padding:.6rem .85rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem">
+          <div style="display:flex;gap:.5rem">
+            <input type="text" id="vps-add-user" placeholder="Username (e.g. root)" style="flex:1;padding:.6rem .85rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem">
+            <input type="number" id="vps-add-port" value="22" style="width:70px;padding:.6rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem;text-align:center">
+          </div>
+          <input type="password" id="vps-add-pass" placeholder="Password" style="padding:.6rem .85rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem">
+          <input type="text" id="vps-add-label" placeholder="Label (optional)" style="padding:.6rem .85rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem">
+        </div>
+        <div style="display:flex;gap:.5rem;margin-top:1.25rem;justify-content:flex-end">
+          <button class="btn btn-sm" onclick="closeAddVpsModal()">Cancel</button>
+          <button class="btn btn-accent btn-sm" id="btn-add-vps-submit" onclick="submitAddVps()">Add & Test</button>
+        </div>
+        <div id="vps-add-error" style="color:var(--red);font-size:.82rem;margin-top:.75rem;display:none"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="tab-content" id="tab-docs">
     <div class="docs-section">
       <h3>&#x1f517; Base URL</h3>
@@ -1789,6 +1947,10 @@ function initTabs() {
       // Load proxy data when proxy tab is activated
       if (btn.dataset.tab === 'proxy') { loadProxies('api'); loadProxies('batch'); }
       if (btn.dataset.tab === 'filter') { loadFilters(); loadGlobalFilters(); }
+      if (btn.dataset.tab === 'tunnel') { loadTunnelStatus(); loadMcpWorkspaces(); startTunnelRefresh(); }
+      else { stopTunnelRefresh(); }
+      if (btn.dataset.tab === 'vps') { loadVpsList(); }
+      if (btn.dataset.tab === 'docs') { setupDocsHost(); }
     });
   });
 }
@@ -4406,6 +4568,587 @@ function copyCode(btn) {
   });
 }
 
+// ── VPS Manager ──
+
+var vpsServers = [];
+var activeTerminal = null;
+var activeTerminalWs = null;
+
+async function loadVpsList() {
+  try {
+    var data = await apiFetch('/api/vps/list');
+    vpsServers = data.servers || [];
+    renderVpsList();
+  } catch(e) { /* ignore */ }
+}
+
+function renderVpsList() {
+  var el = document.getElementById('vps-list');
+  if (!vpsServers.length) {
+    el.innerHTML = '<div style="color:var(--text-muted);padding:1rem;text-align:center">No VPS servers added yet. Click "+ Add VPS" to get started.</div>';
+    return;
+  }
+  var html = '';
+  vpsServers.forEach(function(s) {
+    var statusBadge = s.status === 'online' ? 'badge-active' : s.status === 'installed' ? 'badge-success' : s.status === 'offline' ? 'badge-failed' : 'badge-queued';
+    html += '<div class="stat-card" style="padding:1.25rem;margin-bottom:.75rem">';
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem">';
+    html += '<div><span style="font-weight:600;font-size:1rem">' + (s.label || s.host) + '</span>';
+    html += ' <span class="badge ' + statusBadge + '" style="margin-left:.5rem">' + s.status + '</span></div>';
+    html += '<div style="display:flex;gap:.4rem">';
+    html += '<button class="btn btn-sm" onclick="openTerminal(' + s.id + ',\'' + (s.label||s.host).replace(/'/g,"\\'") + '\')">Terminal</button>';
+    html += '<button class="btn btn-sm" onclick="deleteVps(' + s.id + ')">Delete</button>';
+    html += '</div></div>';
+    // Info row
+    html += '<div style="display:flex;gap:1.5rem;font-size:.82rem;color:var(--text-dim);margin-bottom:.75rem">';
+    html += '<span class="mono">' + s.username + '@' + s.host + ':' + s.ssh_port + '</span>';
+    if (s.os_info) html += '<span>' + s.os_info.substring(0, 60) + '</span>';
+    html += '</div>';
+    // Action buttons
+    html += '<div style="display:flex;gap:.4rem;flex-wrap:wrap">';
+    html += '<button class="btn btn-accent btn-sm" onclick="autoInstallVps(' + s.id + ')">Auto-Install</button>';
+    html += '<button class="btn btn-sm" onclick="testVps(' + s.id + ')">Test Connection</button>';
+    html += '<button class="btn btn-sm" onclick="getVpsServices(' + s.id + ')">Check Services</button>';
+    html += '<button class="btn btn-sm" onclick="applyNginxToVps(' + s.id + ')">Apply Nginx</button>';
+    html += '<button class="btn btn-sm" onclick="setupRemoteMcpWs(' + s.id + ')">Setup MCP Folder</button>';
+    html += '</div>';
+    // Services status (populated by getVpsServices)
+    html += '<div id="vps-services-' + s.id + '" style="margin-top:.75rem"></div>';
+    // Install output (populated by autoInstallVps)
+    html += '<div id="vps-install-' + s.id + '" style="margin-top:.5rem"></div>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function showAddVpsModal() {
+  var modal = document.getElementById('add-vps-modal');
+  modal.style.display = 'flex';
+  document.getElementById('vps-add-host').value = '';
+  document.getElementById('vps-add-user').value = 'root';
+  document.getElementById('vps-add-port').value = '22';
+  document.getElementById('vps-add-pass').value = '';
+  document.getElementById('vps-add-label').value = '';
+  document.getElementById('vps-add-error').style.display = 'none';
+}
+
+function closeAddVpsModal() {
+  document.getElementById('add-vps-modal').style.display = 'none';
+}
+
+async function submitAddVps() {
+  var btn = document.getElementById('btn-add-vps-submit');
+  var errEl = document.getElementById('vps-add-error');
+  btn.disabled = true; btn.textContent = 'Connecting...';
+  errEl.style.display = 'none';
+  try {
+    var data = await apiFetch('/api/vps/add', {
+      method: 'POST',
+      body: JSON.stringify({
+        host: document.getElementById('vps-add-host').value.trim(),
+        username: document.getElementById('vps-add-user').value.trim(),
+        password: document.getElementById('vps-add-pass').value,
+        port: parseInt(document.getElementById('vps-add-port').value) || 22,
+        label: document.getElementById('vps-add-label').value.trim(),
+      })
+    });
+    if (data.ok) {
+      toast('VPS added successfully', 'success');
+      closeAddVpsModal();
+      loadVpsList();
+    } else {
+      errEl.textContent = data.error || 'Failed to add VPS';
+      errEl.style.display = 'block';
+    }
+  } catch(e) {
+    errEl.textContent = e.message || 'Connection error';
+    errEl.style.display = 'block';
+  }
+  btn.disabled = false; btn.textContent = 'Add & Test';
+}
+
+async function deleteVps(id) {
+  if (!confirm('Delete this VPS server?')) return;
+  try {
+    await apiFetch('/api/vps/' + id, { method: 'DELETE' });
+    toast('VPS deleted', 'success');
+    loadVpsList();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function testVps(id) {
+  toast('Testing connection...', 'info');
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/test', { method: 'POST' });
+    if (data.ok) { toast('Connection OK: ' + (data.os_info || '').substring(0, 50), 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+    loadVpsList();
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function autoInstallVps(id) {
+  if (!confirm('This will install Python, cloudflared, nginx, and unifiedme on the remote VPS. Continue?')) return;
+  var el = document.getElementById('vps-install-' + id);
+  el.innerHTML = '<div style="padding:.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem;font-family:\'JetBrains Mono\',monospace;color:var(--text-dim)">Installing... this may take a few minutes...</div>';
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/install', { method: 'POST' });
+    if (data.ok) {
+      var stepsHtml = (data.steps || []).map(function(s) {
+        var icon = s.status === 'done' ? '<span style="color:var(--green)">OK</span>' : '<span style="color:var(--red)">FAIL</span>';
+        return '<div>' + icon + ' ' + s.step + '</div>';
+      }).join('');
+      el.innerHTML = '<div style="padding:.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem">' + stepsHtml + '</div>';
+      toast('Installation complete!', 'success');
+    } else {
+      el.innerHTML = '<div style="padding:.5rem;color:var(--red);font-size:.82rem">Failed: ' + (data.error || '') + '</div>';
+      toast('Install failed', 'error');
+    }
+    loadVpsList();
+  } catch(e) {
+    el.innerHTML = '<div style="padding:.5rem;color:var(--red);font-size:.82rem">Error: ' + e.message + '</div>';
+    toast('Error: ' + e.message, 'error');
+  }
+}
+
+async function getVpsServices(id) {
+  var el = document.getElementById('vps-services-' + id);
+  el.innerHTML = '<span class="text-dim" style="font-size:.78rem">Checking...</span>';
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/services');
+    if (data.error) { el.innerHTML = '<span style="color:var(--red);font-size:.78rem">' + data.error + '</span>'; return; }
+    var svcs = data.services || {};
+    var html = '<div style="display:flex;gap:.75rem;flex-wrap:wrap;font-size:.78rem">';
+    for (var k in svcs) {
+      var val = svcs[k];
+      var color = (val === 'active' || val === 'yes') ? 'var(--green)' : (val === 'inactive' || val === 'no' || val === 'not_found') ? 'var(--red)' : 'var(--text-dim)';
+      html += '<span><span style="color:var(--text-muted)">' + k + ':</span> <span style="color:' + color + '">' + val + '</span></span>';
+    }
+    html += '</div>';
+    // Service control buttons
+    html += '<div style="display:flex;gap:.3rem;margin-top:.5rem;flex-wrap:wrap">';
+    var svcList = ['nginx', 'proxy', 'mcp', 'cloudflared'];
+    svcList.forEach(function(svc) {
+      html += '<button class="btn btn-sm" style="font-size:.7rem" onclick="controlVpsService(' + id + ',\'' + svc + '\',\'start\')">Start ' + svc + '</button>';
+      html += '<button class="btn btn-sm" style="font-size:.7rem" onclick="controlVpsService(' + id + ',\'' + svc + '\',\'stop\')">Stop ' + svc + '</button>';
+    });
+    html += '</div>';
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<span style="color:var(--red);font-size:.78rem">' + e.message + '</span>'; }
+}
+
+async function controlVpsService(id, service, action) {
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/services/' + service + '/' + action, { method: 'POST' });
+    if (data.ok) { toast(service + ' ' + action + ' OK', 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+    getVpsServices(id);
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function applyNginxToVps(id) {
+  var server = vpsServers.find(function(s) { return s.id === id; });
+  if (!server) return;
+  var mode = prompt('Nginx mode: ip, domain, or trycloudflare', 'ip');
+  if (!mode) return;
+  var body = { mode: mode, server_ip: server.host };
+  if (mode === 'domain') {
+    var domain = prompt('Enter domain (e.g. api.example.com):');
+    if (!domain) return;
+    body.domain = domain;
+    body.enable_ssl = confirm('Enable SSL (Let\'s Encrypt)?');
+  }
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/nginx/apply', { method: 'POST', body: JSON.stringify(body) });
+    if (data.ok) { toast(data.message || 'Nginx applied!', 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function setupRemoteMcpWs(id) {
+  var name = prompt('MCP workspace folder name:');
+  if (!name) return;
+  try {
+    var data = await apiFetch('/api/vps/' + id + '/mcp/workspace', { method: 'POST', body: JSON.stringify({ name: name }) });
+    if (data.ok) { toast('Workspace created at: ' + data.path, 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+// ── Web Terminal (xterm.js) ──
+
+function openTerminal(vpsId, label) {
+  document.getElementById('terminal-modal').style.display = 'block';
+  document.getElementById('terminal-title').textContent = 'Terminal — ' + label;
+  var container = document.getElementById('terminal-container');
+  container.innerHTML = '';
+
+  // Create xterm instance
+  var term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: "'JetBrains Mono', 'Menlo', 'Monaco', 'Courier New', monospace",
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4' },
+  });
+  var fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(container);
+  fitAddon.fit();
+  activeTerminal = term;
+
+  // WebSocket connection
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var pw = getAdminPassword();
+  var ws = new WebSocket(proto + '//' + location.host + '/ws/terminal/' + vpsId + '?token=' + encodeURIComponent(pw));
+  activeTerminalWs = ws;
+
+  ws.onopen = function() {
+    // Send initial terminal size
+    ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    term.focus();
+  };
+
+  ws.onmessage = function(event) {
+    term.write(event.data);
+  };
+
+  ws.onclose = function() {
+    term.write('\r\n\x1b[33m[Connection closed]\x1b[0m\r\n');
+  };
+
+  ws.onerror = function() {
+    term.write('\r\n\x1b[31m[WebSocket error]\x1b[0m\r\n');
+  };
+
+  // Forward keystrokes
+  term.onData(function(data) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(data);
+    }
+  });
+
+  // Handle resize
+  term.onResize(function(size) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'resize', cols: size.cols, rows: size.rows }));
+    }
+  });
+
+  // Fit on window resize
+  var resizeTimer;
+  window._termResizeHandler = function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() { fitAddon.fit(); }, 100);
+  };
+  window.addEventListener('resize', window._termResizeHandler);
+}
+
+function closeTerminal() {
+  document.getElementById('terminal-modal').style.display = 'none';
+  if (activeTerminalWs) {
+    activeTerminalWs.close();
+    activeTerminalWs = null;
+  }
+  if (activeTerminal) {
+    activeTerminal.dispose();
+    activeTerminal = null;
+  }
+  if (window._termResizeHandler) {
+    window.removeEventListener('resize', window._termResizeHandler);
+  }
+}
+
+// ── Tunnel & MCP ──
+
+var tunnelState = { proxy: {}, mcp: {}, system: {} };
+var tunnelRefreshInterval = null;
+var currentNginxMode = 'trycloudflare';
+
+async function loadTunnelStatus() {
+  try {
+    const data = await apiFetch('/api/tunnel/status');
+    tunnelState = { proxy: data.tunnels.proxy || {}, mcp: data.tunnels.mcp || {}, system: data.system || {} };
+    renderTunnelStatus();
+  } catch(e) { /* ignore */ }
+}
+
+function renderTunnelStatus() {
+  var sys = tunnelState.system;
+  // System cards
+  var cfVal = document.getElementById('tc-cf-val');
+  var ngVal = document.getElementById('tc-ng-val');
+  var osVal = document.getElementById('tc-os-val');
+  var cfCard = document.getElementById('tc-cf');
+  var ngCard = document.getElementById('tc-ng');
+
+  if (sys.cloudflared_installed) {
+    cfVal.textContent = 'Installed';
+    cfCard.className = 'stat-card green';
+    document.getElementById('tc-cf-sub').textContent = sys.cloudflared_path || '';
+    document.getElementById('btn-install-cf').style.display = 'none';
+  } else {
+    cfVal.textContent = 'Not Found';
+    cfCard.className = 'stat-card red';
+    document.getElementById('tc-cf-sub').textContent = '';
+    document.getElementById('btn-install-cf').style.display = '';
+    document.getElementById('tunnel-install-bar').style.display = 'flex';
+  }
+
+  if (sys.nginx_installed) {
+    ngVal.textContent = 'Installed';
+    ngCard.className = 'stat-card green';
+    document.getElementById('tc-ng-sub').textContent = sys.nginx_path || '';
+    document.getElementById('btn-install-ng').style.display = 'none';
+  } else {
+    ngVal.textContent = 'Not Found';
+    ngCard.className = 'stat-card red';
+    document.getElementById('tc-ng-sub').textContent = '';
+    document.getElementById('btn-install-ng').style.display = '';
+    document.getElementById('tunnel-install-bar').style.display = 'flex';
+  }
+
+  osVal.textContent = sys.os || '?';
+
+  // Tunnel cards
+  renderTunnelCard('proxy', tunnelState.proxy);
+  renderTunnelCard('mcp', tunnelState.mcp);
+}
+
+function renderTunnelCard(target, info) {
+  var badge = document.getElementById('tn-' + target + '-badge');
+  var urlDiv = document.getElementById('tn-' + target + '-url');
+  var startBtn = document.getElementById('btn-tn-' + target + '-start');
+  var stopBtn = document.getElementById('btn-tn-' + target + '-stop');
+  var infoDiv = document.getElementById('tn-' + target + '-info');
+
+  var status = info.status || 'stopped';
+  badge.textContent = status;
+  badge.className = 'badge ' + (status === 'running' ? 'badge-active' : status === 'starting' ? 'badge-running' : status === 'failed' ? 'badge-failed' : 'badge-queued');
+
+  if (status === 'running' && info.url) {
+    urlDiv.style.display = 'block';
+    urlDiv.textContent = info.url;
+    startBtn.style.display = 'none';
+    stopBtn.style.display = '';
+    var uptime = info.uptime_seconds || 0;
+    var m = Math.floor(uptime / 60), s = uptime % 60;
+    infoDiv.textContent = 'Uptime: ' + m + 'm ' + s + 's | PID: ' + (info.pid || '-');
+  } else {
+    urlDiv.style.display = 'none';
+    urlDiv.textContent = '';
+    startBtn.style.display = '';
+    stopBtn.style.display = 'none';
+    infoDiv.textContent = info.error || '';
+  }
+}
+
+async function startTunnel(target) {
+  var portInput = document.getElementById('tn-' + target + '-port');
+  var port = parseInt(portInput.value) || (target === 'proxy' ? 1430 : 9876);
+  var btn = document.getElementById('btn-tn-' + target + '-start');
+  btn.disabled = true; btn.textContent = 'Starting...';
+  try {
+    var data = await apiFetch('/api/tunnel/start', {
+      method: 'POST',
+      body: JSON.stringify({ target: target, port: port })
+    });
+    if (data.ok) {
+      toast('Tunnel started: ' + (data.url || ''), 'success');
+    } else {
+      toast('Failed: ' + (data.error || 'Unknown error'), 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Start Tunnel';
+  loadTunnelStatus();
+}
+
+async function stopTunnel(target) {
+  try {
+    await apiFetch('/api/tunnel/stop', {
+      method: 'POST',
+      body: JSON.stringify({ target: target })
+    });
+    toast('Tunnel stopped', 'success');
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  loadTunnelStatus();
+}
+
+async function installCloudflared() {
+  var btn = document.getElementById('btn-install-cf');
+  btn.disabled = true; btn.textContent = 'Installing...';
+  try {
+    var data = await apiFetch('/api/tunnel/install-cloudflared', { method: 'POST' });
+    if (data.ok) { toast(data.message || 'Installed', 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Install cloudflared';
+  loadTunnelStatus();
+}
+
+async function installNginx() {
+  var btn = document.getElementById('btn-install-ng');
+  btn.disabled = true; btn.textContent = 'Installing...';
+  try {
+    var data = await apiFetch('/api/tunnel/install-nginx', { method: 'POST' });
+    if (data.ok) { toast(data.message || 'Installed', 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  btn.disabled = false; btn.textContent = 'Install nginx';
+  loadTunnelStatus();
+}
+
+async function detectVpsIp() {
+  try {
+    var data = await apiFetch('/api/tunnel/detect-ip');
+    if (data.ip) {
+      document.getElementById('ng-server-ip').value = data.ip;
+      toast('Detected IP: ' + data.ip, 'success');
+    } else {
+      toast('Could not detect IP', 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+function setNginxMode(mode) {
+  currentNginxMode = mode;
+  document.querySelectorAll('[id^="ng-mode-"]').forEach(function(b) { b.classList.remove('active'); });
+  document.getElementById('ng-mode-' + mode).classList.add('active');
+  document.getElementById('ng-ip-inputs').style.display = mode === 'ip' ? 'block' : 'none';
+  document.getElementById('ng-domain-inputs').style.display = mode === 'domain' ? 'block' : 'none';
+  document.getElementById('ng-output').style.display = 'none';
+}
+
+// SSL checkbox toggle
+document.addEventListener('DOMContentLoaded', function() {
+  var sslCb = document.getElementById('ng-ssl');
+  if (sslCb) sslCb.addEventListener('change', function() {
+    document.getElementById('ng-ssl-email').style.display = this.checked ? '' : 'none';
+  });
+});
+
+async function generateNginxConfig() {
+  var body = { mode: currentNginxMode };
+  if (currentNginxMode === 'ip') {
+    body.server_ip = document.getElementById('ng-server-ip').value.trim();
+    if (!body.server_ip) { toast('Enter server IP first', 'error'); return; }
+  } else if (currentNginxMode === 'domain') {
+    body.domain = document.getElementById('ng-domain').value.trim();
+    if (!body.domain) { toast('Enter domain first', 'error'); return; }
+    body.enable_ssl = document.getElementById('ng-ssl').checked;
+    body.ssl_email = document.getElementById('ng-ssl-email').value.trim();
+  }
+  body.proxy_port = parseInt(document.getElementById('tn-proxy-port').value) || 1430;
+  body.mcp_port = parseInt(document.getElementById('tn-mcp-port').value) || 9876;
+
+  try {
+    var data = await apiFetch('/api/tunnel/nginx-config', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    if (data.ok) {
+      document.getElementById('ng-output').style.display = 'block';
+      document.getElementById('ng-config-text').textContent = data.config || '(No config needed for this mode)';
+      document.getElementById('ng-instructions').textContent = data.instructions || '';
+      // Access URLs
+      var accessDiv = document.getElementById('ng-access-urls');
+      if (data.access) {
+        var html = '<div style="margin-top:.5rem;font-size:.82rem"><strong>Access URLs:</strong><br>';
+        for (var k in data.access) { html += '<span style="color:var(--accent)">' + k + ':</span> <span class="mono">' + data.access[k] + '</span><br>'; }
+        html += '</div>';
+        accessDiv.innerHTML = html;
+        accessDiv.style.display = 'block';
+      } else { accessDiv.style.display = 'none'; }
+      if (data.message) toast(data.message, 'success');
+    } else {
+      toast('Error: ' + (data.error || ''), 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function applyNginxLocal() {
+  var body = { mode: currentNginxMode };
+  if (currentNginxMode === 'ip') {
+    body.server_ip = document.getElementById('ng-server-ip').value.trim();
+    if (!body.server_ip) { toast('Enter server IP first', 'error'); return; }
+  } else if (currentNginxMode === 'domain') {
+    body.domain = document.getElementById('ng-domain').value.trim();
+    if (!body.domain) { toast('Enter domain first', 'error'); return; }
+    body.enable_ssl = document.getElementById('ng-ssl').checked;
+    body.ssl_email = document.getElementById('ng-ssl-email').value.trim();
+  } else {
+    toast('TryCloudflare mode does not need nginx', 'error');
+    return;
+  }
+  body.proxy_port = parseInt(document.getElementById('tn-proxy-port').value) || 1430;
+  body.mcp_port = parseInt(document.getElementById('tn-mcp-port').value) || 9876;
+
+  if (!confirm('This will write nginx config and reload nginx on THIS machine. Continue?')) return;
+
+  try {
+    var data = await apiFetch('/api/vps/local/nginx/apply', { method: 'POST', body: JSON.stringify(body) });
+    if (data.ok) { toast(data.message || 'Nginx applied locally!', 'success'); }
+    else { toast('Failed: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function loadMcpWorkspaces() {
+  try {
+    var data = await apiFetch('/api/mcp/workspaces');
+    var list = document.getElementById('mcp-ws-list');
+    if (!data.workspaces || data.workspaces.length === 0) {
+      list.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;padding:.5rem 0">No workspaces yet. Create one above.</div>';
+      return;
+    }
+    var html = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Path</th><th></th></tr></thead><tbody>';
+    data.workspaces.forEach(function(ws) {
+      html += '<tr><td style="font-weight:500">' + ws.name + '</td>';
+      html += '<td class="mono text-dim" style="font-size:.78rem">' + ws.path + '</td>';
+      html += '<td><button class="btn btn-danger btn-sm" onclick="deleteMcpWorkspace(\'' + ws.name + '\')">Delete</button></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    list.innerHTML = html;
+  } catch(e) { /* ignore */ }
+}
+
+async function createMcpWorkspace() {
+  var input = document.getElementById('mcp-ws-name');
+  var name = input.value.trim();
+  if (!name) { toast('Enter a folder name', 'error'); return; }
+  try {
+    var data = await apiFetch('/api/mcp/setup-workspace', {
+      method: 'POST',
+      body: JSON.stringify({ name: name })
+    });
+    if (data.ok) {
+      toast('Workspace created at: ' + data.path, 'success');
+      input.value = '';
+      loadMcpWorkspaces();
+    } else {
+      toast('Error: ' + (data.error || ''), 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteMcpWorkspace(name) {
+  if (!confirm('Delete workspace "' + name + '"? This will remove the folder.')) return;
+  try {
+    var data = await apiFetch('/api/mcp/workspaces/' + encodeURIComponent(name), {
+      method: 'DELETE'
+    });
+    if (data.ok) { toast(data.message || 'Deleted', 'success'); }
+    else { toast('Error: ' + (data.error || ''), 'error'); }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+  loadMcpWorkspaces();
+}
+
+function startTunnelRefresh() {
+  if (tunnelRefreshInterval) clearInterval(tunnelRefreshInterval);
+  tunnelRefreshInterval = setInterval(loadTunnelStatus, 10000);
+}
+
+function stopTunnelRefresh() {
+  if (tunnelRefreshInterval) { clearInterval(tunnelRefreshInterval); tunnelRefreshInterval = null; }
+}
+
 // Make functions globally accessible
 window.retryAccount = retryAccount;
 window.trashAccount = trashAccount;
@@ -4442,6 +5185,28 @@ window.testBatchAccounts = testBatchAccounts;
 window.approveAccount = approveAccount;
 window.approveAllAccounts = approveAllAccounts;
 window.deleteFixAccounts = deleteFixAccounts;
+window.showAddVpsModal = showAddVpsModal;
+window.closeAddVpsModal = closeAddVpsModal;
+window.submitAddVps = submitAddVps;
+window.deleteVps = deleteVps;
+window.testVps = testVps;
+window.autoInstallVps = autoInstallVps;
+window.getVpsServices = getVpsServices;
+window.controlVpsService = controlVpsService;
+window.applyNginxToVps = applyNginxToVps;
+window.setupRemoteMcpWs = setupRemoteMcpWs;
+window.openTerminal = openTerminal;
+window.closeTerminal = closeTerminal;
+window.startTunnel = startTunnel;
+window.stopTunnel = stopTunnel;
+window.installCloudflared = installCloudflared;
+window.installNginx = installNginx;
+window.detectVpsIp = detectVpsIp;
+window.setNginxMode = setNginxMode;
+window.generateNginxConfig = generateNginxConfig;
+window.applyNginxLocal = applyNginxLocal;
+window.createMcpWorkspace = createMcpWorkspace;
+window.deleteMcpWorkspace = deleteMcpWorkspace;
 </script>
 </body>
 </html>

@@ -159,6 +159,19 @@ CREATE TABLE IF NOT EXISTS filters (
     hit_count    INTEGER DEFAULT 0,
     created_at   TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS vps_servers (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    host        TEXT NOT NULL,
+    ssh_port    INTEGER NOT NULL DEFAULT 22,
+    username    TEXT NOT NULL,
+    password    TEXT NOT NULL,
+    label       TEXT DEFAULT '',
+    status      TEXT DEFAULT 'unknown',  -- unknown, online, offline, installed
+    os_info     TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -1062,3 +1075,67 @@ async def seed_default_filters(force: bool = False) -> int:
         count += 1
     await db.commit()
     return count
+
+
+# ---------------------------------------------------------------------------
+# VPS Servers CRUD
+# ---------------------------------------------------------------------------
+
+async def add_vps_server(
+    host: str, username: str, password: str,
+    ssh_port: int = 22, label: str = "", os_info: str = "",
+) -> int:
+    """Add a VPS server. Returns ID."""
+    conn = await get_db()
+    cur = await conn.execute(
+        """INSERT INTO vps_servers (host, ssh_port, username, password, label, os_info)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        (host, ssh_port, username, password, label, os_info),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def get_vps_servers() -> list[dict]:
+    """Get all VPS servers."""
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM vps_servers ORDER BY created_at DESC")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_vps_server(vps_id: int) -> Optional[dict]:
+    """Get a single VPS server by ID."""
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM vps_servers WHERE id = ?", (vps_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def update_vps_server(vps_id: int, **fields: Any) -> bool:
+    """Update VPS server fields."""
+    if not fields:
+        return False
+    conn = await get_db()
+    fields["updated_at"] = "datetime('now')"
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        if v == "datetime('now')":
+            sets.append(f"{k} = datetime('now')")
+        else:
+            sets.append(f"{k} = ?")
+            vals.append(v)
+    vals.append(vps_id)
+    cur = await conn.execute(
+        f"UPDATE vps_servers SET {', '.join(sets)} WHERE id = ?", vals
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def delete_vps_server(vps_id: int) -> bool:
+    """Delete a VPS server."""
+    conn = await get_db()
+    cur = await conn.execute("DELETE FROM vps_servers WHERE id = ?", (vps_id,))
+    await conn.commit()
+    return cur.rowcount > 0

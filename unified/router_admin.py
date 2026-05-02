@@ -1863,3 +1863,123 @@ async def seed_filters_endpoint(request: Request, _: bool = Depends(verify_admin
     invalidate_cache()
     return {"ok": True, "seeded": count}
 
+
+# ---------------------------------------------------------------------------
+# Tunnel Management
+# ---------------------------------------------------------------------------
+
+@router.get("/tunnel/status")
+async def tunnel_status(request: Request, target: str = "", _: bool = Depends(verify_admin)):
+    """Get tunnel status. ?target=proxy|mcp or omit for all."""
+    from .tunnel_manager import get_tunnel_status, get_system_info
+    if target:
+        status = get_tunnel_status(target)
+    else:
+        status = get_tunnel_status()
+    sys_info = get_system_info()
+    return {"tunnels": status, "system": sys_info}
+
+
+@router.post("/tunnel/start")
+async def tunnel_start(request: Request, _: bool = Depends(verify_admin)):
+    """Start a cloudflared tunnel. Body: {target: "proxy"|"mcp", port?: int}."""
+    from .tunnel_manager import start_tunnel
+    body = await request.json()
+    target = str(body.get("target", "proxy")).strip()
+    port = body.get("port")
+    if target not in ("proxy", "mcp"):
+        return JSONResponse({"error": "target must be 'proxy' or 'mcp'"}, status_code=400)
+    result = start_tunnel(target, port)
+    return result  # Always 200 — check result.ok in frontend
+
+
+@router.post("/tunnel/stop")
+async def tunnel_stop(request: Request, _: bool = Depends(verify_admin)):
+    """Stop a cloudflared tunnel. Body: {target: "proxy"|"mcp"}."""
+    from .tunnel_manager import stop_tunnel
+    body = await request.json()
+    target = str(body.get("target", "proxy")).strip()
+    if target not in ("proxy", "mcp"):
+        return JSONResponse({"error": "target must be 'proxy' or 'mcp'"}, status_code=400)
+    result = stop_tunnel(target)
+    return result
+
+
+@router.post("/tunnel/install-cloudflared")
+async def install_cloudflared_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Install cloudflared on this server (Linux only)."""
+    from .tunnel_manager import install_cloudflared
+    result = await install_cloudflared()
+    return result  # Always 200 — check result.ok in frontend
+
+
+@router.post("/tunnel/install-nginx")
+async def install_nginx_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Install nginx on this server (Linux only)."""
+    from .tunnel_manager import install_nginx
+    result = await install_nginx()
+    return result  # Always 200 — check result.ok in frontend
+
+
+@router.post("/tunnel/nginx-config")
+async def generate_nginx_config_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Generate nginx config. Body: {mode, domain?, server_ip?, proxy_port?, mcp_port?, enable_ssl?, ssl_email?}."""
+    from .tunnel_manager import generate_nginx_config
+    body = await request.json()
+    result = generate_nginx_config(
+        mode=str(body.get("mode", "")).strip(),
+        domain=str(body.get("domain", "")).strip(),
+        server_ip=str(body.get("server_ip", "")).strip(),
+        proxy_port=int(body.get("proxy_port", LISTEN_PORT)),
+        mcp_port=int(body.get("mcp_port", 9876)),
+        enable_ssl=bool(body.get("enable_ssl", False)),
+        ssl_email=str(body.get("ssl_email", "")).strip(),
+    )
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
+
+
+@router.get("/tunnel/detect-ip")
+async def detect_ip_endpoint(_: bool = Depends(verify_admin)):
+    """Detect the public IP of this VPS."""
+    from .tunnel_manager import detect_vps_ip
+    ip = await detect_vps_ip()
+    return {"ip": ip}
+
+
+# ---------------------------------------------------------------------------
+# MCP Workspace Management
+# ---------------------------------------------------------------------------
+
+@router.post("/mcp/setup-workspace")
+async def setup_mcp_workspace_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Create an MCP workspace folder. Body: {name: "my-project"}."""
+    from .tunnel_manager import setup_mcp_workspace
+    body = await request.json()
+    name = str(body.get("name", "")).strip()
+    if not name:
+        return JSONResponse({"error": "name is required"}, status_code=400)
+    result = setup_mcp_workspace(name)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
+
+
+@router.get("/mcp/workspaces")
+async def list_mcp_workspaces(_: bool = Depends(verify_admin)):
+    """List existing MCP workspace folders."""
+    from .tunnel_manager import get_mcp_workspaces
+    workspaces = get_mcp_workspaces()
+    return {"workspaces": workspaces, "count": len(workspaces)}
+
+
+@router.delete("/mcp/workspaces/{name}")
+async def delete_mcp_workspace_endpoint(name: str, _: bool = Depends(verify_admin)):
+    """Delete an MCP workspace folder."""
+    from .tunnel_manager import delete_mcp_workspace
+    result = delete_mcp_workspace(name)
+    if not result.get("ok"):
+        return JSONResponse(result, status_code=400)
+    return result
+

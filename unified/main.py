@@ -19,6 +19,8 @@ from . import database as db
 from .config import LISTEN_HOST, LISTEN_PORT, BASE_DIR, DATA_DIR, VERSION, CENTRAL_API_URL
 from .router_proxy import router as proxy_router
 from .router_admin import router as admin_router
+from .router_vps import router as vps_router
+from .router_terminal import router as terminal_router
 from .proxy_kiro import close_all_clients as close_kiro
 from .proxy_codebuddy import close_all_clients as close_codebuddy
 from .proxy_wavespeed import close_all_clients as close_wavespeed
@@ -324,6 +326,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     try:
+        from .tunnel_manager import stop_all_tunnels
+        stop_all_tunnels()
+    except Exception:
+        pass
+    try:
         await db.close_db()
     except Exception:
         pass
@@ -355,6 +362,8 @@ app.add_middleware(
 # Mount routers
 app.include_router(proxy_router)
 app.include_router(admin_router)
+app.include_router(vps_router)
+app.include_router(terminal_router)
 
 
 # ---------------------------------------------------------------------------

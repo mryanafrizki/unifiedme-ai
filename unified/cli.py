@@ -14,6 +14,13 @@ Usage:
     unifiedme addaccounts stop     Force stop running batch
     unifiedme mcp list             List MCP servers for all GL accounts
     unifiedme mcp toggle           Enable/disable MCP on an account
+    unifiedme tunnel status        Show tunnel status
+    unifiedme tunnel start         Start cloudflared tunnel (proxy or mcp)
+    unifiedme tunnel stop          Stop cloudflared tunnel
+    unifiedme tunnel install       Install cloudflared + nginx
+    unifiedme vps list             List registered VPS servers
+    unifiedme vps add              Add a VPS server (interactive)
+    unifiedme vps install <id>     Auto-install on a VPS
     unifiedme help                 Show this help
 """
 
@@ -1497,6 +1504,288 @@ def cmd_mcp():
         print(f"    {CMD} mcp toggle   Enable/disable MCP on an account")
 
 
+# ─── Tunnel CLI ──────────────────────────────────────────────────────────────
+
+def cmd_tunnel_start():
+    """Start cloudflared tunnel."""
+    from .tunnel_manager import start_tunnel, check_cloudflared
+
+    if not check_cloudflared():
+        print(f"  {_RED}cloudflared not installed.{_NC}")
+        print(f"  Install: curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null")
+        print(f"  Or run: {CMD} tunnel install")
+        return
+
+    args = sys.argv[3:]
+    target = "proxy"
+    port = None
+
+    # Parse: unifiedme tunnel start [proxy|mcp] [--port 1430]
+    if args and args[0] in ("proxy", "mcp"):
+        target = args[0]
+        args = args[1:]
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            port = int(args[idx + 1])
+
+    default_port = LISTEN_PORT if target == "proxy" else 9876
+    actual_port = port or default_port
+
+    print(f"  Starting cloudflared tunnel for {target} (port {actual_port})...")
+    result = start_tunnel(target, actual_port)
+
+    if result.get("ok"):
+        print(f"  {_GREEN}Tunnel started!{_NC}")
+        print(f"  URL: {_WHITE}{result['url']}{_NC}")
+        if target == "mcp":
+            print(f"  MCP endpoint: {result['url']}/mcp")
+        print(f"  PID: {result.get('pid', '-')}")
+    else:
+        print(f"  {_RED}Failed: {result.get('error', 'Unknown error')}{_NC}")
+
+
+def cmd_tunnel_stop():
+    """Stop cloudflared tunnel."""
+    from .tunnel_manager import stop_tunnel
+
+    args = sys.argv[3:]
+    target = "proxy"
+    if args and args[0] in ("proxy", "mcp"):
+        target = args[0]
+
+    print(f"  Stopping {target} tunnel...", end=" ", flush=True)
+    result = stop_tunnel(target)
+    if result.get("ok"):
+        print(f"{_GREEN}Done{_NC}")
+    else:
+        print(f"{_RED}Failed: {result.get('error', '')}{_NC}")
+
+
+def cmd_tunnel_status():
+    """Show tunnel status."""
+    from .tunnel_manager import get_tunnel_status, get_system_info
+
+    sys_info = get_system_info()
+    print(f"\n  {_CYAN}Tunnel Status{_NC}")
+    print(f"  {'='*40}")
+
+    # System
+    cf_status = f"{_GREEN}installed{_NC}" if sys_info["cloudflared_installed"] else f"{_RED}not found{_NC}"
+    ng_status = f"{_GREEN}installed{_NC}" if sys_info["nginx_installed"] else f"{_RED}not found{_NC}"
+    print(f"  cloudflared: {cf_status}")
+    print(f"  nginx:       {ng_status}")
+    print(f"  OS:          {sys_info['os']}")
+    print()
+
+    # Tunnels
+    for target in ("proxy", "mcp"):
+        info = get_tunnel_status(target)
+        status = info.get("status", "stopped")
+        if status == "running":
+            color = _GREEN
+            url = info.get("url", "")
+            uptime = info.get("uptime_seconds", 0)
+            m, s = uptime // 60, uptime % 60
+            print(f"  {_WHITE}{target.upper()}{_NC}: {color}{status}{_NC}")
+            print(f"    URL:    {url}")
+            print(f"    Port:   {info.get('port', '-')}")
+            print(f"    PID:    {info.get('pid', '-')}")
+            print(f"    Uptime: {m}m {s}s")
+        else:
+            print(f"  {_WHITE}{target.upper()}{_NC}: {_DIM}{status}{_NC}")
+            if info.get("error"):
+                print(f"    Error: {info['error']}")
+        print()
+
+
+def cmd_tunnel_install():
+    """Install cloudflared and/or nginx."""
+    import asyncio
+    from .tunnel_manager import install_cloudflared, install_nginx, check_cloudflared, check_nginx
+
+    if not check_cloudflared():
+        print(f"  Installing cloudflared...", end=" ", flush=True)
+        result = asyncio.run(install_cloudflared())
+        if result.get("ok"):
+            print(f"{_GREEN}OK{_NC}")
+        else:
+            print(f"{_RED}Failed: {result.get('error', '')}{_NC}")
+    else:
+        print(f"  cloudflared: {_GREEN}already installed{_NC}")
+
+    if not check_nginx():
+        print(f"  Installing nginx...", end=" ", flush=True)
+        result = asyncio.run(install_nginx())
+        if result.get("ok"):
+            print(f"{_GREEN}OK{_NC}")
+        else:
+            print(f"{_RED}Failed: {result.get('error', '')}{_NC}")
+    else:
+        print(f"  nginx: {_GREEN}already installed{_NC}")
+
+
+def cmd_tunnel():
+    """Route tunnel subcommands."""
+    args = sys.argv[2:]
+    subcmd = args[0] if args else "status"
+
+    subcmds = {
+        "start": cmd_tunnel_start,
+        "stop": cmd_tunnel_stop,
+        "status": cmd_tunnel_status,
+        "install": cmd_tunnel_install,
+    }
+
+    if subcmd in subcmds:
+        subcmds[subcmd]()
+    else:
+        print(f"\n  Usage:")
+        print(f"    {CMD} tunnel status              Show tunnel status")
+        print(f"    {CMD} tunnel start [proxy|mcp]   Start cloudflared tunnel")
+        print(f"    {CMD} tunnel stop [proxy|mcp]    Stop tunnel")
+        print(f"    {CMD} tunnel install             Install cloudflared + nginx")
+
+
+def cmd_vps_list():
+    """List registered VPS servers."""
+    import asyncio
+    import aiosqlite
+    from .config import DB_PATH
+
+    async def _list():
+        db = await aiosqlite.connect(DB_PATH)
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT * FROM vps_servers ORDER BY created_at DESC")
+        rows = [dict(r) for r in await cur.fetchall()]
+        await db.close()
+        return rows
+
+    servers = asyncio.run(_list())
+    if not servers:
+        print(f"  {_DIM}No VPS servers registered.{_NC}")
+        print(f"  Add via dashboard or: {CMD} vps add")
+        return
+
+    print(f"\n  {_CYAN}VPS Servers{_NC}")
+    print(f"  {'='*50}")
+    for s in servers:
+        status_color = _GREEN if s['status'] in ('online', 'installed') else _RED if s['status'] == 'offline' else _DIM
+        print(f"  [{s['id']}] {_WHITE}{s['label'] or s['host']}{_NC} — {status_color}{s['status']}{_NC}")
+        print(f"      {_DIM}{s['username']}@{s['host']}:{s['ssh_port']}{_NC}")
+    print()
+
+
+def cmd_vps_add():
+    """Interactively add a VPS server."""
+    import asyncio
+
+    print(f"\n  {_CYAN}Add VPS Server{_NC}")
+    print(f"  {'='*40}")
+
+    host = input("  Host (IP): ").strip()
+    if not host:
+        print(f"  {_RED}Host is required.{_NC}")
+        return
+    username = input("  Username [root]: ").strip() or "root"
+    password = input("  Password: ").strip()
+    if not password:
+        print(f"  {_RED}Password is required.{_NC}")
+        return
+    port_str = input("  SSH Port [22]: ").strip()
+    port = int(port_str) if port_str.isdigit() else 22
+    label = input("  Label (optional): ").strip() or host
+
+    print(f"\n  Testing connection...", end=" ", flush=True)
+
+    async def _add():
+        from .vps_manager import test_connection
+        from . import database as db
+        from .config import DATA_DIR
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        await db.init_db()
+
+        test = await test_connection(host, username, password, port)
+        if not test.get("ok"):
+            return test
+
+        vps_id = await db.add_vps_server(
+            host=host, username=username, password=password,
+            ssh_port=port, label=label, os_info=test.get("os_info", ""),
+        )
+        await db.close_db()
+        return {"ok": True, "id": vps_id, "os_info": test.get("os_info", "")}
+
+    result = asyncio.run(_add())
+    if result.get("ok"):
+        print(f"{_GREEN}OK{_NC}")
+        print(f"  ID: {result['id']}")
+        print(f"  OS: {result.get('os_info', '')[:60]}")
+    else:
+        print(f"{_RED}FAILED{_NC}")
+        print(f"  Error: {result.get('error', 'Unknown')}")
+
+
+def cmd_vps_install():
+    """Auto-install on a VPS."""
+    import asyncio
+
+    args = sys.argv[3:]
+    if not args:
+        print(f"  Usage: {CMD} vps install <vps_id>")
+        return
+
+    vps_id = int(args[0])
+
+    async def _install():
+        from . import database as db
+        from .config import DATA_DIR
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        await db.init_db()
+
+        server = await db.get_vps_server(vps_id)
+        if not server:
+            return {"ok": False, "error": "VPS not found"}
+
+        from .vps_manager import auto_install
+        result = await auto_install(
+            server["host"], server["username"], server["password"], server["ssh_port"],
+        )
+        await db.close_db()
+        return result
+
+    print(f"  Installing on VPS #{vps_id}... (this may take a few minutes)")
+    result = asyncio.run(_install())
+
+    if result.get("ok"):
+        for step in result.get("steps", []):
+            icon = f"{_GREEN}OK{_NC}" if step["status"] == "done" else f"{_RED}FAIL{_NC}"
+            print(f"  [{icon}] {step['step']}")
+        print(f"\n  {_GREEN}Installation complete!{_NC}")
+    else:
+        print(f"  {_RED}Failed: {result.get('error', 'Unknown')}{_NC}")
+
+
+def cmd_vps():
+    """Route vps subcommands."""
+    args = sys.argv[2:]
+    subcmd = args[0] if args else "list"
+
+    subcmds = {
+        "list": cmd_vps_list,
+        "add": cmd_vps_add,
+        "install": cmd_vps_install,
+    }
+
+    if subcmd in subcmds:
+        subcmds[subcmd]()
+    else:
+        print(f"\n  Usage:")
+        print(f"    {CMD} vps list              List registered VPS servers")
+        print(f"    {CMD} vps add               Add a VPS server (interactive)")
+        print(f"    {CMD} vps install <id>      Auto-install on a VPS")
+
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -1513,6 +1802,8 @@ def cli_main():
         "logout": cmd_logout,
         "addaccounts": cmd_addaccounts,
         "mcp": cmd_mcp,
+        "tunnel": cmd_tunnel,
+        "vps": cmd_vps,
     }
 
     if cmd in ("-h", "--help", "help"):
