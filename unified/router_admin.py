@@ -2267,7 +2267,6 @@ async def start_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
     if inst.get("pid") and _pid_alive(inst["pid"]):
         return {"ok": True, "pid": inst["pid"], "message": "Already running"}
 
-    from pathlib import Path as _Path
     install_dir = _Path(__file__).resolve().parent.parent
     python_bin = install_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
     if not python_bin.exists():
@@ -2394,7 +2393,6 @@ async def toggle_mcp_tunnel(mcp_id: int, request: Request, _: bool = Depends(ver
 @router.get("/mcp/instances/by-path")
 async def get_mcp_by_path(path: str, _: bool = Depends(verify_admin)):
     """Check if a path has an MCP instance. Used by explorer."""
-    from pathlib import Path as _Path
     resolved = str(_Path(path).expanduser().resolve())
     inst = await db.get_mcp_instance_by_path(resolved)
     if inst:
