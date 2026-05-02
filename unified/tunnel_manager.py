@@ -13,6 +13,7 @@ Supports 3 access modes:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -21,7 +22,6 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -37,31 +37,37 @@ MCP_WORKSPACE_BASE = Path.home() / "mcp-workspaces"
 # ─── Tunnel State ────────────────────────────────────────────────────────────
 
 
-@dataclass
-class TunnelInfo:
-    """State for a single cloudflared tunnel."""
-    target: str  # "proxy" or "mcp"
-    port: int
-    process: Optional[subprocess.Popen] = None
-    url: str = ""
-    status: str = "stopped"  # stopped, starting, running, failed
-    error: str = ""
-    started_at: float = 0.0
-    pid: int = 0
+# ─── Persistent Tunnel State (file-based, survives process restarts) ──────────
+
+_TUNNEL_STATE_DIR = DATA_DIR / "tunnels"
 
 
-# Global tunnel state
-_tunnels: dict[str, TunnelInfo] = {}
-_lock = threading.Lock()
+def _state_file(target: str) -> Path:
+    return _TUNNEL_STATE_DIR / f"{target}.json"
 
 
-def _get_tunnel(target: str) -> TunnelInfo:
-    """Get or create tunnel info for a target."""
-    with _lock:
-        if target not in _tunnels:
-            port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
-            _tunnels[target] = TunnelInfo(target=target, port=port)
-        return _tunnels[target]
+def _save_tunnel_state(target: str, data: dict) -> None:
+    """Save tunnel state to disk."""
+    _TUNNEL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    _state_file(target).write_text(json.dumps(data))
+
+
+def _load_tunnel_state(target: str) -> dict:
+    """Load tunnel state from disk."""
+    f = _state_file(target)
+    if f.exists():
+        try:
+            return json.loads(f.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _clear_tunnel_state(target: str) -> None:
+    """Remove tunnel state file."""
+    f = _state_file(target)
+    if f.exists():
+        f.unlink(missing_ok=True)
 
 
 # ─── Cloudflared Detection & Install ─────────────────────────────────────────
@@ -178,8 +184,29 @@ async def install_nginx() -> dict:
 # ─── Tunnel Start/Stop ───────────────────────────────────────────────────────
 
 
+def _is_pid_alive(pid: int) -> bool:
+    """Check if a process with given PID is still running."""
+    if pid <= 0:
+        return False
+    try:
+        if platform.system() == "Windows":
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            return str(pid) in result.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def start_tunnel(target: str, port: int | None = None) -> dict:
     """Start a cloudflared tunnel for the given target.
+
+    Cloudflared runs as a fully detached daemon that survives CLI exit.
+    State (PID, URL, port) is persisted to disk.
 
     Args:
         target: "proxy" or "mcp"
@@ -191,27 +218,36 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
     if not cf_path:
         return {"ok": False, "error": "cloudflared not installed. Install it first."}
 
-    info = _get_tunnel(target)
+    default_port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
+    actual_port = port or default_port
 
-    # Already running?
-    if info.process and info.process.poll() is None:
-        return {"ok": True, "url": info.url, "message": "Tunnel already running"}
+    # Check if already running (from persisted state)
+    existing = _load_tunnel_state(target)
+    if existing.get("pid") and _is_pid_alive(existing["pid"]):
+        return {
+            "ok": True,
+            "url": existing.get("url", ""),
+            "port": existing.get("port", actual_port),
+            "pid": existing["pid"],
+            "message": "Tunnel already running",
+        }
 
-    actual_port = port or info.port
-    info.port = actual_port
-    info.status = "starting"
-    info.error = ""
-    info.url = ""
-
+    # Start cloudflared as a detached process
     try:
-        proc = subprocess.Popen(
-            [cf_path, "tunnel", "--url", f"http://localhost:{actual_port}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-
-        info.process = proc
-        info.pid = proc.pid
+        if platform.system() == "Windows":
+            proc = subprocess.Popen(
+                [cf_path, "tunnel", "--url", f"http://localhost:{actual_port}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+            )
+        else:
+            proc = subprocess.Popen(
+                [cf_path, "tunnel", "--url", f"http://localhost:{actual_port}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                start_new_session=True,  # Detach from parent — survives CLI exit
+            )
 
         # Read stderr in background thread to find tunnel URL
         tunnel_url = ""
@@ -235,70 +271,74 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
         reader.join(timeout=25)
 
         if tunnel_url:
-            info.url = tunnel_url
-            info.status = "running"
-            info.started_at = time.time()
-            log.info("Tunnel started for %s: %s (port %d)", target, tunnel_url, actual_port)
+            # Persist state to disk
+            state = {
+                "pid": proc.pid,
+                "url": tunnel_url,
+                "port": actual_port,
+                "started_at": time.time(),
+                "target": target,
+            }
+            _save_tunnel_state(target, state)
+            log.info("Tunnel started for %s: %s (port %d, PID %d)", target, tunnel_url, actual_port, proc.pid)
             return {"ok": True, "url": tunnel_url, "port": actual_port, "pid": proc.pid}
         else:
-            # Check if process died
             if proc.poll() is not None:
-                info.status = "failed"
-                info.error = "cloudflared exited unexpectedly"
                 stderr_text = "\n".join(lines_buf)[:500]
                 return {"ok": False, "error": f"cloudflared exited: {stderr_text}"}
 
-            # Process running but no URL yet — might still be starting
-            info.status = "starting"
-            info.error = "Timeout waiting for tunnel URL (cloudflared may still be starting)"
-            return {"ok": False, "error": info.error, "pid": proc.pid}
+            # Process running but no URL yet — save PID anyway
+            _save_tunnel_state(target, {
+                "pid": proc.pid, "url": "", "port": actual_port,
+                "started_at": time.time(), "target": target,
+            })
+            return {"ok": False, "error": "Timeout waiting for tunnel URL", "pid": proc.pid}
 
     except Exception as e:
-        info.status = "failed"
-        info.error = str(e)
         return {"ok": False, "error": str(e)}
 
 
 def stop_tunnel(target: str) -> dict:
-    """Stop a cloudflared tunnel.
+    """Stop a cloudflared tunnel by killing its PID from persisted state.
 
     Args:
         target: "proxy" or "mcp"
 
     Returns: {ok, message}
     """
-    info = _get_tunnel(target)
+    state = _load_tunnel_state(target)
+    pid = state.get("pid", 0)
 
-    if not info.process:
-        info.status = "stopped"
+    if not pid or not _is_pid_alive(pid):
+        _clear_tunnel_state(target)
         return {"ok": True, "message": "No tunnel running"}
 
     try:
-        info.process.terminate()
-        try:
-            info.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            info.process.kill()
-            info.process.wait(timeout=3)
+        if platform.system() == "Windows":
+            subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)  # SIGTERM
+            # Wait a bit, then force kill if needed
+            for _ in range(10):
+                time.sleep(0.5)
+                if not _is_pid_alive(pid):
+                    break
+            else:
+                os.kill(pid, 9)  # SIGKILL
 
-        log.info("Tunnel stopped for %s (was: %s)", target, info.url)
-
-        info.process = None
-        info.url = ""
-        info.status = "stopped"
-        info.pid = 0
-        info.started_at = 0.0
-
-        return {"ok": True, "message": f"Tunnel for {target} stopped"}
+        log.info("Tunnel stopped for %s (PID %d, was: %s)", target, pid, state.get("url", ""))
+        _clear_tunnel_state(target)
+        return {"ok": True, "message": f"Tunnel for {target} stopped (PID {pid})"}
 
     except Exception as e:
-        info.status = "failed"
-        info.error = str(e)
+        _clear_tunnel_state(target)
         return {"ok": False, "error": str(e)}
 
 
 def get_tunnel_status(target: str | None = None) -> dict:
     """Get tunnel status for one or all targets.
+
+    Reads persisted state from disk and verifies PID is still alive.
 
     Args:
         target: "proxy", "mcp", or None for all
@@ -306,27 +346,37 @@ def get_tunnel_status(target: str | None = None) -> dict:
     Returns: dict with tunnel info
     """
     if target:
-        info = _get_tunnel(target)
-        # Check if process is still alive
-        if info.process and info.process.poll() is not None:
-            info.status = "stopped"
-            info.process = None
-            info.url = ""
-            info.pid = 0
+        state = _load_tunnel_state(target)
+        pid = state.get("pid", 0)
+        default_port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
 
-        uptime = 0
-        if info.started_at and info.status == "running":
-            uptime = int(time.time() - info.started_at)
-
-        return {
-            "target": target,
-            "status": info.status,
-            "url": info.url,
-            "port": info.port,
-            "pid": info.pid,
-            "uptime_seconds": uptime,
-            "error": info.error,
-        }
+        if pid and _is_pid_alive(pid):
+            uptime = 0
+            started_at = state.get("started_at", 0)
+            if started_at:
+                uptime = int(time.time() - started_at)
+            return {
+                "target": target,
+                "status": "running",
+                "url": state.get("url", ""),
+                "port": state.get("port", default_port),
+                "pid": pid,
+                "uptime_seconds": uptime,
+                "error": "",
+            }
+        else:
+            # PID dead or no state — clean up
+            if state:
+                _clear_tunnel_state(target)
+            return {
+                "target": target,
+                "status": "stopped",
+                "url": "",
+                "port": default_port,
+                "pid": 0,
+                "uptime_seconds": 0,
+                "error": "",
+            }
 
     # All tunnels
     result = {}
@@ -337,8 +387,10 @@ def get_tunnel_status(target: str | None = None) -> dict:
 
 def stop_all_tunnels():
     """Stop all running tunnels. Called on shutdown."""
-    for target in list(_tunnels.keys()):
-        stop_tunnel(target)
+    for target in ("proxy", "mcp"):
+        state = _load_tunnel_state(target)
+        if state.get("pid"):
+            stop_tunnel(target)
 
 
 # ─── Nginx Config Generation ────────────────────────────────────────────────
