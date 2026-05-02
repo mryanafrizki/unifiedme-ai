@@ -227,6 +227,28 @@ async def create_file(request: Request, _: bool = Depends(verify_admin)):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.post("/write-file")
+async def write_file(request: Request, _: bool = Depends(verify_admin)):
+    """Write content to an existing file. Body: {path, content}."""
+    body = await request.json()
+    path_str = str(body.get("path", "")).strip()
+    content = body.get("content")
+    if not path_str:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    if content is None:
+        return JSONResponse({"error": "content is required"}, status_code=400)
+    p = Path(path_str).expanduser().resolve()
+    if not p.exists():
+        return JSONResponse({"error": "File not found"}, status_code=404)
+    if not p.is_file():
+        return JSONResponse({"error": "Not a file"}, status_code=400)
+    try:
+        p.write_text(str(content), encoding="utf-8")
+        return {"ok": True, "path": str(p), "bytes": len(str(content).encode("utf-8"))}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.post("/rename")
 async def rename_item(request: Request, _: bool = Depends(verify_admin)):
     """Rename a file or directory. Body: {path, new_name}."""

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>File Explorer — UnifiedMe</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/editor/editor.main.css">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -46,6 +47,7 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 .file-list{flex:1;overflow-y:auto;padding:1rem}
 .preview-panel{width:50%;border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden}
 .preview-panel.open{display:flex}
+#monaco-container{min-height:0}
 .preview-header{display:flex;align-items:center;justify-content:space-between;padding:.6rem 1rem;background:var(--surface);border-bottom:1px solid var(--border)}
 .preview-header .name{font-weight:500;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .preview-body{flex:1;overflow:auto;padding:1rem}
@@ -130,12 +132,15 @@ code,.mono{font-family:'JetBrains Mono',monospace}
     <div class="preview-panel" id="preview-panel">
       <div class="preview-header">
         <span class="name" id="preview-name">—</span>
-        <div style="display:flex;gap:.4rem">
+        <div style="display:flex;gap:.4rem;align-items:center">
+          <span id="save-status" style="font-size:.72rem;color:var(--text-muted)"></span>
+          <button class="btn btn-accent" id="btn-save" onclick="saveCurrentFile()" style="display:none">Save</button>
           <button class="btn" id="btn-download" onclick="downloadCurrent()">Download</button>
           <button class="btn" onclick="closePreview()">Close</button>
         </div>
       </div>
       <div class="preview-body" id="preview-body"></div>
+      <div id="monaco-container" style="display:none;flex:1;overflow:hidden"></div>
     </div>
   </div>
 </div>
@@ -336,9 +341,12 @@ function getIcon(entry) {
 
 async function previewFile(path) {
   currentFile = path;
+  closeEditor(); // Reset editor state
   document.getElementById('preview-panel').classList.add('open');
-  document.getElementById('preview-name').textContent = path.split('/').pop();
+  var filename = path.split('/').pop();
+  document.getElementById('preview-name').textContent = filename;
   document.getElementById('preview-body').innerHTML = '<div class="preview-info">Loading...</div>';
+  document.getElementById('preview-body').style.display = '';
 
   try {
     var resp = await fetch('/api/explorer/read?path=' + encodeURIComponent(path), { headers: getHeaders() });
@@ -364,9 +372,8 @@ async function previewFile(path) {
       return;
     }
 
-    // Text/code preview
-    var escaped = data.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-    document.getElementById('preview-body').innerHTML = '<pre class="preview-code">' + escaped + '</pre>';
+    // Text/code — open in Monaco Editor
+    openEditor(data.content, filename);
 
   } catch(e) {
     document.getElementById('preview-body').innerHTML = '<div class="preview-info" style="color:var(--red)">Error: ' + e.message + '</div>';
@@ -374,6 +381,10 @@ async function previewFile(path) {
 }
 
 function closePreview() {
+  if (editorDirty && monacoEditor) {
+    if (!confirm('You have unsaved changes. Close anyway?')) return;
+  }
+  closeEditor();
   document.getElementById('preview-panel').classList.remove('open');
   currentFile = '';
 }
@@ -647,15 +658,185 @@ async function mcpBarTunnel(action) {
   } catch(e) { alert('Error: ' + e.message); }
 }
 
+// ── Monaco Editor ──
+
+var monacoEditor = null;
+var monacoReady = false;
+var editorDirty = false;
+var originalContent = '';
+
+var _EXT_LANG = {
+  '.py':'python','.js':'javascript','.ts':'typescript','.jsx':'javascript','.tsx':'typescript',
+  '.html':'html','.htm':'html','.css':'css','.scss':'scss','.less':'less',
+  '.json':'json','.yaml':'yaml','.yml':'yaml','.toml':'ini',
+  '.md':'markdown','.mdx':'markdown','.txt':'plaintext',
+  '.sh':'shell','.bash':'shell','.zsh':'shell','.bat':'bat','.ps1':'powershell',
+  '.go':'go','.rs':'rust','.java':'java','.c':'c','.cpp':'cpp','.h':'c','.hpp':'cpp',
+  '.rb':'ruby','.php':'php','.swift':'swift','.kt':'kotlin',
+  '.sql':'sql','.xml':'xml','.svg':'xml','.graphql':'graphql',
+  '.dockerfile':'dockerfile','.lua':'lua','.r':'r','.dart':'dart',
+  '.ini':'ini','.cfg':'ini','.conf':'ini','.env':'ini',
+  '.gitignore':'plaintext','.editorconfig':'ini',
+};
+
+function getMonacoLang(filename) {
+  var ext = '.' + (filename.split('.').pop() || '').toLowerCase();
+  return _EXT_LANG[ext] || 'plaintext';
+}
+
+function isTextFile(filename) {
+  var ext = '.' + (filename.split('.').pop() || '').toLowerCase();
+  var textExts = Object.keys(_EXT_LANG).concat(['.log','.csv','.tsv','.rst','.tex','.makefile','.cmake','.gradle','.properties','.lock']);
+  // Also treat extensionless or common config files as text
+  if (!ext || ext === '.') return true;
+  return textExts.indexOf(ext) >= 0;
+}
+
+function initMonaco(callback) {
+  if (monacoReady) { callback(); return; }
+  if (window.require && window.require.config) { monacoReady = true; callback(); return; }
+  var loaderScript = document.createElement('script');
+  loaderScript.src = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs/loader.js';
+  loaderScript.onload = function() {
+    require.config({ paths: { vs: 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.2/min/vs' } });
+    require(['vs/editor/editor.main'], function() {
+      monaco.editor.defineTheme('unified-dark', {
+        base: 'vs-dark',
+        inherit: true,
+        rules: [],
+        colors: {
+          'editor.background': '#0f1117',
+          'editor.foreground': '#e4e6f0',
+          'editorLineNumber.foreground': '#5c6180',
+          'editorLineNumber.activeForeground': '#8b90a8',
+          'editor.selectionBackground': '#2a2f3f',
+          'editor.lineHighlightBackground': '#1a1d27',
+          'editorCursor.foreground': '#6c8aff',
+        }
+      });
+      monacoReady = true;
+      callback();
+    });
+  };
+  document.head.appendChild(loaderScript);
+}
+
+function openEditor(content, filename) {
+  var previewBody = document.getElementById('preview-body');
+  var monacoContainer = document.getElementById('monaco-container');
+  var saveBtn = document.getElementById('btn-save');
+  var saveStatus = document.getElementById('save-status');
+
+  previewBody.style.display = 'none';
+  monacoContainer.style.display = 'block';
+  saveBtn.style.display = '';
+  saveStatus.textContent = '';
+  originalContent = content;
+  editorDirty = false;
+
+  initMonaco(function() {
+    if (monacoEditor) {
+      monacoEditor.dispose();
+      monacoEditor = null;
+    }
+    monacoEditor = monaco.editor.create(monacoContainer, {
+      value: content,
+      language: getMonacoLang(filename),
+      theme: 'unified-dark',
+      fontSize: 13,
+      fontFamily: "'JetBrains Mono', monospace",
+      minimap: { enabled: true },
+      scrollBeyondLastLine: false,
+      wordWrap: 'on',
+      lineNumbers: 'on',
+      renderWhitespace: 'selection',
+      tabSize: 2,
+      automaticLayout: true,
+      padding: { top: 8 },
+    });
+
+    // Track dirty state
+    monacoEditor.onDidChangeModelContent(function() {
+      var isDirty = monacoEditor.getValue() !== originalContent;
+      if (isDirty !== editorDirty) {
+        editorDirty = isDirty;
+        saveStatus.textContent = isDirty ? '● Modified' : '';
+        saveStatus.style.color = isDirty ? 'var(--orange)' : 'var(--text-muted)';
+      }
+    });
+
+    // Ctrl+S to save
+    monacoEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+      saveCurrentFile();
+    });
+  });
+}
+
+function closeEditor() {
+  var monacoContainer = document.getElementById('monaco-container');
+  var previewBody = document.getElementById('preview-body');
+  var saveBtn = document.getElementById('btn-save');
+  var saveStatus = document.getElementById('save-status');
+
+  monacoContainer.style.display = 'none';
+  previewBody.style.display = '';
+  saveBtn.style.display = 'none';
+  saveStatus.textContent = '';
+  editorDirty = false;
+
+  if (monacoEditor) {
+    monacoEditor.dispose();
+    monacoEditor = null;
+  }
+}
+
+async function saveCurrentFile() {
+  if (!currentFile || !monacoEditor) return;
+  var saveBtn = document.getElementById('btn-save');
+  var saveStatus = document.getElementById('save-status');
+  var content = monacoEditor.getValue();
+
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'Saving...';
+  saveStatus.textContent = 'Saving...';
+  saveStatus.style.color = 'var(--text-muted)';
+
+  try {
+    var resp = await fetch('/api/explorer/write-file', {
+      method: 'POST',
+      headers: getHeaders(),
+      body: JSON.stringify({ path: currentFile, content: content }),
+    });
+    var data = await resp.json();
+    if (data.ok) {
+      originalContent = content;
+      editorDirty = false;
+      saveStatus.textContent = 'Saved ✓';
+      saveStatus.style.color = 'var(--green)';
+      setTimeout(function() { if (!editorDirty) saveStatus.textContent = ''; }, 2000);
+    } else {
+      saveStatus.textContent = 'Error: ' + (data.error || 'Save failed');
+      saveStatus.style.color = 'var(--red)';
+    }
+  } catch(e) {
+    saveStatus.textContent = 'Error: ' + e.message;
+    saveStatus.style.color = 'var(--red)';
+  }
+  saveBtn.disabled = false;
+  saveBtn.textContent = 'Save';
+}
+
 // Keyboard shortcuts
 document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  // Ctrl+S global — save if editor is open
+  if (e.ctrlKey && e.key === 's' && monacoEditor && currentFile) { e.preventDefault(); saveCurrentFile(); return; }
   if (e.key === 'Delete' && selectedEntry) { deleteSelected(); }
   if (e.key === 'F2' && selectedEntry) { e.preventDefault(); renameSelected(); }
   if (e.ctrlKey && e.key === 'c' && selectedEntry) { copySelected(); }
   if (e.ctrlKey && e.key === 'x' && selectedEntry) { cutSelected(); }
   if (e.ctrlKey && e.key === 'v' && clipboard) { pasteClipboard(); }
-  if (e.key === 'Backspace') { var parent = document.querySelector('.breadcrumb a:nth-last-child(3)'); if (parent) parent.click(); }
+  if (e.key === 'Backspace' && !monacoEditor) { var parent = document.querySelector('.breadcrumb a:nth-last-child(3)'); if (parent) parent.click(); }
 });
 </script>
 </body>
