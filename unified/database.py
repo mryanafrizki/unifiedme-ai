@@ -183,6 +183,26 @@ CREATE TABLE IF NOT EXISTS mcp_instances (
     tunnel_pid      INTEGER DEFAULT 0,
     created_at      TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT DEFAULT 'New Chat',
+    model       TEXT DEFAULT '',
+    endpoint    TEXT DEFAULT '',
+    api_key     TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id  INTEGER NOT NULL,
+    role        TEXT NOT NULL,           -- system, user, assistant, thinking
+    content     TEXT NOT NULL DEFAULT '',
+    model       TEXT DEFAULT '',
+    created_at  TEXT DEFAULT (datetime('now')),
+    FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
+);
 """
 
 
@@ -1208,3 +1228,114 @@ async def delete_mcp_instance(mcp_id: int) -> bool:
     cur = await conn.execute("DELETE FROM mcp_instances WHERE id = ?", (mcp_id,))
     await conn.commit()
     return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# Chat Sessions + Messages
+# ---------------------------------------------------------------------------
+
+async def create_chat_session(title: str = "New Chat", model: str = "") -> int:
+    conn = await get_db()
+    cur = await conn.execute(
+        "INSERT INTO chat_sessions (title, model) VALUES (?, ?)", (title, model),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def get_chat_sessions() -> list[dict]:
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_chat_session(session_id: int) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def update_chat_session(session_id: int, **fields: Any) -> bool:
+    if not fields:
+        return False
+    conn = await get_db()
+    fields["updated_at"] = "datetime('now')"
+    sets, vals = [], []
+    for k, v in fields.items():
+        if v == "datetime('now')":
+            sets.append(f"{k} = datetime('now')")
+        else:
+            sets.append(f"{k} = ?")
+            vals.append(v)
+    vals.append(session_id)
+    cur = await conn.execute(f"UPDATE chat_sessions SET {', '.join(sets)} WHERE id = ?", vals)
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def delete_chat_session(session_id: int) -> bool:
+    conn = await get_db()
+    await conn.execute("DELETE FROM chat_messages WHERE session_id = ?", (session_id,))
+    cur = await conn.execute("DELETE FROM chat_sessions WHERE id = ?", (session_id,))
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def add_chat_message(session_id: int, role: str, content: str, model: str = "") -> int:
+    conn = await get_db()
+    cur = await conn.execute(
+        "INSERT INTO chat_messages (session_id, role, content, model) VALUES (?, ?, ?, ?)",
+        (session_id, role, content, model),
+    )
+    await conn.execute(
+        "UPDATE chat_sessions SET updated_at = datetime('now') WHERE id = ?", (session_id,),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def get_chat_messages(session_id: int) -> list[dict]:
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY id ASC", (session_id,),
+    )
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def delete_all_chat_sessions() -> int:
+    conn = await get_db()
+    await conn.execute("DELETE FROM chat_messages")
+    cur = await conn.execute("DELETE FROM chat_sessions")
+    await conn.commit()
+    return cur.rowcount
+
+
+async def export_chat_data() -> dict:
+    """Export all chat sessions + messages as JSON."""
+    sessions = await get_chat_sessions()
+    result = []
+    for s in sessions:
+        msgs = await get_chat_messages(s["id"])
+        result.append({**s, "messages": msgs})
+    return {"sessions": result, "count": len(result)}
+
+
+async def import_chat_data(data: dict) -> int:
+    """Import chat sessions + messages from JSON. Returns count imported."""
+    conn = await get_db()
+    imported = 0
+    for s in data.get("sessions", []):
+        cur = await conn.execute(
+            "INSERT INTO chat_sessions (title, model, created_at, updated_at) VALUES (?, ?, ?, ?)",
+            (s.get("title", "Imported"), s.get("model", ""), s.get("created_at", ""), s.get("updated_at", "")),
+        )
+        sid = cur.lastrowid
+        for m in s.get("messages", []):
+            await conn.execute(
+                "INSERT INTO chat_messages (session_id, role, content, model, created_at) VALUES (?, ?, ?, ?, ?)",
+                (sid, m.get("role", "user"), m.get("content", ""), m.get("model", ""), m.get("created_at", "")),
+            )
+        imported += 1
+    await conn.commit()
+    return imported

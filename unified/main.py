@@ -22,6 +22,7 @@ from .router_admin import router as admin_router
 from .router_vps import router as vps_router
 from .router_terminal import router as terminal_router
 from .router_explorer import router as explorer_router
+from .router_chat import router as chat_router
 from .proxy_kiro import close_all_clients as close_kiro
 from .proxy_codebuddy import close_all_clients as close_codebuddy
 from .proxy_wavespeed import close_all_clients as close_wavespeed
@@ -363,6 +364,7 @@ app.include_router(admin_router)
 app.include_router(vps_router)
 app.include_router(terminal_router)
 app.include_router(explorer_router)
+app.include_router(chat_router)
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +373,7 @@ app.include_router(explorer_router)
 
 DASHBOARD_PATH = BASE_DIR / "dashboard.html"
 EXPLORER_PATH = BASE_DIR / "explorer.html"
+CHAT_PATH = BASE_DIR / "chat.html"
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -396,6 +399,17 @@ async def serve_explorer():
     )
 
 
+@app.get("/chat", response_class=HTMLResponse)
+async def serve_chat():
+    """Serve the AI chat UI."""
+    if CHAT_PATH.exists():
+        return FileResponse(CHAT_PATH, media_type="text/html")
+    return HTMLResponse(
+        "<html><body><h1>Chat not found</h1></body></html>",
+        status_code=200,
+    )
+
+
 @app.get("/")
 async def root():
     """Health check / info endpoint."""
@@ -407,6 +421,7 @@ async def root():
             "admin": "/api/accounts, /api/keys, /api/stats, /api/batch/*",
             "dashboard": "/dashboard",
             "explorer": "/explorer",
+            "chat": "/chat",
             "docs": "/docs",
         },
     }
