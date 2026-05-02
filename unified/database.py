@@ -172,6 +172,17 @@ CREATE TABLE IF NOT EXISTS vps_servers (
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS mcp_instances (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace_path  TEXT NOT NULL,
+    port            INTEGER NOT NULL DEFAULT 9876,
+    pid             INTEGER DEFAULT 0,
+    status          TEXT DEFAULT 'stopped',  -- stopped, running
+    tunnel_url      TEXT DEFAULT '',
+    tunnel_pid      INTEGER DEFAULT 0,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
 """
 
 
@@ -1137,5 +1148,63 @@ async def delete_vps_server(vps_id: int) -> bool:
     """Delete a VPS server."""
     conn = await get_db()
     cur = await conn.execute("DELETE FROM vps_servers WHERE id = ?", (vps_id,))
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+# ---------------------------------------------------------------------------
+# MCP Instances CRUD
+# ---------------------------------------------------------------------------
+
+async def add_mcp_instance(workspace_path: str, port: int = 9876) -> int:
+    conn = await get_db()
+    cur = await conn.execute(
+        "INSERT INTO mcp_instances (workspace_path, port) VALUES (?, ?)",
+        (workspace_path, port),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def get_mcp_instances() -> list[dict]:
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM mcp_instances ORDER BY created_at DESC")
+    return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_mcp_instance(mcp_id: int) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM mcp_instances WHERE id = ?", (mcp_id,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_mcp_instance_by_path(workspace_path: str) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute("SELECT * FROM mcp_instances WHERE workspace_path = ?", (workspace_path,))
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def update_mcp_instance(mcp_id: int, **fields: Any) -> bool:
+    if not fields:
+        return False
+    conn = await get_db()
+    sets = []
+    vals = []
+    for k, v in fields.items():
+        sets.append(f"{k} = ?")
+        vals.append(v)
+    vals.append(mcp_id)
+    cur = await conn.execute(
+        f"UPDATE mcp_instances SET {', '.join(sets)} WHERE id = ?", vals
+    )
+    await conn.commit()
+    return cur.rowcount > 0
+
+
+async def delete_mcp_instance(mcp_id: int) -> bool:
+    conn = await get_db()
+    cur = await conn.execute("DELETE FROM mcp_instances WHERE id = ?", (mcp_id,))
     await conn.commit()
     return cur.rowcount > 0

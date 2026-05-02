@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
+from pathlib import Path as _Path
 from typing import Optional
 
 import httpx
@@ -1949,37 +1951,238 @@ async def detect_ip_endpoint(_: bool = Depends(verify_admin)):
 
 
 # ---------------------------------------------------------------------------
-# MCP Workspace Management
+# MCP Server Instances (multi-instance management)
 # ---------------------------------------------------------------------------
 
-@router.post("/mcp/setup-workspace")
-async def setup_mcp_workspace_endpoint(request: Request, _: bool = Depends(verify_admin)):
-    """Create an MCP workspace folder. Body: {name: "my-project"}."""
-    from .tunnel_manager import setup_mcp_workspace
+@router.get("/mcp/instances")
+async def list_mcp_instances(_: bool = Depends(verify_admin)):
+    """List all MCP server instances with live status check."""
+    instances = await db.get_mcp_instances()
+    # Check if PIDs are still alive
+    import os as _os
+    for inst in instances:
+        pid = inst.get("pid", 0)
+        if pid and not _pid_alive(pid):
+            await db.update_mcp_instance(inst["id"], pid=0, status="stopped")
+            inst["pid"] = 0
+            inst["status"] = "stopped"
+        tpid = inst.get("tunnel_pid", 0)
+        if tpid and not _pid_alive(tpid):
+            await db.update_mcp_instance(inst["id"], tunnel_pid=0, tunnel_url="")
+            inst["tunnel_pid"] = 0
+            inst["tunnel_url"] = ""
+    return {"instances": instances, "count": len(instances)}
+
+
+@router.post("/mcp/instances")
+async def add_mcp_instance(request: Request, _: bool = Depends(verify_admin)):
+    """Add a new MCP server instance. Body: {workspace_path, port?}."""
     body = await request.json()
-    name = str(body.get("name", "")).strip()
-    if not name:
-        return JSONResponse({"error": "name is required"}, status_code=400)
-    result = setup_mcp_workspace(name)
-    if not result.get("ok"):
-        return JSONResponse(result, status_code=400)
-    return result
+    workspace_path = str(body.get("workspace_path", "")).strip()
+    port = int(body.get("port", 9876))
+    if not workspace_path:
+        return JSONResponse({"error": "workspace_path is required"}, status_code=400)
+
+    from pathlib import Path as _Path
+    p = _Path(workspace_path).expanduser().resolve()
+    if not p.exists():
+        return JSONResponse({"error": f"Path does not exist: {workspace_path}"}, status_code=400)
+    if not p.is_dir():
+        return JSONResponse({"error": f"Not a directory: {workspace_path}"}, status_code=400)
+
+    # Check duplicate path
+    existing = await db.get_mcp_instance_by_path(str(p))
+    if existing:
+        return JSONResponse({"error": f"MCP server already exists for this path (ID {existing['id']})"}, status_code=409)
+
+    mcp_id = await db.add_mcp_instance(str(p), port)
+    return {"ok": True, "id": mcp_id, "workspace_path": str(p), "port": port}
 
 
-@router.get("/mcp/workspaces")
-async def list_mcp_workspaces(_: bool = Depends(verify_admin)):
-    """List existing MCP workspace folders."""
-    from .tunnel_manager import get_mcp_workspaces
-    workspaces = get_mcp_workspaces()
-    return {"workspaces": workspaces, "count": len(workspaces)}
+@router.delete("/mcp/instances/{mcp_id}")
+async def remove_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
+    """Remove an MCP instance (stops it first if running)."""
+    inst = await db.get_mcp_instance(mcp_id)
+    if not inst:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    # Stop if running
+    if inst.get("pid") and _pid_alive(inst["pid"]):
+        _kill_pid_safe(inst["pid"])
+    if inst.get("tunnel_pid") and _pid_alive(inst["tunnel_pid"]):
+        _kill_pid_safe(inst["tunnel_pid"])
+    await db.delete_mcp_instance(mcp_id)
+    return {"ok": True}
 
 
-@router.delete("/mcp/workspaces/{name}")
-async def delete_mcp_workspace_endpoint(name: str, _: bool = Depends(verify_admin)):
-    """Delete an MCP workspace folder."""
-    from .tunnel_manager import delete_mcp_workspace
-    result = delete_mcp_workspace(name)
-    if not result.get("ok"):
-        return JSONResponse(result, status_code=400)
-    return result
+@router.post("/mcp/instances/{mcp_id}/start")
+async def start_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
+    """Start an MCP server instance."""
+    import subprocess as _sp
+    inst = await db.get_mcp_instance(mcp_id)
+    if not inst:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    # Already running?
+    if inst.get("pid") and _pid_alive(inst["pid"]):
+        return {"ok": True, "pid": inst["pid"], "message": "Already running"}
+
+    from pathlib import Path as _Path
+    install_dir = _Path(__file__).resolve().parent.parent
+    python_bin = install_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+    if not python_bin.exists():
+        import sys
+        python_bin = _Path(sys.executable)
+    mcp_script = install_dir / "mcp_server.py"
+
+    log_file = _Path(inst["workspace_path"]) / ".mcp_server.log"
+    cmd = [
+        str(python_bin), str(mcp_script),
+        "--workspace", inst["workspace_path"],
+        "--port", str(inst["port"]),
+        "--no-tunnel", "--no-interactive",
+    ]
+    # Load API key
+    api_key_file = install_dir / "unified" / "data" / ".mcp_api_key"
+    if api_key_file.exists():
+        key = api_key_file.read_text().strip()
+        if key:
+            cmd.extend(["--api-key", key])
+
+    log_fh = open(log_file, "a")
+    if os.name == "nt":
+        proc = _sp.Popen(cmd, stdout=log_fh, stderr=_sp.STDOUT,
+                         creationflags=_sp.CREATE_NO_WINDOW | _sp.DETACHED_PROCESS, close_fds=True)
+    else:
+        proc = _sp.Popen(cmd, stdout=log_fh, stderr=_sp.STDOUT,
+                         start_new_session=True, close_fds=True)
+
+    await db.update_mcp_instance(mcp_id, pid=proc.pid, status="running")
+    return {"ok": True, "pid": proc.pid, "port": inst["port"]}
+
+
+@router.post("/mcp/instances/{mcp_id}/stop")
+async def stop_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
+    """Stop an MCP server instance."""
+    inst = await db.get_mcp_instance(mcp_id)
+    if not inst:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    pid = inst.get("pid", 0)
+    if pid and _pid_alive(pid):
+        _kill_pid_safe(pid)
+    # Also stop tunnel if running
+    tpid = inst.get("tunnel_pid", 0)
+    if tpid and _pid_alive(tpid):
+        _kill_pid_safe(tpid)
+    await db.update_mcp_instance(mcp_id, pid=0, status="stopped", tunnel_pid=0, tunnel_url="")
+    return {"ok": True}
+
+
+@router.post("/mcp/instances/{mcp_id}/tunnel")
+async def toggle_mcp_tunnel(mcp_id: int, request: Request, _: bool = Depends(verify_admin)):
+    """Start or stop cloudflared tunnel for an MCP instance. Body: {action: "start"|"stop"}."""
+    body = await request.json()
+    action = str(body.get("action", "start")).strip()
+    inst = await db.get_mcp_instance(mcp_id)
+    if not inst:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    if action == "stop":
+        tpid = inst.get("tunnel_pid", 0)
+        if tpid and _pid_alive(tpid):
+            _kill_pid_safe(tpid)
+        await db.update_mcp_instance(mcp_id, tunnel_pid=0, tunnel_url="")
+        return {"ok": True, "message": "Tunnel stopped"}
+
+    # Start tunnel
+    from .tunnel_manager import check_cloudflared
+    import subprocess as _sp
+    cf_path = check_cloudflared()
+    if not cf_path:
+        return {"ok": False, "error": "cloudflared not installed"}
+
+    port = inst["port"]
+    state_dir = _Path(__file__).resolve().parent / "data" / "tunnels"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    log_path = state_dir / f"mcp_{mcp_id}.log"
+
+    log_fh = open(log_path, "w")
+    if os.name == "nt":
+        proc = _sp.Popen([cf_path, "tunnel", "--url", f"http://localhost:{port}"],
+                         stdout=_sp.DEVNULL, stderr=log_fh,
+                         creationflags=_sp.CREATE_NO_WINDOW | _sp.DETACHED_PROCESS)
+    else:
+        proc = _sp.Popen([cf_path, "tunnel", "--url", f"http://localhost:{port}"],
+                         stdout=_sp.DEVNULL, stderr=log_fh,
+                         start_new_session=True, close_fds=True)
+
+    # Poll log for URL
+    import time as _time, re as _re
+    tunnel_url = ""
+    for _ in range(50):
+        _time.sleep(0.5)
+        if proc.poll() is not None:
+            break
+        try:
+            content = log_path.read_text(errors="replace")
+            match = _re.search(r'(https://[a-z0-9\-]+\.trycloudflare\.com)', content)
+            if match:
+                tunnel_url = match.group(1)
+                break
+        except Exception:
+            pass
+
+    await db.update_mcp_instance(mcp_id, tunnel_pid=proc.pid, tunnel_url=tunnel_url)
+    if tunnel_url:
+        return {"ok": True, "url": tunnel_url, "pid": proc.pid}
+    return {"ok": False, "error": "Timeout waiting for tunnel URL", "pid": proc.pid}
+
+
+@router.get("/mcp/instances/by-path")
+async def get_mcp_by_path(path: str, _: bool = Depends(verify_admin)):
+    """Check if a path has an MCP instance. Used by explorer."""
+    from pathlib import Path as _Path
+    resolved = str(_Path(path).expanduser().resolve())
+    inst = await db.get_mcp_instance_by_path(resolved)
+    if inst:
+        # Live check
+        if inst.get("pid") and not _pid_alive(inst["pid"]):
+            await db.update_mcp_instance(inst["id"], pid=0, status="stopped")
+            inst["pid"] = 0
+            inst["status"] = "stopped"
+        return {"found": True, "instance": inst}
+    return {"found": False}
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import subprocess as _sp
+            r = _sp.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True, timeout=5)
+            return str(pid) in r.stdout
+        else:
+            os.kill(pid, 0)
+            return True
+    except (OSError, Exception):
+        return False
+
+
+def _kill_pid_safe(pid: int):
+    try:
+        if os.name == "nt":
+            import subprocess as _sp
+            _sp.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+        else:
+            os.kill(pid, 15)
+            import time as _time
+            for _ in range(10):
+                _time.sleep(0.5)
+                try:
+                    os.kill(pid, 0)
+                except OSError:
+                    return
+            os.kill(pid, 9)
+    except Exception:
+        pass
 

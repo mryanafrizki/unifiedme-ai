@@ -110,6 +110,19 @@ code,.mono{font-family:'JetBrains Mono',monospace}
     <div style="flex:1"></div>
     <span id="status-bar" style="font-size:.72rem;color:var(--text-muted)"></span>
   </div>
+  <!-- MCP bar (shown when current dir is/can be MCP server) -->
+  <div id="mcp-bar" style="display:none;padding:.45rem 1rem;background:var(--surface2);border-bottom:1px solid var(--border);display:none;align-items:center;gap:.6rem;font-size:.82rem">
+    <span style="font-weight:600;color:var(--accent)">MCP Server</span>
+    <span id="mcp-bar-status" class="badge badge-queued">—</span>
+    <span id="mcp-bar-url" class="mono" style="color:var(--green);font-size:.78rem;cursor:pointer" onclick="if(this.textContent)navigator.clipboard.writeText(this.textContent)"></span>
+    <div style="flex:1"></div>
+    <button class="btn" id="mcp-bar-start" onclick="mcpBarStart()" style="font-size:.75rem">Start</button>
+    <button class="btn" id="mcp-bar-stop" onclick="mcpBarStop()" style="display:none;font-size:.75rem">Stop</button>
+    <button class="btn" id="mcp-bar-tunnel" onclick="mcpBarTunnel('start')" style="font-size:.75rem">Start Tunnel</button>
+    <button class="btn" id="mcp-bar-tunnel-stop" onclick="mcpBarTunnel('stop')" style="display:none;font-size:.75rem">Stop Tunnel</button>
+    <button class="btn" id="mcp-bar-add" onclick="mcpBarAdd()" style="font-size:.75rem;color:var(--accent)">+ Enable MCP</button>
+    <button class="btn" id="mcp-bar-remove" onclick="mcpBarRemove()" style="display:none;font-size:.75rem;color:var(--red)">Remove MCP</button>
+  </div>
   <div class="main">
     <div class="file-list" id="file-list"></div>
     <div class="preview-panel" id="preview-panel">
@@ -185,6 +198,7 @@ async function loadDir(path) {
     var data = await resp.json();
     renderBreadcrumb(data.path);
     renderFileList(data.entries, data.path);
+    checkMcpForPath(data.path);
   } catch(e) {
     document.getElementById('file-list').innerHTML = '<div class="empty-state">Error: ' + e.message + '</div>';
   }
@@ -405,6 +419,121 @@ async function uploadFile(input) {
   input.value = '';
   loadDir(currentPath);
   document.getElementById('status-bar').textContent = files.length + ' file(s) uploaded';
+}
+
+// ── MCP Bar ──
+
+var currentMcpInstance = null; // null or {id, status, pid, port, tunnel_url, ...}
+
+async function checkMcpForPath(dirPath) {
+  currentMcpInstance = null;
+  var bar = document.getElementById('mcp-bar');
+  try {
+    var resp = await fetch('/api/mcp/instances/by-path?path=' + encodeURIComponent(dirPath), { headers: getHeaders() });
+    if (!resp.ok) { bar.style.display = 'none'; return; }
+    var data = await resp.json();
+    if (data.found) {
+      currentMcpInstance = data.instance;
+      renderMcpBar();
+      bar.style.display = 'flex';
+    } else {
+      // Not an MCP server — show "Enable MCP" option
+      currentMcpInstance = null;
+      renderMcpBar();
+      bar.style.display = 'flex';
+    }
+  } catch(e) { bar.style.display = 'none'; }
+}
+
+function renderMcpBar() {
+  var inst = currentMcpInstance;
+  var statusEl = document.getElementById('mcp-bar-status');
+  var urlEl = document.getElementById('mcp-bar-url');
+  var startBtn = document.getElementById('mcp-bar-start');
+  var stopBtn = document.getElementById('mcp-bar-stop');
+  var tunnelBtn = document.getElementById('mcp-bar-tunnel');
+  var tunnelStopBtn = document.getElementById('mcp-bar-tunnel-stop');
+  var addBtn = document.getElementById('mcp-bar-add');
+  var removeBtn = document.getElementById('mcp-bar-remove');
+
+  if (!inst) {
+    // Not an MCP server yet
+    statusEl.textContent = 'not configured';
+    statusEl.className = 'badge badge-queued';
+    urlEl.textContent = '';
+    startBtn.style.display = 'none';
+    stopBtn.style.display = 'none';
+    tunnelBtn.style.display = 'none';
+    tunnelStopBtn.style.display = 'none';
+    addBtn.style.display = '';
+    removeBtn.style.display = 'none';
+    return;
+  }
+
+  addBtn.style.display = 'none';
+  removeBtn.style.display = '';
+  var running = inst.status === 'running' && inst.pid > 0;
+  statusEl.textContent = running ? 'running :' + inst.port : 'stopped';
+  statusEl.className = 'badge ' + (running ? 'badge-active' : 'badge-queued');
+  startBtn.style.display = running ? 'none' : '';
+  stopBtn.style.display = running ? '' : 'none';
+
+  var hasUrl = inst.tunnel_url && inst.tunnel_pid > 0;
+  urlEl.textContent = hasUrl ? inst.tunnel_url + '/mcp' : '';
+  urlEl.title = hasUrl ? 'Click to copy' : '';
+  tunnelBtn.style.display = (running && !hasUrl) ? '' : 'none';
+  tunnelStopBtn.style.display = hasUrl ? '' : 'none';
+}
+
+async function mcpBarAdd() {
+  var port = prompt('MCP server port:', '9876');
+  if (!port) return;
+  try {
+    var resp = await fetch('/api/mcp/instances', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ workspace_path: currentPath, port: parseInt(port) }) });
+    var data = await resp.json();
+    if (data.ok) { checkMcpForPath(currentPath); }
+    else { alert('Error: ' + (data.error || '')); }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function mcpBarRemove() {
+  if (!currentMcpInstance) return;
+  if (!confirm('Remove MCP server from this folder?')) return;
+  try {
+    await fetch('/api/mcp/instances/' + currentMcpInstance.id, { method: 'DELETE', headers: getHeaders() });
+    currentMcpInstance = null;
+    checkMcpForPath(currentPath);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function mcpBarStart() {
+  if (!currentMcpInstance) return;
+  try {
+    var resp = await fetch('/api/mcp/instances/' + currentMcpInstance.id + '/start', { method: 'POST', headers: getHeaders() });
+    var data = await resp.json();
+    if (data.ok) { checkMcpForPath(currentPath); }
+    else { alert('Error: ' + (data.error || '')); }
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function mcpBarStop() {
+  if (!currentMcpInstance) return;
+  try {
+    await fetch('/api/mcp/instances/' + currentMcpInstance.id + '/stop', { method: 'POST', headers: getHeaders() });
+    checkMcpForPath(currentPath);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function mcpBarTunnel(action) {
+  if (!currentMcpInstance) return;
+  try {
+    var resp = await fetch('/api/mcp/instances/' + currentMcpInstance.id + '/tunnel', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ action: action }) });
+    var data = await resp.json();
+    if (data.ok && data.url) {
+      navigator.clipboard.writeText(data.url + '/mcp').catch(function(){});
+    }
+    checkMcpForPath(currentPath);
+  } catch(e) { alert('Error: ' + e.message); }
 }
 
 // Keyboard shortcuts
