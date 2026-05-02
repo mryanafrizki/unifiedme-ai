@@ -56,7 +56,8 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 .file-entry.selected{background:var(--surface3);border:1px solid var(--border)}
 .file-icon{width:20px;text-align:center;font-size:1rem;flex-shrink:0}
 .file-name{flex:1;font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.file-meta{font-size:.75rem;color:var(--text-muted);white-space:nowrap}
+.file-meta{font-size:.75rem;color:var(--text-muted);white-space:nowrap;width:60px;text-align:right}
+.file-date{font-size:.72rem;color:var(--text-muted);white-space:nowrap;width:140px;text-align:right}
 .dir-icon{color:var(--accent)}
 .file-icon-img{color:var(--green)}
 .file-icon-code{color:var(--orange)}
@@ -145,6 +146,10 @@ var currentPath = '~';
 var currentFile = '';
 var selectedEntry = null; // {name, type, fullPath}
 var clipboard = null; // {action: 'copy'|'cut', path, name, type}
+var currentEntries = []; // raw entries from API
+var currentBasePath = '';
+var sortBy = 'modified'; // name, size, modified
+var sortDesc = true; // newest first by default
 
 function getHeaders() {
   return { 'Authorization': 'Bearer ' + adminPassword, 'Content-Type': 'application/json' };
@@ -219,17 +224,47 @@ function renderBreadcrumb(fullPath) {
 }
 
 function renderFileList(entries, basePath) {
+  currentEntries = entries;
+  currentBasePath = basePath;
   var el = document.getElementById('file-list');
   if (!entries.length) { el.innerHTML = '<div class="empty-state">Empty directory</div>'; return; }
-  var html = '';
-  entries.forEach(function(e) {
+
+  // Sort: dirs first, then by sortBy
+  var sorted = entries.slice().sort(function(a, b) {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    if (sortBy === 'name') {
+      var cmp = a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+      return sortDesc ? -cmp : cmp;
+    }
+    if (sortBy === 'size') {
+      var cmp = (a.size || 0) - (b.size || 0);
+      return sortDesc ? -cmp : cmp;
+    }
+    if (sortBy === 'modified') {
+      var cmp = (a.modified || '').localeCompare(b.modified || '');
+      return sortDesc ? -cmp : cmp;
+    }
+    return 0;
+  });
+
+  // Header row
+  var html = '<div class="file-entry file-header" style="font-size:.72rem;color:var(--text-muted);cursor:pointer;padding:.3rem .85rem;border-bottom:1px solid var(--border);font-weight:600">';
+  html += '<span class="file-icon"></span>';
+  html += '<span class="file-name" onclick="toggleSort(\'name\')" style="cursor:pointer">Name ' + sortArrow('name') + '</span>';
+  html += '<span class="file-date" onclick="toggleSort(\'modified\')" style="cursor:pointer;width:140px;text-align:right">Modified ' + sortArrow('modified') + '</span>';
+  html += '<span class="file-meta" onclick="toggleSort(\'size\')" style="cursor:pointer">Size ' + sortArrow('size') + '</span>';
+  html += '</div>';
+
+  sorted.forEach(function(e) {
     var fullPath = basePath + '/' + e.name;
     var esc = fullPath.replace(/'/g, "\\'");
     var icon = getIcon(e);
     var dblclick = e.type === 'dir' ? ' ondblclick="loadDir(\'' + esc + '\')"' : ' ondblclick="previewFile(\'' + esc + '\')"';
+    var dateStr = e.modified ? formatDate(e.modified) : '';
     html += '<div class="file-entry" onclick="selectEntry(\'' + esc + '\',\'' + e.name.replace(/'/g, "\\'") + '\',\'' + e.type + '\')"' + dblclick + '>';
     html += '<span class="file-icon ' + icon.cls + '">' + icon.icon + '</span>';
     html += '<span class="file-name">' + e.name + '</span>';
+    html += '<span class="file-date">' + dateStr + '</span>';
     html += '<span class="file-meta">' + (e.size_human || '') + '</span>';
     html += '</div>';
   });
@@ -237,6 +272,36 @@ function renderFileList(entries, basePath) {
   selectedEntry = null;
   updateToolbar();
   document.getElementById('status-bar').textContent = entries.length + ' items';
+}
+
+function toggleSort(field) {
+  if (sortBy === field) { sortDesc = !sortDesc; }
+  else { sortBy = field; sortDesc = field === 'modified'; }
+  renderFileList(currentEntries, currentBasePath);
+}
+
+function sortArrow(field) {
+  if (sortBy !== field) return '';
+  return sortDesc ? ' &#x25BC;' : ' &#x25B2;';
+}
+
+function formatDate(iso) {
+  if (!iso) return '';
+  try {
+    var d = new Date(iso);
+    var now = new Date();
+    var diff = now - d;
+    // Today: show time only
+    if (diff < 86400000 && d.getDate() === now.getDate()) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    // This year: show month day time
+    if (d.getFullYear() === now.getFullYear()) {
+      return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    // Older: show full date
+    return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+  } catch(e) { return iso.substring(0, 16); }
 }
 
 function selectEntry(fullPath, name, type) {
