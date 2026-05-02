@@ -1594,19 +1594,17 @@ def cmd_mcp_start():
     if args and args[0] not in ("--port",):
         ws_input = args[0]
     else:
-        # Interactive: ask for folder name
+        # Interactive: ask for folder name + port
         print(f"\n  {_CYAN}MCP Server — Start{_NC}")
         print(f"  Workspace is the folder MCP tools can read/write.")
-        print(f"  Enter a name (creates ~/mcp-workspaces/<name>)")
-        print(f"  Or a full path (e.g. ~/my-project)")
         print()
         try:
-            ws_input = input("  Workspace: ").strip()
+            ws_input = input(f"  Workspace name [mcp-default]: ").strip() or "mcp-default"
+            port_input = input(f"  Port [{port}]: ").strip()
+            if port_input.isdigit():
+                port = int(port_input)
         except (EOFError, KeyboardInterrupt):
             print("\n  Cancelled.")
-            return
-        if not ws_input:
-            print(f"  {_RED}Workspace is required.{_NC}")
             return
 
     # Resolve workspace path
