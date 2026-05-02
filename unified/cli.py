@@ -1777,16 +1777,37 @@ def cmd_mcp_start():
         print(f"  {_RED}Proxy not running. Start with: {CMD} start{_NC}")
         return
 
-    if args:
-        mcp_id = args[0]
+    def _start_instance(mcp_id):
+        """Start MCP server + tunnel for an instance."""
         try:
             res = _aa_api("POST", f"/mcp/instances/{mcp_id}/start")
-            if res.get("ok"):
-                print(f"  {_GREEN}MCP #{mcp_id} started (PID {res.get('pid', '?')}, port {res.get('port', '?')}){_NC}")
-            else:
-                print(f"  {_RED}Failed: {res.get('error', '?')}{_NC}")
+            if not res.get("ok"):
+                return False, res.get("error", "?")
+            pid = res.get("pid", "?")
+            port = res.get("port", "?")
+            # Auto-start tunnel
+            tunnel_url = ""
+            try:
+                tres = _aa_api("POST", f"/mcp/instances/{mcp_id}/tunnel",
+                               json_body={"action": "start"}, timeout=30)
+                tunnel_url = tres.get("url", "")
+            except Exception:
+                pass
+            return True, {"pid": pid, "port": port, "tunnel_url": tunnel_url}
         except Exception as e:
-            print(f"  {_RED}Failed: {e}{_NC}")
+            return False, str(e)
+
+    if args:
+        mcp_id = args[0]
+        ok, info = _start_instance(mcp_id)
+        if ok:
+            print(f"  {_GREEN}MCP #{mcp_id} started (PID {info['pid']}, port {info['port']}){_NC}")
+            if info["tunnel_url"]:
+                print(f"  Tunnel: {_WHITE}{info['tunnel_url']}/mcp{_NC}")
+            else:
+                print(f"  {_DIM}Tunnel: not available (cloudflared not installed?){_NC}")
+        else:
+            print(f"  {_RED}Failed: {info}{_NC}")
     else:
         # Start all stopped
         try:
@@ -1797,11 +1818,13 @@ def cmd_mcp_start():
                 print(f"  {_DIM}No stopped MCP instances.{_NC}")
                 return
             for inst in stopped:
-                res = _aa_api("POST", f"/mcp/instances/{inst['id']}/start")
-                if res.get("ok"):
-                    print(f"  {_GREEN}[OK]{_NC} #{inst['id']} {inst['workspace_path']} :{inst['port']} (PID {res.get('pid', '?')})")
+                ok, info = _start_instance(inst["id"])
+                if ok:
+                    url_str = f" | {info['tunnel_url']}/mcp" if info["tunnel_url"] else ""
+                    print(f"  {_GREEN}[OK]{_NC} #{inst['id']} :{info['port']} PID:{info['pid']}{url_str}")
+                    print(f"       {_DIM}{inst['workspace_path']}{_NC}")
                 else:
-                    print(f"  {_RED}[FAIL]{_NC} #{inst['id']} {res.get('error', '?')}")
+                    print(f"  {_RED}[FAIL]{_NC} #{inst['id']} {info}")
         except Exception as e:
             print(f"  {_RED}Failed: {e}{_NC}")
 
