@@ -1381,6 +1381,18 @@ a:hover{text-decoration:underline}
       </div>
     </div>
 
+    <!-- MCP API Key -->
+    <div class="section-title" style="margin-bottom:.75rem">MCP API Key</div>
+    <div class="stat-card" style="padding:1.25rem;margin-bottom:1.5rem">
+      <p class="text-dim" style="font-size:.82rem;margin-bottom:.75rem">API key used by MCP servers for gl:// image downloads. Must match a valid proxy API key.</p>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <input type="text" id="mcp-apikey-input" placeholder="sk-xxxxxxxxxxxx" style="flex:1;padding:.45rem .7rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;font-family:'JetBrains Mono',monospace">
+        <button class="btn btn-accent btn-sm" onclick="saveMcpApiKey()">Save</button>
+        <button class="btn btn-sm" onclick="loadMcpApiKey()">Load Current</button>
+      </div>
+      <div id="mcp-apikey-status" style="font-size:.75rem;margin-top:.4rem;color:var(--text-muted)"></div>
+    </div>
+
     <!-- Active MCP Servers -->
     <div class="section-title" style="margin-bottom:.75rem">Active MCP Servers</div>
     <div class="stat-card" style="padding:1.25rem">
@@ -1973,7 +1985,7 @@ function initTabs() {
       // Load proxy data when proxy tab is activated
       if (btn.dataset.tab === 'proxy') { loadProxies('api'); loadProxies('batch'); }
       if (btn.dataset.tab === 'filter') { loadFilters(); loadGlobalFilters(); }
-      if (btn.dataset.tab === 'tunnel') { loadTunnelStatus(); loadMcpInstances(); startTunnelRefresh(); }
+      if (btn.dataset.tab === 'tunnel') { loadTunnelStatus(); loadMcpInstances(); loadMcpApiKey(); startTunnelRefresh(); }
       else { stopTunnelRefresh(); }
       if (btn.dataset.tab === 'vps') { loadVpsList(); }
       if (btn.dataset.tab === 'docs') { setupDocsHost(); }
@@ -5110,6 +5122,40 @@ async function applyNginxLocal() {
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
+// ── MCP API Key ──
+
+async function loadMcpApiKey() {
+  try {
+    var data = await apiFetch('/api/mcp/apikey');
+    var input = document.getElementById('mcp-apikey-input');
+    var status = document.getElementById('mcp-apikey-status');
+    if (data.key) {
+      input.value = data.key;
+      status.textContent = 'Current key loaded (saved in unified/data/.mcp_api_key)';
+      status.style.color = 'var(--green)';
+    } else {
+      input.value = '';
+      status.textContent = 'No API key set — gl:// downloads will fail';
+      status.style.color = 'var(--red)';
+    }
+  } catch(e) { /* ignore */ }
+}
+
+async function saveMcpApiKey() {
+  var key = document.getElementById('mcp-apikey-input').value.trim();
+  if (!key) { toast('Enter an API key', 'error'); return; }
+  try {
+    var data = await apiFetch('/api/mcp/apikey', { method: 'POST', body: JSON.stringify({ key: key }) });
+    if (data.ok) {
+      toast('MCP API key saved. Restart MCP servers to apply.', 'success');
+      document.getElementById('mcp-apikey-status').textContent = 'Saved. Restart MCP servers to apply.';
+      document.getElementById('mcp-apikey-status').style.color = 'var(--green)';
+    } else {
+      toast('Error: ' + (data.error || ''), 'error');
+    }
+  } catch(e) { toast('Error: ' + e.message, 'error'); }
+}
+
 // ── MCP Instances List ──
 
 async function loadMcpInstances() {
@@ -5380,6 +5426,8 @@ window.detectVpsIp = detectVpsIp;
 window.setNginxMode = setNginxMode;
 window.generateNginxConfig = generateNginxConfig;
 window.applyNginxLocal = applyNginxLocal;
+window.saveMcpApiKey = saveMcpApiKey;
+window.loadMcpApiKey = loadMcpApiKey;
 window.addMcpFromDashboard = addMcpFromDashboard;
 window.loadMcpInstances = loadMcpInstances;
 window.mcpInstanceAction = mcpInstanceAction;

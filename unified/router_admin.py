@@ -2154,6 +2154,29 @@ async def detect_ip_endpoint(_: bool = Depends(verify_admin)):
 # MCP Server Instances (multi-instance management)
 # ---------------------------------------------------------------------------
 
+@router.get("/mcp/apikey")
+async def get_mcp_apikey(_: bool = Depends(verify_admin)):
+    """Get the current MCP API key."""
+    api_key_file = _Path(__file__).resolve().parent / "data" / ".mcp_api_key"
+    key = ""
+    if api_key_file.exists():
+        key = api_key_file.read_text().strip()
+    return {"key": key, "path": str(api_key_file)}
+
+
+@router.post("/mcp/apikey")
+async def set_mcp_apikey(request: Request, _: bool = Depends(verify_admin)):
+    """Set the MCP API key. Body: {key: "sk-xxx"}. Saves to file for MCP servers to use."""
+    body = await request.json()
+    key = str(body.get("key", "")).strip()
+    if not key:
+        return JSONResponse({"error": "key is required"}, status_code=400)
+    api_key_file = _Path(__file__).resolve().parent / "data" / ".mcp_api_key"
+    api_key_file.parent.mkdir(parents=True, exist_ok=True)
+    api_key_file.write_text(key)
+    return {"ok": True, "message": "API key saved. Restart MCP servers to apply."}
+
+
 @router.get("/mcp/instances")
 async def list_mcp_instances(_: bool = Depends(verify_admin)):
     """List all MCP server instances with live status check."""

@@ -1655,6 +1655,41 @@ def cmd_mcp_bind():
             print(f"  {_RED}Failed: {e}{_NC}")
 
 
+def cmd_mcp_apikey():
+    """Set or show MCP API key.
+
+    Usage:
+        unifiedme mcp apikey              Show current key
+        unifiedme mcp apikey <key>        Set key
+    """
+    args = sys.argv[3:]
+    api_key_file = DATA_DIR / ".mcp_api_key"
+
+    if args:
+        # Set key
+        key = args[0].strip()
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        api_key_file.write_text(key)
+        print(f"  {_GREEN}MCP API key saved.{_NC}")
+        print(f"  Key: {key[:10]}...{key[-4:]}")
+        print(f"  File: {api_key_file}")
+        print(f"\n  {_DIM}Restart MCP servers to apply: {CMD} mcp stop && {CMD} mcp start{_NC}")
+    else:
+        # Show key
+        if api_key_file.exists():
+            key = api_key_file.read_text().strip()
+            if key:
+                print(f"  MCP API Key: {key[:10]}...{key[-4:]}")
+                print(f"  File: {api_key_file}")
+            else:
+                print(f"  {_RED}MCP API key is empty.{_NC}")
+                print(f"  Set it: {CMD} mcp apikey sk-xxxxx")
+        else:
+            print(f"  {_RED}No MCP API key set.{_NC}")
+            print(f"  Set it: {CMD} mcp apikey sk-xxxxx")
+            print(f"  Get key from: {CMD} status → Dashboard → API Keys")
+
+
 def cmd_mcp_add():
     """Add an MCP server instance.
 
@@ -1838,6 +1873,7 @@ def cmd_mcp():
     subcmd = args[0] if args else "list"
 
     subcmds = {
+        "apikey": cmd_mcp_apikey,
         "add": cmd_mcp_add,
         "remove": cmd_mcp_remove,
         "start": cmd_mcp_start,
