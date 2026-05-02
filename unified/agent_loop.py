@@ -69,6 +69,73 @@ def _format_tool_result_text(name: str, result: Any) -> str:
         # Check for error
         if "error" in result:
             result_str = f"Error: {result['error']}"
+        elif "tree" in result:
+            # Tree output — render as-is (already has newlines)
+            result_str = result["tree"]
+        elif "text" in result and isinstance(result["text"], str):
+            # Text content (e.g. read_file)
+            result_str = result["text"]
+            if result.get("total_lines"):
+                result_str += f"\n({result.get('showing', '')})"
+        elif "stdout" in result:
+            # Shell command output
+            result_str = result.get("stdout", "")
+            if result.get("stderr"):
+                result_str += f"\nSTDERR: {result['stderr']}"
+            if result.get("exit_code", 0) != 0:
+                result_str += f"\n(exit code: {result['exit_code']})"
+        elif "entries" in result and isinstance(result["entries"], list):
+            # Directory listing
+            result_str = "\n".join(result["entries"])
+            if result.get("path"):
+                result_str = f"[{result['path']}]\n{result_str}"
+        elif "matches" in result and isinstance(result["matches"], list):
+            # Search results (grep, glob)
+            items = result["matches"]
+            if items and isinstance(items[0], dict):
+                # grep results with file/line/text
+                lines = []
+                for m in items[:50]:
+                    if "file" in m and "line" in m:
+                        lines.append(f"{m['file']}:{m['line']}: {m.get('text', '')}")
+                    else:
+                        lines.append(str(m))
+                result_str = "\n".join(lines)
+            elif items and isinstance(items[0], str):
+                # glob results
+                result_str = "\n".join(items)
+            else:
+                result_str = json.dumps(items, ensure_ascii=False, indent=2)
+            if result.get("count"):
+                result_str += f"\n({result['count']} matches)"
+        elif "ok" in result:
+            # Success result (write_file, edit_file, etc.)
+            parts = [f"OK"]
+            for k in ("path", "bytes", "replacements", "deleted", "from", "to"):
+                if k in result:
+                    parts.append(f"{k}: {result[k]}")
+            result_str = " | ".join(parts)
+        elif "documentation" in result:
+            # search_docs result
+            result_str = result.get("documentation", "")[:2000]
+            if result.get("library"):
+                result_str = f"Library: {result['library']}\n\n{result_str}"
+        elif "results" in result and isinstance(result["results"], list):
+            # web_search / search_github_code results
+            lines = []
+            for r in result["results"][:10]:
+                if "title" in r:
+                    lines.append(f"• {r['title']}\n  {r.get('url', '')}\n  {r.get('snippet', '')}")
+                elif "repo" in r:
+                    lines.append(f"• {r['repo']} — {r.get('file', '')}\n  {r.get('lines', '')}")
+                else:
+                    lines.append(str(r))
+            result_str = "\n".join(lines)
+        elif "content" in result and isinstance(result["content"], str):
+            # fetch_url result
+            result_str = result["content"][:2000]
+        elif "diff" in result:
+            result_str = result["diff"]
         else:
             result_str = json.dumps(result, ensure_ascii=False, indent=2)
     elif isinstance(result, list):
