@@ -505,8 +505,116 @@ async function showLicenseDetail(id) {
     <table><thead><tr><th>Model</th><th>Requests</th><th>Success</th><th>Avg Latency</th></tr></thead><tbody>
       ${(data.model_stats||[]).map(m => `<tr><td class="mono" style="font-size:.8rem">${m.model}</td><td>${fmt(m.total_requests)}</td><td>${m.total_requests>0?((m.total_success/m.total_requests)*100).toFixed(1):'0'}%</td><td>${m.total_requests>0?Math.round(m.total_latency_ms/m.total_requests):0}ms</td></tr>`).join('')}
     </tbody></table>` : ''}
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
+    <h4 style="margin-bottom:.75rem;font-size:.95rem;color:var(--accent)">Edit License</h4>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-bottom:.75rem">
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Owner Name</label>
+        <input id="edit-owner-name" value="${l.owner_name||''}" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Email</label>
+        <input id="edit-owner-email" value="${l.owner_email||''}" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Max Accounts</label>
+        <input id="edit-max-accounts" type="number" value="${l.max_accounts||50}" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Max Devices</label>
+        <input id="edit-max-devices" type="number" value="${l.max_devices||2}" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Tier</label>
+        <select id="edit-tier" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+          <option value="basic" ${l.tier==='basic'?'selected':''}>basic</option>
+          <option value="pro" ${l.tier==='pro'?'selected':''}>pro</option>
+          <option value="enterprise" ${l.tier==='enterprise'?'selected':''}>enterprise</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Active</label>
+        <select id="edit-active" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem">
+          <option value="1" ${l.active?'selected':''}>Active</option>
+          <option value="0" ${!l.active?'selected':''}>Inactive</option>
+        </select>
+      </div>
+    </div>
+    <button class="btn btn-accent" onclick="saveLicenseEdit('${l.id}')">Save Changes</button>
+    <span id="edit-result" style="margin-left:.75rem;font-size:.82rem"></span>
+
+    <hr style="border:none;border-top:1px solid var(--border);margin:1.25rem 0">
+    <h4 style="margin-bottom:.75rem;font-size:.95rem;color:var(--orange)">Transfer Accounts</h4>
+    <p style="font-size:.82rem;color:var(--text-dim);margin-bottom:.75rem">Transfer oldest active accounts from this license to another. Only accounts with active providers are transferred.</p>
+    <div style="display:grid;grid-template-columns:1fr auto auto;gap:.5rem;align-items:end;margin-bottom:.5rem">
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Target License ID</label>
+        <select id="transfer-target" style="width:100%;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;font-family:'JetBrains Mono',monospace">
+          ${licenseList.filter(x => x.id !== l.id).map(x => '<option value="' + x.id + '">' + x.id + ' (' + x.owner_name + ')</option>').join('')}
+        </select>
+      </div>
+      <div>
+        <label style="font-size:.75rem;color:var(--text-dim)">Count</label>
+        <input id="transfer-count" type="number" value="5" min="1" style="width:80px;padding:.4rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.85rem;text-align:center">
+      </div>
+      <button class="btn btn-accent" onclick="transferAccounts('${l.id}')">Transfer</button>
+    </div>
+    <div style="display:flex;gap:.75rem;margin-bottom:.5rem;font-size:.82rem">
+      <label><input type="checkbox" id="tf-kiro" checked> Kiro</label>
+      <label><input type="checkbox" id="tf-cb" checked> CodeBuddy</label>
+      <label><input type="checkbox" id="tf-ws" checked> WaveSpeed</label>
+      <label><input type="checkbox" id="tf-gl" checked> Gumloop</label>
+    </div>
+    <div id="transfer-result" style="font-size:.82rem;margin-top:.5rem"></div>
   `;
   document.getElementById('modal-license-detail').classList.add('show');
+}
+
+async function saveLicenseEdit(licId) {
+  const body = {
+    owner_name: document.getElementById('edit-owner-name').value.trim(),
+    owner_email: document.getElementById('edit-owner-email').value.trim(),
+    max_accounts: parseInt(document.getElementById('edit-max-accounts').value) || 50,
+    max_devices: parseInt(document.getElementById('edit-max-devices').value) || 2,
+    tier: document.getElementById('edit-tier').value,
+    active: parseInt(document.getElementById('edit-active').value),
+  };
+  const res = await api(`/api/admin/licenses/${licId}/edit`, { method: 'POST', body });
+  const el = document.getElementById('edit-result');
+  if (res.ok) {
+    el.innerHTML = '<span style="color:var(--green)">Saved!</span>';
+    loadLicenses();
+  } else {
+    el.innerHTML = `<span style="color:var(--red)">${res.error||'Failed'}</span>`;
+  }
+}
+
+async function transferAccounts(sourceLicId) {
+  const target = document.getElementById('transfer-target').value;
+  const count = parseInt(document.getElementById('transfer-count').value) || 5;
+  if (!target) { alert('Select target license'); return; }
+  if (!confirm(`Transfer ${count} oldest active accounts from this license to ${target}?`)) return;
+
+  const providers = [];
+  if (document.getElementById('tf-kiro').checked) providers.push('kiro');
+  if (document.getElementById('tf-cb').checked) providers.push('codebuddy');
+  if (document.getElementById('tf-ws').checked) providers.push('wavespeed');
+  if (document.getElementById('tf-gl').checked) providers.push('gumloop');
+
+  const res = await api(`/api/admin/licenses/${sourceLicId}/transfer`, {
+    method: 'POST',
+    body: { target_license_id: target, count, providers },
+  });
+
+  const el = document.getElementById('transfer-result');
+  if (res.ok) {
+    el.innerHTML = `<span style="color:var(--green)">Transferred ${res.transferred} accounts!</span><br><span style="font-size:.78rem;color:var(--text-dim)">${(res.emails||[]).join(', ')}</span>`;
+    // Refresh detail
+    setTimeout(() => showLicenseDetail(sourceLicId), 1000);
+  } else {
+    el.innerHTML = `<span style="color:var(--red)">${res.error||'Failed'}</span>`;
+  }
 }
 
 // ── Accounts ──

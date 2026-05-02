@@ -155,6 +155,14 @@ async function handleRequest(request, env) {
     // Accounts
     if (path === '/api/admin/accounts' && method === 'GET') return adminListAccounts(db, url);
 
+    // License edit (max_accounts, etc.)
+    const licEditMatch = path.match(/^\/api\/admin\/licenses\/([^/]+)\/edit$/);
+    if (licEditMatch && method === 'POST') return adminEditLicense(db, licEditMatch[1], request);
+
+    // Transfer accounts between licenses
+    const transferMatch = path.match(/^\/api\/admin\/licenses\/([^/]+)\/transfer$/);
+    if (transferMatch && method === 'POST') return adminTransferAccounts(db, transferMatch[1], request);
+
     // Device management
     const devBanMatch = path.match(/^\/api\/admin\/devices\/(\d+)\/ban$/);
     if (devBanMatch && method === 'POST') return adminBanDevice(db, parseInt(devBanMatch[1]), request);
@@ -619,6 +627,94 @@ async function adminUpdateLicense(db, licenseId, request) {
 async function adminDeleteLicense(db, licenseId) {
   await db.prepare('UPDATE licenses SET active = 0 WHERE id = ?').bind(licenseId).run();
   return json({ ok: true });
+}
+
+// ─── Admin: Edit License ────────────────────────────────────────────────────
+
+async function adminEditLicense(db, licenseId, request) {
+  const body = await request.json();
+  const license = await db.prepare('SELECT * FROM licenses WHERE id = ?').bind(licenseId).first();
+  if (!license) return err('License not found', 404);
+
+  const fields = [];
+  const vals = [];
+  for (const key of ['owner_name', 'owner_email', 'tier', 'max_devices', 'max_accounts', 'expires_at', 'active']) {
+    if (body[key] !== undefined) {
+      fields.push(`${key} = ?`);
+      vals.push(body[key]);
+    }
+  }
+  if (fields.length === 0) return err('No fields to update');
+  vals.push(licenseId);
+  await db.prepare(`UPDATE licenses SET ${fields.join(', ')} WHERE id = ?`).bind(...vals).run();
+
+  return json({ ok: true, updated: fields.length });
+}
+
+// ─── Admin: Transfer Accounts ───────────────────────────────────────────────
+
+async function adminTransferAccounts(db, sourceLicenseId, request) {
+  const body = await request.json();
+  const targetLicenseId = body.target_license_id;
+  const count = parseInt(body.count || 0);
+  const providers = body.providers || ['kiro', 'codebuddy', 'wavespeed', 'gumloop']; // which providers to transfer
+
+  if (!targetLicenseId) return err('target_license_id required');
+  if (count <= 0) return err('count must be > 0');
+
+  // Validate both licenses exist
+  const source = await db.prepare('SELECT * FROM licenses WHERE id = ?').bind(sourceLicenseId).first();
+  if (!source) return err('Source license not found', 404);
+  const target = await db.prepare('SELECT * FROM licenses WHERE id = ?').bind(targetLicenseId).first();
+  if (!target) return err('Target license not found', 404);
+
+  // Check target has room
+  const targetCount = await db.prepare('SELECT COUNT(*) as cnt FROM accounts WHERE license_id = ? AND status = ?').bind(targetLicenseId, 'active').first();
+  if (targetCount.cnt + count > target.max_accounts) {
+    return err(`Target license would exceed max_accounts (${targetCount.cnt} + ${count} > ${target.max_accounts}). Increase max_accounts first.`);
+  }
+
+  // Build provider filter — only transfer accounts that have at least one active provider
+  const providerConditions = [];
+  if (providers.includes('kiro')) providerConditions.push("kiro_status = 'ok'");
+  if (providers.includes('codebuddy')) providerConditions.push("cb_status = 'ok'");
+  if (providers.includes('wavespeed')) providerConditions.push("ws_status = 'ok'");
+  if (providers.includes('gumloop')) providerConditions.push("gl_status = 'ok'");
+
+  if (providerConditions.length === 0) return err('No valid providers specified');
+
+  const whereProvider = `(${providerConditions.join(' OR ')})`;
+
+  // Get oldest active accounts from source (FIFO — oldest first)
+  const accounts = await db.prepare(
+    `SELECT id, email FROM accounts WHERE license_id = ? AND status = 'active' AND ${whereProvider} ORDER BY created_at ASC LIMIT ?`
+  ).bind(sourceLicenseId, count).all();
+
+  if (!accounts.results || accounts.results.length === 0) {
+    return err('No matching active accounts found in source license');
+  }
+
+  // Transfer: update license_id
+  let transferred = 0;
+  const transferredEmails = [];
+  for (const acc of accounts.results) {
+    // Check if email already exists in target
+    const existing = await db.prepare('SELECT id FROM accounts WHERE license_id = ? AND email = ?').bind(targetLicenseId, acc.email).first();
+    if (existing) continue; // Skip duplicates
+
+    await db.prepare('UPDATE accounts SET license_id = ? WHERE id = ?').bind(targetLicenseId, acc.id).run();
+    transferred++;
+    transferredEmails.push(acc.email);
+  }
+
+  return json({
+    ok: true,
+    transferred,
+    total_available: accounts.results.length,
+    emails: transferredEmails,
+    source: sourceLicenseId,
+    target: targetLicenseId,
+  });
 }
 
 // ─── Admin: Global Stats ────────────────────────────────────────────────────
