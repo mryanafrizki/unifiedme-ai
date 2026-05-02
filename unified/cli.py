@@ -1835,58 +1835,166 @@ def cmd_mcp_stop():
     """Stop MCP server instance(s).
 
     Usage:
-        unifiedme mcp stop <id>      Stop specific instance
-        unifiedme mcp stop           Stop all running instances
+        unifiedme mcp stop <id>      Stop instance by DB ID
+        unifiedme mcp stop --pid N   Stop by PID directly (for orphan processes)
+        unifiedme mcp stop --all     Stop ALL mcp_server.py processes (nuclear)
+        unifiedme mcp stop           Stop all DB-tracked running instances
     """
     args = sys.argv[3:]
-    if not _aa_check_server():
-        print(f"  {_RED}Proxy not running.{_NC}")
+
+    # --all: kill ALL mcp_server.py processes
+    if "--all" in args:
+        print(f"  Killing all mcp_server.py processes...")
+        result = subprocess.run(["pkill", "-f", "mcp_server.py"], capture_output=True)
+        time.sleep(1)
+        # Verify
+        check = subprocess.run(["pgrep", "-f", "mcp_server.py"], capture_output=True, text=True)
+        if check.stdout.strip():
+            print(f"  {_YELLOW}Some processes still running. Force killing...{_NC}")
+            subprocess.run(["pkill", "-9", "-f", "mcp_server.py"], capture_output=True)
+        print(f"  {_GREEN}All MCP processes killed.{_NC}")
+        # Clear DB status
+        if _aa_check_server():
+            try:
+                data = _aa_api("GET", "/mcp/instances")
+                for inst in data.get("instances", []):
+                    if inst.get("status") == "running":
+                        _aa_api("POST", f"/mcp/instances/{inst['id']}/stop")
+            except Exception:
+                pass
         return
 
-    if args:
+    # --pid N: kill specific PID
+    if "--pid" in args:
+        idx = args.index("--pid")
+        if idx + 1 < len(args):
+            pid = int(args[idx + 1])
+            print(f"  Killing PID {pid}...", end=" ", flush=True)
+            _kill_pid(pid)
+            time.sleep(1)
+            if not _is_running(pid):
+                print(f"{_GREEN}Done{_NC}")
+            else:
+                print(f"{_RED}Failed (try: kill -9 {pid}){_NC}")
+        else:
+            print(f"  Usage: {CMD} mcp stop --pid <PID>")
+        return
+
+    # By instance ID
+    if args and args[0].isdigit():
         mcp_id = args[0]
-        try:
-            _aa_api("POST", f"/mcp/instances/{mcp_id}/stop")
-            print(f"  {_GREEN}MCP #{mcp_id} stopped{_NC}")
-        except Exception as e:
-            print(f"  {_RED}Failed: {e}{_NC}")
-    else:
-        try:
-            data = _aa_api("GET", "/mcp/instances")
-            running = [i for i in data.get("instances", []) if i.get("status") == "running"]
-            if not running:
-                print(f"  {_DIM}No running MCP instances.{_NC}")
-                return
-            for inst in running:
-                _aa_api("POST", f"/mcp/instances/{inst['id']}/stop")
-                print(f"  {_GREEN}Stopped{_NC} #{inst['id']} {inst['workspace_path']}")
-        except Exception as e:
-            print(f"  {_RED}Failed: {e}{_NC}")
+        if _aa_check_server():
+            try:
+                _aa_api("POST", f"/mcp/instances/{mcp_id}/stop")
+                print(f"  {_GREEN}MCP #{mcp_id} stopped{_NC}")
+            except Exception as e:
+                print(f"  {_RED}Failed: {e}{_NC}")
+        else:
+            print(f"  {_RED}Proxy not running. Use: {CMD} mcp stop --pid <PID>{_NC}")
+        return
+
+    # Stop all DB-tracked
+    if not _aa_check_server():
+        print(f"  {_RED}Proxy not running. Use: {CMD} mcp stop --all{_NC}")
+        return
+    try:
+        data = _aa_api("GET", "/mcp/instances")
+        running = [i for i in data.get("instances", []) if i.get("status") == "running"]
+        if not running:
+            print(f"  {_DIM}No running MCP instances in DB.{_NC}")
+            # Check for orphan processes
+            check = subprocess.run(["pgrep", "-af", "mcp_server.py"], capture_output=True, text=True)
+            if check.stdout.strip():
+                print(f"  {_YELLOW}But found orphan processes:{_NC}")
+                for line in check.stdout.strip().split("\n"):
+                    print(f"    {line}")
+                print(f"\n  Kill them: {CMD} mcp stop --all")
+            return
+        for inst in running:
+            _aa_api("POST", f"/mcp/instances/{inst['id']}/stop")
+            print(f"  {_GREEN}Stopped{_NC} #{inst['id']} PID:{inst.get('pid', '?')} {inst['workspace_path']}")
+    except Exception as e:
+        print(f"  {_RED}Failed: {e}{_NC}")
+
+
+def _find_mcp_processes() -> list[dict]:
+    """Find all running mcp_server.py processes via ps."""
+    procs = []
+    try:
+        result = subprocess.run(
+            ["ps", "aux"], capture_output=True, text=True, timeout=5,
+        )
+        for line in result.stdout.split("\n"):
+            if "mcp_server.py" in line and "grep" not in line:
+                parts = line.split()
+                if len(parts) >= 11:
+                    pid = int(parts[1])
+                    # Extract --workspace and --port from command
+                    workspace = ""
+                    port = ""
+                    tokens = line.split()
+                    for i, t in enumerate(tokens):
+                        if t == "--workspace" and i + 1 < len(tokens):
+                            workspace = tokens[i + 1]
+                        if t == "--port" and i + 1 < len(tokens):
+                            port = tokens[i + 1]
+                    procs.append({"pid": pid, "workspace": workspace, "port": port, "cmd": " ".join(parts[10:])[:120]})
+    except Exception:
+        pass
+    return procs
 
 
 def cmd_mcp_status():
-    """Show all MCP server instances."""
+    """Show all MCP server instances + detect orphan processes."""
+    # Always show running processes first (doesn't need proxy)
+    live_procs = _find_mcp_processes()
+
+    print(f"\n  {_CYAN}MCP Server Processes (live){_NC}")
+    print(f"  {'='*60}")
+    if live_procs:
+        for p in live_procs:
+            print(f"  PID:{p['pid']}  port:{p['port'] or '?'}  workspace:{p['workspace'] or '?'}")
+    else:
+        print(f"  {_DIM}No mcp_server.py processes running.{_NC}")
+
+    # Show DB instances if proxy is running
     if not _aa_check_server():
-        print(f"  {_RED}Proxy not running.{_NC}")
+        print(f"\n  {_DIM}(Proxy not running — DB instances not shown){_NC}")
         return
 
     try:
         data = _aa_api("GET", "/mcp/instances")
         instances = data.get("instances", [])
+
+        print(f"\n  {_CYAN}MCP Server Instances (DB){_NC}")
+        print(f"  {'='*60}")
         if not instances:
             print(f"  {_DIM}No MCP servers configured.{_NC}")
             print(f"  Add one: {CMD} mcp add /path/to/folder")
             return
 
-        print(f"\n  {_CYAN}MCP Server Instances{_NC}")
-        print(f"  {'='*60}")
+        live_pids = {p["pid"] for p in live_procs}
+
         for inst in instances:
             status = inst.get("status", "stopped")
-            color = _GREEN if status == "running" else _DIM
-            pid_str = f" PID:{inst['pid']}" if inst.get("pid") else ""
+            pid = inst.get("pid", 0)
+            # Cross-check: DB says running but process dead?
+            if status == "running" and pid and pid not in live_pids:
+                status = "DEAD (stale PID)"
+            color = _GREEN if status == "running" else _RED if "DEAD" in status else _DIM
+            pid_str = f" PID:{pid}" if pid else ""
             tunnel = f" | tunnel: {inst['tunnel_url']}/mcp" if inst.get("tunnel_url") else ""
             print(f"  [{inst['id']}] {color}{status}{_NC} :{inst['port']}{pid_str}{tunnel}")
             print(f"      {_DIM}{inst['workspace_path']}{_NC}")
+
+        # Detect orphan processes (running but not in DB)
+        db_pids = {inst.get("pid", 0) for inst in instances if inst.get("pid")}
+        orphans = [p for p in live_procs if p["pid"] not in db_pids]
+        if orphans:
+            print(f"\n  {_YELLOW}Orphan processes (not in DB):{_NC}")
+            for p in orphans:
+                print(f"  PID:{p['pid']}  port:{p['port'] or '?'}  {p['workspace'] or '?'}")
+            print(f"  {_DIM}Kill with: {CMD} mcp stop --pid <PID>  or  {CMD} mcp stop --all{_NC}")
         print()
     except Exception as e:
         print(f"  {_RED}Failed: {e}{_NC}")
