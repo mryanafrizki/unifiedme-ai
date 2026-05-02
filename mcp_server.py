@@ -485,14 +485,14 @@ async def grep(
 @mcp.tool
 async def bash(
     command: Annotated[str, "Shell command to execute"],
-    timeout: Annotated[int, "Timeout in seconds (max 120)"] = 30,
+    timeout: Annotated[int, "Timeout in seconds (max 300)"] = 60,
 ) -> dict:
     """Execute a shell command in the workspace directory. Returns stdout, stderr, and exit code.
     Uses PowerShell on Windows, bash on Linux."""
     if not command:
         return {"error": "command is required"}
 
-    timeout = min(timeout, 120)
+    timeout = min(timeout, 300)
 
     try:
         if os.name == "nt":
@@ -530,14 +530,15 @@ async def bash(
 @mcp.tool
 async def run_python(
     code: Annotated[str, "Python code to execute"],
-    timeout: Annotated[int, "Timeout in seconds (max 60)"] = 30,
+    timeout: Annotated[int, "Timeout in seconds (max 300)"] = 60,
 ) -> dict:
     """Execute a Python code snippet in the workspace directory. Returns stdout, stderr, and exit code.
-    The code runs as a standalone script with the workspace as cwd."""
+    The code runs as a standalone script with the workspace as cwd.
+    Libraries installed via pip_install are available."""
     if not code:
         return {"error": "code is required"}
 
-    timeout = min(timeout, 60)
+    timeout = min(timeout, 300)
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -561,6 +562,37 @@ async def run_python(
         return {"error": f"Python execution timed out after {timeout}s"}
     except Exception as e:
         return {"error": f"Python exec error: {e}"}
+
+
+@mcp.tool
+async def pip_install(
+    packages: Annotated[str, "Package(s) to install, space-separated. E.g. 'requests beautifulsoup4 pandas'"],
+) -> dict:
+    """Install Python packages into the MCP server's environment.
+    Packages become immediately available for run_python.
+    Examples: 'requests', 'beautifulsoup4 lxml', 'pandas numpy matplotlib'."""
+    if not packages or not packages.strip():
+        return {"error": "packages is required"}
+
+    pkg_list = packages.strip().split()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "pip", "install", "--quiet", *pkg_list,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+        stdout_str = stdout.decode("utf-8", errors="replace").strip()
+        stderr_str = stderr.decode("utf-8", errors="replace").strip()
+
+        if proc.returncode == 0:
+            return {"ok": True, "packages": pkg_list, "message": f"Installed: {', '.join(pkg_list)}"}
+        return {"error": f"pip install failed (exit {proc.returncode}): {stderr_str[:500]}"}
+
+    except asyncio.TimeoutError:
+        return {"error": "pip install timed out (120s)"}
+    except Exception as e:
+        return {"error": f"pip install error: {e}"}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -1269,7 +1301,7 @@ def main():
     tool_names = [
         "read_file", "write_file", "edit_file", "delete_file", "rename_file",
         "copy_file", "file_info", "read_image", "list_directory", "tree", "create_directory",
-        "glob_search", "grep", "bash", "run_python", "git",
+        "glob_search", "grep", "bash", "run_python", "pip_install", "git",
         "http_request", "download_file", "zip_files", "unzip_file", "diff", "patch",
         "search_docs", "web_search", "fetch_url", "search_github_code",
     ]
