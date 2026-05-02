@@ -4687,27 +4687,11 @@ async function testVps(id) {
 }
 
 async function autoInstallVps(id) {
-  if (!confirm('This will install Python, cloudflared, nginx, and unifiedme on the remote VPS. Continue?')) return;
-  var el = document.getElementById('vps-install-' + id);
-  el.innerHTML = '<div style="padding:.5rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem;font-family:\'JetBrains Mono\',monospace;color:var(--text-dim)">Installing... this may take a few minutes...</div>';
-  try {
-    var data = await apiFetch('/api/vps/' + id + '/install', { method: 'POST' });
-    if (data.ok) {
-      var stepsHtml = (data.steps || []).map(function(s) {
-        var icon = s.status === 'done' ? '<span style="color:var(--green)">OK</span>' : '<span style="color:var(--red)">FAIL</span>';
-        return '<div>' + icon + ' ' + s.step + '</div>';
-      }).join('');
-      el.innerHTML = '<div style="padding:.75rem;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);font-size:.78rem">' + stepsHtml + '</div>';
-      toast('Installation complete!', 'success');
-    } else {
-      el.innerHTML = '<div style="padding:.5rem;color:var(--red);font-size:.82rem">Failed: ' + (data.error || '') + '</div>';
-      toast('Install failed', 'error');
-    }
-    loadVpsList();
-  } catch(e) {
-    el.innerHTML = '<div style="padding:.5rem;color:var(--red);font-size:.82rem">Error: ' + e.message + '</div>';
-    toast('Error: ' + e.message, 'error');
-  }
+  if (!confirm('This will install all dependencies + unifiedme on the remote VPS.\nA terminal will open so you can see realtime progress.\n\nContinue?')) return;
+  var server = vpsServers.find(function(s) { return s.id === id; });
+  var label = server ? (server.label || server.host) : 'VPS #' + id;
+  // Open terminal and auto-run the install script
+  openTerminal(id, label + ' — Auto-Install', 'curl -fsSL https://raw.githubusercontent.com/unifiedaa/unifiedme-ai/main/setup_vps.sh | bash\n');
 }
 
 async function getVpsServices(id) {
@@ -4776,7 +4760,7 @@ async function setupRemoteMcpWs(id) {
 
 // ── Web Terminal (xterm.js) ──
 
-function openTerminal(vpsId, label) {
+function openTerminal(vpsId, label, autoCommand) {
   document.getElementById('terminal-modal').style.display = 'block';
   document.getElementById('terminal-title').textContent = 'Terminal — ' + label;
   var container = document.getElementById('terminal-container');
@@ -4801,10 +4785,20 @@ function openTerminal(vpsId, label) {
   var ws = new WebSocket(proto + '//' + location.host + '/ws/terminal/' + vpsId + '?token=' + encodeURIComponent(pw));
   activeTerminalWs = ws;
 
+  var _autoCommandSent = false;
   ws.onopen = function() {
     // Send initial terminal size
     ws.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
     term.focus();
+    // Auto-execute command after short delay (wait for shell prompt)
+    if (autoCommand && !_autoCommandSent) {
+      _autoCommandSent = true;
+      setTimeout(function() {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(autoCommand);
+        }
+      }, 1500);
+    }
   };
 
   ws.onmessage = function(event) {

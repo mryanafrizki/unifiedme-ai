@@ -13,7 +13,7 @@ CHECK="${GREEN}[OK]${NC}"
 CROSS="${RED}[MISSING]${NC}"
 WARN="${YELLOW}[WARN]${NC}"
 
-REPO="https://github.com/mryanafrizki/unifiedme-ai.git"
+REPO="https://github.com/unifiedaa/unifiedme-ai.git"
 INSTALL_DIR="$HOME/unifiedme-ai"
 MIN_PYTHON="3.10"
 MAX_PYTHON="3.13"
