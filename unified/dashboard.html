@@ -5165,34 +5165,36 @@ async function addMcpFromDashboard() {
   if (!wsPath) { errEl.textContent = 'Folder path is required'; errEl.style.display = 'block'; return; }
 
   var port = portInput.value.trim() ? parseInt(portInput.value) : 0;
+  var headers = adminHeaders();
+
+  // Try to add instance (use raw fetch to handle 400 gracefully)
+  var resp = await fetch('/api/mcp/instances', {
+    method: 'POST', headers: headers,
+    body: JSON.stringify({ workspace_path: wsPath, port: port })
+  });
+  var data = await resp.json();
+
+  // Path doesn't exist — offer to create
+  if (!data.ok && data.error && data.error.includes('does not exist')) {
+    if (confirm('Folder "' + wsPath + '" does not exist.\nCreate it?')) {
+      await fetch('/api/explorer/mkdir', { method: 'POST', headers: headers, body: JSON.stringify({ path: wsPath }) });
+      // Retry
+      resp = await fetch('/api/mcp/instances', { method: 'POST', headers: headers, body: JSON.stringify({ workspace_path: wsPath, port: port }) });
+      data = await resp.json();
+    } else { return; }
+  }
+
+  // Port conflict or other error
+  if (!data.ok) {
+    errEl.textContent = data.error || 'Failed to add MCP server';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  var mcpId = data.id;
+  toast('MCP added (port ' + data.port + '). Starting...', 'success');
 
   try {
-    // Try to add instance
-    var data = await apiFetch('/api/mcp/instances', {
-      method: 'POST',
-      body: JSON.stringify({ workspace_path: wsPath, port: port })
-    });
-
-    if (!data.ok) {
-      // Check if path doesn't exist — offer to create
-      if (data.error && data.error.includes('does not exist')) {
-        if (confirm('Folder "' + wsPath + '" does not exist.\nCreate it?')) {
-          // Create folder via explorer API
-          await apiFetch('/api/explorer/mkdir', { method: 'POST', body: JSON.stringify({ path: wsPath }) });
-          // Retry add
-          data = await apiFetch('/api/mcp/instances', { method: 'POST', body: JSON.stringify({ workspace_path: wsPath, port: port }) });
-          if (!data.ok) { errEl.textContent = data.error || 'Failed'; errEl.style.display = 'block'; return; }
-        } else { return; }
-      } else {
-        errEl.textContent = data.error || 'Failed';
-        errEl.style.display = 'block';
-        return;
-      }
-    }
-
-    var mcpId = data.id;
-    toast('MCP added (port ' + data.port + '). Starting...', 'success');
-
     // Auto-start server
     await apiFetch('/api/mcp/instances/' + mcpId + '/start', { method: 'POST' });
 
@@ -5204,15 +5206,13 @@ async function addMcpFromDashboard() {
     } else {
       toast('MCP started but tunnel URL pending', 'success');
     }
-
-    pathInput.value = '';
-    portInput.value = '';
-    loadMcpInstances();
-
   } catch(e) {
-    errEl.textContent = e.message || 'Error';
-    errEl.style.display = 'block';
+    toast('MCP added but start/tunnel failed: ' + e.message, 'error');
   }
+
+  pathInput.value = '';
+  portInput.value = '';
+  loadMcpInstances();
 }
 
 // ── Delete MCP Modal ──
