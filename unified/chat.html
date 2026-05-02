@@ -104,6 +104,8 @@ details[open] .thinking-header::before{transform:rotate(90deg)}
 .send-btn{background:var(--accent);border:none;color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1.1rem;transition:background .15s;flex-shrink:0}
 .send-btn:hover{background:var(--accent-dim)}
 .send-btn:disabled{opacity:.4;cursor:not-allowed}
+.stop-btn{background:var(--red);border:none;color:#fff;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:.9rem;transition:background .15s;flex-shrink:0}
+.stop-btn:hover{background:#e05555}
 .upload-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text-dim);width:36px;height:36px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:1rem;flex-shrink:0}
 .upload-btn:hover{border-color:var(--accent);color:var(--accent)}
 
@@ -183,6 +185,7 @@ details[open] .thinking-header::before{transform:rotate(90deg)}
       </label>
       <textarea id="msg-input" placeholder="Type a message... (Shift+Enter for newline)" rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
       <button class="send-btn" id="send-btn" onclick="sendMessage()" title="Send">&#x27A4;</button>
+      <button class="stop-btn" id="stop-btn" onclick="stopStreaming()" title="Stop" style="display:none">&#x25A0;</button>
     </div>
     <div id="file-preview" style="display:none;margin-top:.5rem;max-width:900px;margin-left:auto;margin-right:auto;font-size:.78rem;color:var(--text-dim)"></div>
   </div>
@@ -442,11 +445,19 @@ function copyCodeBlock(btn) {
 // ── Send Message ──
 function handleKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  if (e.key === 'Escape' && isStreaming) { stopStreaming(); }
 }
 
 function autoResize(el) {
   el.style.height = 'auto';
   el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+
+function stopStreaming() {
+  if (abortController) {
+    abortController.abort();
+    abortController = null;
+  }
 }
 
 async function sendMessage() {
@@ -498,7 +509,8 @@ async function sendMessage() {
 
   // Stream response
   isStreaming = true;
-  document.getElementById('send-btn').disabled = true;
+  document.getElementById('send-btn').style.display = 'none';
+  document.getElementById('stop-btn').style.display = 'flex';
   var statusLabel = chatMode === 'agent' ? 'Agent running...' : 'Generating...';
   document.getElementById('stream-status').innerHTML = '<span class="streaming-dot"></span> ' + statusLabel;
 
@@ -605,7 +617,8 @@ async function sendMessage() {
   // Finalize
   isStreaming = false;
   abortController = null;
-  document.getElementById('send-btn').disabled = false;
+  document.getElementById('send-btn').style.display = 'flex';
+  document.getElementById('stop-btn').style.display = 'none';
   document.getElementById('stream-status').textContent = '';
 
   var streamEl = document.getElementById('streaming-content');
