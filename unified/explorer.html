@@ -53,9 +53,12 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 .preview-body{flex:1;overflow:auto;padding:1rem}
 
 /* File list */
-.file-entry{display:flex;align-items:center;gap:.75rem;padding:.55rem .85rem;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s}
+.file-entry{display:flex;align-items:center;gap:.75rem;padding:.55rem .85rem;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s;user-select:none;-webkit-user-select:none}
 .file-entry:hover{background:var(--surface2)}
 .file-entry.selected{background:var(--surface3);border:1px solid var(--border)}
+.file-check{width:16px;height:16px;border:1.5px solid var(--border);border-radius:3px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:transparent;transition:all .12s}
+.file-entry.selected .file-check{background:var(--accent);border-color:var(--accent);color:#fff}
+.file-entry:hover .file-check{border-color:var(--text-muted)}
 .file-icon{width:20px;text-align:center;font-size:1rem;flex-shrink:0}
 .file-name{flex:1;font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .file-meta{font-size:.75rem;color:var(--text-muted);white-space:nowrap;width:60px;text-align:right}
@@ -149,12 +152,15 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 var adminPassword = '';
 var currentPath = '~';
 var currentFile = '';
-var selectedEntry = null; // {name, type, fullPath}
-var clipboard = null; // {action: 'copy'|'cut', path, name, type}
+var selectedEntries = []; // [{name, type, fullPath}, ...]
+var lastClickedIndex = -1; // for shift+click range select
+var clipboard = null; // {action: 'copy'|'cut', items: [{path, name, type}]}
 var currentEntries = []; // raw entries from API
+var currentSorted = []; // sorted entries (for shift+click indexing)
 var currentBasePath = '';
 var sortBy = 'modified'; // name, size, modified
 var sortDesc = true; // newest first by default
+var longPressTimer = null;
 
 function getHeaders() {
   return { 'Authorization': 'Bearer ' + adminPassword, 'Content-Type': 'application/json' };
@@ -202,6 +208,8 @@ async function doLogin() {
 async function loadDir(path) {
   currentPath = path;
   currentFile = '';
+  selectedEntries = [];
+  lastClickedIndex = -1;
   closePreview();
   try {
     var resp = await fetch('/api/explorer/list?path=' + encodeURIComponent(path), { headers: getHeaders() });
@@ -260,13 +268,17 @@ function renderFileList(entries, basePath) {
   html += '<span class="file-meta" onclick="toggleSort(\'size\')" style="cursor:pointer">Size ' + sortArrow('size') + '</span>';
   html += '</div>';
 
-  sorted.forEach(function(e) {
+  currentSorted = sorted;
+  sorted.forEach(function(e, idx) {
     var fullPath = basePath + '/' + e.name;
     var esc = fullPath.replace(/'/g, "\\'");
+    var nameEsc = e.name.replace(/'/g, "\\'");
     var icon = getIcon(e);
     var dblclick = e.type === 'dir' ? ' ondblclick="loadDir(\'' + esc + '\')"' : ' ondblclick="previewFile(\'' + esc + '\')"';
     var dateStr = e.modified ? formatDate(e.modified) : '';
-    html += '<div class="file-entry" onclick="selectEntry(\'' + esc + '\',\'' + e.name.replace(/'/g, "\\'") + '\',\'' + e.type + '\')"' + dblclick + '>';
+    html += '<div class="file-entry" data-idx="' + idx + '" data-path="' + esc + '" data-name="' + nameEsc + '" data-type="' + e.type + '" onclick="handleEntryClick(event,' + idx + ')"' + dblclick;
+    html += ' ontouchstart="handleTouchStart(event,' + idx + ')" ontouchend="handleTouchEnd(event)" ontouchmove="handleTouchEnd(event)">';
+    html += '<span class="file-check">✓</span>';
     html += '<span class="file-icon ' + icon.cls + '">' + icon.icon + '</span>';
     html += '<span class="file-name">' + e.name + '</span>';
     html += '<span class="file-date">' + dateStr + '</span>';
@@ -274,7 +286,8 @@ function renderFileList(entries, basePath) {
     html += '</div>';
   });
   el.innerHTML = html;
-  selectedEntry = null;
+  selectedEntries = [];
+  lastClickedIndex = -1;
   updateToolbar();
   document.getElementById('status-bar').textContent = entries.length + ' items';
 }
@@ -309,24 +322,96 @@ function formatDate(iso) {
   } catch(e) { return iso.substring(0, 16); }
 }
 
-function selectEntry(fullPath, name, type) {
-  // Deselect all
+function handleEntryClick(e, idx) {
+  var entry = currentSorted[idx];
+  if (!entry) return;
+  var fullPath = currentBasePath + '/' + entry.name;
+  var item = { fullPath: fullPath, name: entry.name, type: entry.type };
+
+  if (e.ctrlKey || e.metaKey) {
+    // Ctrl+Click: toggle this item
+    var existIdx = selectedEntries.findIndex(function(s) { return s.fullPath === fullPath; });
+    if (existIdx >= 0) {
+      selectedEntries.splice(existIdx, 1);
+    } else {
+      selectedEntries.push(item);
+    }
+    lastClickedIndex = idx;
+  } else if (e.shiftKey && lastClickedIndex >= 0) {
+    // Shift+Click: range select
+    var start = Math.min(lastClickedIndex, idx);
+    var end = Math.max(lastClickedIndex, idx);
+    // Keep existing selection, add range
+    for (var i = start; i <= end; i++) {
+      var rangeEntry = currentSorted[i];
+      var rangePath = currentBasePath + '/' + rangeEntry.name;
+      if (!selectedEntries.some(function(s) { return s.fullPath === rangePath; })) {
+        selectedEntries.push({ fullPath: rangePath, name: rangeEntry.name, type: rangeEntry.type });
+      }
+    }
+  } else {
+    // Normal click: select only this
+    selectedEntries = [item];
+    lastClickedIndex = idx;
+    // Single click on file opens preview
+    if (entry.type === 'file') previewFile(fullPath);
+  }
+
+  // Update DOM selection classes
   document.querySelectorAll('.file-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
-  // Select clicked
-  event.currentTarget.classList.add('selected');
-  selectedEntry = { fullPath: fullPath, name: name, type: type };
+  selectedEntries.forEach(function(s) {
+    var el = document.querySelector('.file-entry[data-path="' + s.fullPath.replace(/'/g, "\\'") + '"]');
+    if (el) el.classList.add('selected');
+  });
   updateToolbar();
-  // Single click on file also opens preview
-  if (type === 'file') previewFile(fullPath);
+}
+
+// Long press for mobile
+function handleTouchStart(e, idx) {
+  longPressTimer = setTimeout(function() {
+    // Toggle select (like Ctrl+Click)
+    var entry = currentSorted[idx];
+    if (!entry) return;
+    var fullPath = currentBasePath + '/' + entry.name;
+    var item = { fullPath: fullPath, name: entry.name, type: entry.type };
+    var existIdx = selectedEntries.findIndex(function(s) { return s.fullPath === fullPath; });
+    if (existIdx >= 0) {
+      selectedEntries.splice(existIdx, 1);
+    } else {
+      selectedEntries.push(item);
+    }
+    // Update DOM
+    document.querySelectorAll('.file-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+    selectedEntries.forEach(function(s) {
+      var el = document.querySelector('.file-entry[data-path="' + s.fullPath.replace(/'/g, "\\'") + '"]');
+      if (el) el.classList.add('selected');
+    });
+    updateToolbar();
+    longPressTimer = null;
+  }, 500);
+}
+
+function handleTouchEnd(e) {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+}
+
+// Compat: selectedEntry getter for single-select operations (rename)
+function getSelectedEntry() {
+  return selectedEntries.length === 1 ? selectedEntries[0] : null;
 }
 
 function updateToolbar() {
-  var has = !!selectedEntry;
+  var has = selectedEntries.length > 0;
+  var single = selectedEntries.length === 1;
   document.getElementById('btn-cut').disabled = !has;
   document.getElementById('btn-copy').disabled = !has;
-  document.getElementById('btn-rename').disabled = !has;
+  document.getElementById('btn-rename').disabled = !single; // rename only works on single
   document.getElementById('btn-delete').disabled = !has;
   document.getElementById('btn-paste').disabled = !clipboard;
+  // Show count in status bar when multi-selected
+  if (selectedEntries.length > 1) {
+    document.getElementById('status-bar').textContent = selectedEntries.length + ' selected';
+  }
 }
 
 function getIcon(entry) {
@@ -425,11 +510,12 @@ async function createNewFile() {
 }
 
 async function renameSelected() {
-  if (!selectedEntry) return;
-  var newName = prompt('Rename to:', selectedEntry.name);
-  if (!newName || newName === selectedEntry.name) return;
+  var entry = getSelectedEntry();
+  if (!entry) return;
+  var newName = prompt('Rename to:', entry.name);
+  if (!newName || newName === entry.name) return;
   try {
-    var resp = await fetch('/api/explorer/rename', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntry.fullPath, new_name: newName }) });
+    var resp = await fetch('/api/explorer/rename', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: entry.fullPath, new_name: newName }) });
     var data = await resp.json();
     if (data.ok) loadDir(currentPath);
     else alert('Error: ' + (data.error || ''));
@@ -437,46 +523,57 @@ async function renameSelected() {
 }
 
 async function deleteSelected() {
-  if (!selectedEntry) return;
-  if (!confirm('Delete "' + selectedEntry.name + '"?')) return;
-  try {
-    var resp = await fetch('/api/explorer/delete', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntry.fullPath }) });
-    var text = await resp.text();
-    try { var data = JSON.parse(text); } catch(pe) { alert('Server error: ' + text.substring(0, 100)); return; }
-    if (data.ok) { closePreview(); loadDir(currentPath); }
-    else alert('Error: ' + (data.error || 'Unknown error'));
-  } catch(e) { alert('Error: ' + e.message); }
+  if (!selectedEntries.length) return;
+  var count = selectedEntries.length;
+  var msg = count === 1 ? 'Delete "' + selectedEntries[0].name + '"?' : 'Delete ' + count + ' items?';
+  if (!confirm(msg)) return;
+
+  var errors = [];
+  for (var i = 0; i < selectedEntries.length; i++) {
+    try {
+      var resp = await fetch('/api/explorer/delete', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntries[i].fullPath }) });
+      var text = await resp.text();
+      try { var data = JSON.parse(text); } catch(pe) { errors.push(selectedEntries[i].name + ': parse error'); continue; }
+      if (!data.ok) errors.push(selectedEntries[i].name + ': ' + (data.error || 'failed'));
+    } catch(e) { errors.push(selectedEntries[i].name + ': ' + e.message); }
+  }
+  closePreview();
+  loadDir(currentPath);
+  if (errors.length) alert('Errors:\n' + errors.join('\n'));
+  else document.getElementById('status-bar').textContent = count + ' item(s) deleted';
 }
 
 function cutSelected() {
-  if (!selectedEntry) return;
-  clipboard = { action: 'cut', path: selectedEntry.fullPath, name: selectedEntry.name, type: selectedEntry.type };
-  document.getElementById('status-bar').textContent = 'Cut: ' + selectedEntry.name;
+  if (!selectedEntries.length) return;
+  clipboard = { action: 'cut', items: selectedEntries.map(function(s) { return { path: s.fullPath, name: s.name, type: s.type }; }) };
+  document.getElementById('status-bar').textContent = 'Cut: ' + selectedEntries.length + ' item(s)';
   updateToolbar();
 }
 
 function copySelected() {
-  if (!selectedEntry) return;
-  clipboard = { action: 'copy', path: selectedEntry.fullPath, name: selectedEntry.name, type: selectedEntry.type };
-  document.getElementById('status-bar').textContent = 'Copied: ' + selectedEntry.name;
+  if (!selectedEntries.length) return;
+  clipboard = { action: 'copy', items: selectedEntries.map(function(s) { return { path: s.fullPath, name: s.name, type: s.type }; }) };
+  document.getElementById('status-bar').textContent = 'Copied: ' + selectedEntries.length + ' item(s)';
   updateToolbar();
 }
 
 async function pasteClipboard() {
-  if (!clipboard) return;
-  var dest = currentPath + '/' + clipboard.name;
+  if (!clipboard || !clipboard.items) return;
+  var errors = [];
   var endpoint = clipboard.action === 'cut' ? '/api/explorer/move' : '/api/explorer/copy';
-  try {
-    var resp = await fetch(endpoint, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ source: clipboard.path, destination: dest }) });
-    var data = await resp.json();
-    if (data.ok) {
-      if (clipboard.action === 'cut') clipboard = null;
-      loadDir(currentPath);
-      document.getElementById('status-bar').textContent = 'Pasted: ' + clipboard?.name || '';
-    } else {
-      alert('Error: ' + (data.error || ''));
-    }
-  } catch(e) { alert('Error: ' + e.message); }
+  for (var i = 0; i < clipboard.items.length; i++) {
+    var item = clipboard.items[i];
+    var dest = currentPath + '/' + item.name;
+    try {
+      var resp = await fetch(endpoint, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ source: item.path, destination: dest }) });
+      var data = await resp.json();
+      if (!data.ok) errors.push(item.name + ': ' + (data.error || 'failed'));
+    } catch(e) { errors.push(item.name + ': ' + e.message); }
+  }
+  if (clipboard.action === 'cut') clipboard = null;
+  loadDir(currentPath);
+  if (errors.length) alert('Errors:\n' + errors.join('\n'));
+  else document.getElementById('status-bar').textContent = 'Pasted ' + clipboard?.items?.length + ' item(s)';
   updateToolbar();
 }
 
@@ -831,10 +928,25 @@ document.addEventListener('keydown', function(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   // Ctrl+S global — save if editor is open
   if (e.ctrlKey && e.key === 's' && monacoEditor && currentFile) { e.preventDefault(); saveCurrentFile(); return; }
-  if (e.key === 'Delete' && selectedEntry) { deleteSelected(); }
-  if (e.key === 'F2' && selectedEntry) { e.preventDefault(); renameSelected(); }
-  if (e.ctrlKey && e.key === 'c' && selectedEntry) { copySelected(); }
-  if (e.ctrlKey && e.key === 'x' && selectedEntry) { cutSelected(); }
+  // Ctrl+A — select all
+  if (e.ctrlKey && e.key === 'a' && !monacoEditor) {
+    e.preventDefault();
+    selectedEntries = currentSorted.map(function(entry) { return { fullPath: currentBasePath + '/' + entry.name, name: entry.name, type: entry.type }; });
+    document.querySelectorAll('.file-entry[data-idx]').forEach(function(el) { el.classList.add('selected'); });
+    updateToolbar();
+    return;
+  }
+  // Escape — deselect all
+  if (e.key === 'Escape' && selectedEntries.length && !monacoEditor) {
+    selectedEntries = [];
+    document.querySelectorAll('.file-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+    updateToolbar();
+    return;
+  }
+  if (e.key === 'Delete' && selectedEntries.length) { deleteSelected(); }
+  if (e.key === 'F2' && getSelectedEntry()) { e.preventDefault(); renameSelected(); }
+  if (e.ctrlKey && e.key === 'c' && selectedEntries.length) { copySelected(); }
+  if (e.ctrlKey && e.key === 'x' && selectedEntries.length) { cutSelected(); }
   if (e.ctrlKey && e.key === 'v' && clipboard) { pasteClipboard(); }
   if (e.key === 'Backspace' && !monacoEditor) { var parent = document.querySelector('.breadcrumb a:nth-last-child(3)'); if (parent) parent.click(); }
 });
