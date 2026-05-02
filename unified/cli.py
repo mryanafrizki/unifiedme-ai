@@ -1506,6 +1506,78 @@ def cmd_mcp_toggle():
         print(f"{_RED}Failed: {e}{_NC}")
 
 
+def cmd_mcp_delete_links():
+    """Delete MCP server URL(s) from all Gumloop accounts.
+
+    Usage:
+        unifiedme mcp delete <url>                    Delete from ALL GL accounts
+        unifiedme mcp delete <url1>,<url2>            Multiple URLs (comma-separated)
+        unifiedme mcp delete <url> --account <id>     Delete from specific account
+    """
+    args = sys.argv[3:]
+    if not args:
+        print(f"  Usage: {CMD} mcp delete <url> [--account <id>]")
+        print(f"  Example: {CMD} mcp delete https://xxx.trycloudflare.com/mcp")
+        return
+
+    # Parse URL(s)
+    raw_urls = args[0]
+    mcp_urls = [u.strip() for u in raw_urls.split(",") if u.strip()]
+    if not mcp_urls:
+        print(f"  {_RED}No valid URLs provided.{_NC}")
+        return
+
+    # Parse --account
+    account_id = None
+    if "--account" in args:
+        idx = args.index("--account")
+        if idx + 1 < len(args):
+            try:
+                account_id = int(args[idx + 1])
+            except ValueError:
+                print(f"  {_RED}Invalid account ID.{_NC}")
+                return
+
+    if not _aa_check_server():
+        print(f"  {_RED}Proxy not running. Start with: {CMD} start{_NC}")
+        return
+
+    print(f"\n  {_CYAN}MCP Delete{_NC}")
+    print(f"  {'='*50}")
+    for u in mcp_urls:
+        print(f"  URL: {_WHITE}{u}{_NC}")
+
+    if account_id:
+        print(f"  Target: account #{account_id}")
+        print(f"\n  Deleting...", end=" ", flush=True)
+        try:
+            res = _aa_api("POST", f"/accounts/{account_id}/mcp-delete", json_body={"urls": mcp_urls}, timeout=30)
+            if res.get("ok"):
+                print(f"{_GREEN}OK{_NC} — {res.get('deleted', 0)} deleted")
+                if res.get("errors"):
+                    for e in res["errors"]:
+                        print(f"    {_RED}{e}{_NC}")
+            else:
+                print(f"{_RED}Failed: {res.get('error', '?')}{_NC}")
+        except Exception as e:
+            print(f"{_RED}Failed: {e}{_NC}")
+    else:
+        print(f"  Target: ALL Gumloop accounts")
+        print()
+        try:
+            res = _aa_api("POST", "/accounts/mcp-delete-bulk", json_body={"urls": mcp_urls}, timeout=120)
+            results = res.get("results", [])
+            for r in results:
+                email = r.get("email", "?")
+                if r.get("ok"):
+                    print(f"  {_GREEN}[OK]{_NC}   {email} — {r.get('deleted', 0)} deleted")
+                else:
+                    print(f"  {_RED}[FAIL]{_NC} {email} — {r.get('error', '?')}")
+            print(f"\n  {_WHITE}Total deleted: {res.get('total_deleted', 0)} across {res.get('total_accounts', 0)} accounts{_NC}")
+        except Exception as e:
+            print(f"  {_RED}Failed: {e}{_NC}")
+
+
 def cmd_mcp_bind():
     """Bind MCP server URL(s) to Gumloop accounts.
 
@@ -1774,6 +1846,7 @@ def cmd_mcp():
         "list": cmd_mcp_list,
         "toggle": cmd_mcp_toggle,
         "bind": cmd_mcp_bind,
+        "delete": cmd_mcp_delete_links,
     }
 
     if subcmd in subcmds:
@@ -1786,8 +1859,8 @@ def cmd_mcp():
         print(f"    {CMD} mcp stop [id]                 Stop MCP server(s)")
         print(f"    {CMD} mcp status                    Show all MCP instances")
         print(f"    {CMD} mcp list                      List MCP on Gumloop accounts")
-        print(f"    {CMD} mcp toggle                    Enable/disable MCP on GL account")
         print(f"    {CMD} mcp bind <url> [--account N]  Bind MCP URL to GL accounts")
+        print(f"    {CMD} mcp delete <url>              Delete MCP URL from GL accounts")
 
 
 # ─── Tunnel CLI ──────────────────────────────────────────────────────────────

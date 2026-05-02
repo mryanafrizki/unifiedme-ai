@@ -440,6 +440,201 @@ async def mcp_toggle_endpoint(account_id: int, request: Request, _: bool = Depen
     return {"ok": True, "active_mcp": mcp_count}
 
 
+@router.post("/accounts/{account_id}/mcp-delete")
+async def mcp_delete_endpoint(account_id: int, request: Request, _: bool = Depends(verify_admin)):
+    """Delete MCP server(s) from a Gumloop account by URL.
+
+    Body: {"urls": ["url1", "url2"]}
+    Removes from both gummie tools AND registered secrets.
+    """
+    import httpx
+
+    body = await request.json()
+    delete_urls = set(body.get("urls", []))
+    if not delete_urls:
+        return JSONResponse({"error": "urls list is required"}, status_code=400)
+
+    account = await db.get_account(account_id)
+    if not account:
+        return JSONResponse({"error": "Account not found"}, status_code=404)
+
+    gummie_id = account.get("gl_gummie_id", "")
+    refresh_tok = account.get("gl_refresh_token", "")
+    if not refresh_tok:
+        return JSONResponse({"error": "Account has no Gumloop credentials"}, status_code=400)
+
+    from .gumloop.auth import GumloopAuth
+    proxy_info = await db.get_proxy_for_batch()
+    proxy_url = proxy_info["url"] if proxy_info else None
+
+    auth = GumloopAuth(
+        refresh_token=refresh_tok,
+        user_id=account.get("gl_user_id", ""),
+        id_token=account.get("gl_id_token", ""),
+        proxy_url=proxy_url,
+    )
+    try:
+        id_token = await auth.get_token()
+    except Exception as e:
+        return JSONResponse({"error": f"Token refresh failed: {e}"}, status_code=500)
+
+    user_id = auth.user_id
+    headers = {
+        "Authorization": f"Bearer {id_token}",
+        "x-auth-key": user_id,
+        "Content-Type": "application/json",
+    }
+
+    client_kwargs = {"timeout": 30}
+    if proxy_url:
+        client_kwargs["proxy"] = proxy_url
+
+    deleted_secrets = 0
+    errors = []
+
+    async with httpx.AsyncClient(**client_kwargs) as client:
+        # Get registered MCP secrets
+        resp = await client.get("https://api.gumloop.com//secrets/mcp_servers", headers=headers)
+        secrets = resp.json() if resp.status_code == 200 else []
+
+        # Delete matching secrets
+        for s in secrets:
+            url = s.get("url", "")
+            secret_id = s.get("secret_id", "")
+            if url in delete_urls and secret_id:
+                del_resp = await client.delete(
+                    f"https://api.gumloop.com//secrets/mcp_servers/{secret_id}",
+                    headers=headers,
+                )
+                if del_resp.status_code in (200, 204):
+                    deleted_secrets += 1
+                else:
+                    errors.append(f"{url}: HTTP {del_resp.status_code}")
+
+        # Also remove from gummie tools if gummie exists
+        if gummie_id:
+            resp2 = await client.get(f"https://api.gumloop.com/gummies/{gummie_id}", headers=headers)
+            if resp2.status_code == 200:
+                current_tools = resp2.json().get("gummie", {}).get("tools", [])
+                new_tools = [t for t in current_tools
+                             if not (t.get("type") == "mcp_server" and t.get("mcp_server_url", "") in delete_urls)]
+                if len(new_tools) != len(current_tools):
+                    await client.patch(
+                        f"https://api.gumloop.com/gummies/{gummie_id}",
+                        json={"tools": new_tools}, headers=headers,
+                    )
+
+    # Persist refreshed tokens
+    updated = auth.get_updated_tokens()
+    if updated.get("gl_id_token"):
+        try:
+            await db.update_account(account_id, **updated)
+        except Exception:
+            pass
+
+    return {"ok": True, "deleted": deleted_secrets, "errors": errors}
+
+
+@router.post("/accounts/mcp-delete-bulk")
+async def mcp_delete_bulk_endpoint(request: Request, _: bool = Depends(verify_admin)):
+    """Delete MCP server(s) from ALL Gumloop accounts by URL.
+
+    Body: {"urls": ["url1", "url2"]}
+    """
+    body = await request.json()
+    delete_urls = body.get("urls", [])
+    if not delete_urls:
+        return JSONResponse({"error": "urls list is required"}, status_code=400)
+
+    all_accts = await db.get_accounts()
+    gl_accounts = [a for a in all_accts
+                   if a.get("gl_status") == "ok" and a.get("gl_refresh_token")]
+
+    if not gl_accounts:
+        return {"ok": True, "total": 0, "message": "No GL accounts found"}
+
+    results = []
+    for acct in gl_accounts:
+        try:
+            # Reuse the single-account endpoint logic inline
+            from starlette.testclient import TestClient
+            # Simpler: just call the function directly
+            from unittest.mock import AsyncMock
+            # Actually, let's just duplicate the core logic for bulk
+            pass
+        except Exception:
+            pass
+
+    # Simpler approach: iterate and call per-account
+    import httpx as _httpx
+    total_deleted = 0
+    for acct in gl_accounts:
+        refresh_tok = acct.get("gl_refresh_token", "")
+        gummie_id = acct.get("gl_gummie_id", "")
+        if not refresh_tok:
+            continue
+
+        from .gumloop.auth import GumloopAuth
+        proxy_info = await db.get_proxy_for_batch()
+        proxy_url = proxy_info["url"] if proxy_info else None
+
+        auth = GumloopAuth(
+            refresh_token=refresh_tok,
+            user_id=acct.get("gl_user_id", ""),
+            id_token=acct.get("gl_id_token", ""),
+            proxy_url=proxy_url,
+        )
+        try:
+            id_token = await auth.get_token()
+        except Exception:
+            results.append({"email": acct.get("email", "?"), "ok": False, "error": "Token refresh failed"})
+            continue
+
+        user_id = auth.user_id
+        hdrs = {"Authorization": f"Bearer {id_token}", "x-auth-key": user_id, "Content-Type": "application/json"}
+        ckw = {"timeout": 30}
+        if proxy_url:
+            ckw["proxy"] = proxy_url
+
+        acct_deleted = 0
+        async with _httpx.AsyncClient(**ckw) as client:
+            resp = await client.get("https://api.gumloop.com//secrets/mcp_servers", headers=hdrs)
+            secrets = resp.json() if resp.status_code == 200 else []
+
+            for s in secrets:
+                url = s.get("url", "")
+                secret_id = s.get("secret_id", "")
+                if url in delete_urls and secret_id:
+                    dr = await client.delete(f"https://api.gumloop.com//secrets/mcp_servers/{secret_id}", headers=hdrs)
+                    if dr.status_code in (200, 204):
+                        acct_deleted += 1
+
+            # Remove from gummie tools
+            if gummie_id:
+                resp2 = await client.get(f"https://api.gumloop.com/gummies/{gummie_id}", headers=hdrs)
+                if resp2.status_code == 200:
+                    tools = resp2.json().get("gummie", {}).get("tools", [])
+                    new_tools = [t for t in tools if not (t.get("type") == "mcp_server" and t.get("mcp_server_url", "") in delete_urls)]
+                    if len(new_tools) != len(tools):
+                        await client.patch(f"https://api.gumloop.com/gummies/{gummie_id}", json={"tools": new_tools}, headers=hdrs)
+
+        # Persist tokens
+        updated = auth.get_updated_tokens()
+        if updated.get("gl_id_token"):
+            try:
+                await db.update_account(acct["id"], **updated)
+            except Exception:
+                pass
+
+        total_deleted += acct_deleted
+        results.append({"email": acct.get("email", "?"), "ok": True, "deleted": acct_deleted})
+
+        import asyncio as _aio
+        await _aio.sleep(0.3)
+
+    return {"ok": True, "total_accounts": len(gl_accounts), "total_deleted": total_deleted, "results": results}
+
+
 @router.post("/accounts/{account_id}/bind-mcp")
 async def bind_mcp_endpoint(account_id: int, request: Request, _: bool = Depends(verify_admin)):
     """Bind MCP server(s) to a single Gumloop account's gummie."""
