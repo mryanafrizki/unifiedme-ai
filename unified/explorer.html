@@ -471,18 +471,27 @@ function renderMcpBar() {
   }
 
   addBtn.style.display = 'none';
-  removeBtn.style.display = '';
   var running = inst.status === 'running' && inst.pid > 0;
-  statusEl.textContent = running ? 'running :' + inst.port : 'stopped';
+  var hasUrl = inst.tunnel_url && inst.tunnel_pid > 0;
+
+  // Status badge: show port always
+  statusEl.textContent = (running ? 'running' : 'stopped') + ' :' + inst.port;
   statusEl.className = 'badge ' + (running ? 'badge-active' : 'badge-queued');
+
+  // Enable/Disable buttons (start = enable, stop = disable)
+  startBtn.textContent = 'Enable';
   startBtn.style.display = running ? 'none' : '';
+  stopBtn.textContent = 'Disable';
   stopBtn.style.display = running ? '' : 'none';
 
-  var hasUrl = inst.tunnel_url && inst.tunnel_pid > 0;
+  // Tunnel
   urlEl.textContent = hasUrl ? inst.tunnel_url + '/mcp' : '';
   urlEl.title = hasUrl ? 'Click to copy' : '';
   tunnelBtn.style.display = (running && !hasUrl) ? '' : 'none';
   tunnelStopBtn.style.display = hasUrl ? '' : 'none';
+
+  // Remove only visible when stopped (disable first, then remove)
+  removeBtn.style.display = (!running) ? '' : 'none';
 }
 
 async function mcpBarAdd() {
@@ -529,12 +538,26 @@ async function mcpBarRemove() {
 
 async function mcpBarStart() {
   if (!currentMcpInstance) return;
+  var statusEl = document.getElementById('mcp-bar-status');
+  var startBtn = document.getElementById('mcp-bar-start');
+  startBtn.disabled = true; startBtn.textContent = 'Starting...';
   try {
+    // Start server
+    statusEl.textContent = 'starting...'; statusEl.className = 'badge badge-running';
     var resp = await fetch('/api/mcp/instances/' + currentMcpInstance.id + '/start', { method: 'POST', headers: getHeaders() });
     var data = await resp.json();
-    if (data.ok) { checkMcpForPath(currentPath); }
-    else { alert('Error: ' + (data.error || '')); }
+    if (!data.ok) { alert('Error: ' + (data.error || '')); startBtn.disabled = false; startBtn.textContent = 'Enable'; return; }
+
+    // Auto-start tunnel too
+    statusEl.textContent = 'starting tunnel...';
+    var tResp = await fetch('/api/mcp/instances/' + currentMcpInstance.id + '/tunnel', { method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ action: 'start' }) });
+    var tData = await tResp.json();
+    if (tData.url) { navigator.clipboard.writeText(tData.url + '/mcp').catch(function(){}); }
+
+    checkMcpForPath(currentPath);
   } catch(e) { alert('Error: ' + e.message); }
+  startBtn.disabled = false; startBtn.textContent = 'Enable';
 }
 
 async function mcpBarStop() {
