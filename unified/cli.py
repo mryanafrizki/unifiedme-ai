@@ -12,6 +12,9 @@ Usage:
     unifiedme addaccounts add      Batch add accounts (interactive)
     unifiedme addaccounts status   Show batch progress (real-time)
     unifiedme addaccounts stop     Force stop running batch
+    unifiedme mcp start [folder]   Start MCP server (background daemon)
+    unifiedme mcp stop             Stop MCP server
+    unifiedme mcp status           Show MCP server status
     unifiedme mcp list             List MCP servers for all GL accounts
     unifiedme mcp toggle           Enable/disable MCP on an account
     unifiedme mcp bind <url>       Bind MCP URL to all GL accounts (or --account N)
@@ -1564,6 +1567,192 @@ def cmd_mcp_bind():
             print(f"  {_RED}Failed: {e}{_NC}")
 
 
+MCP_PID_FILE = DATA_DIR / "mcp.pid"
+MCP_LOG_FILE = DATA_DIR / "mcp.log"
+
+
+def cmd_mcp_start():
+    """Start MCP server in background.
+
+    Usage:
+        unifiedme mcp start                          Interactive (asks folder name)
+        unifiedme mcp start my-project               Workspace = ~/mcp-workspaces/my-project
+        unifiedme mcp start ~/some/path              Workspace = ~/some/path (absolute)
+        unifiedme mcp start my-project --port 9876   Custom port
+    """
+    args = sys.argv[3:]
+
+    # Parse --port
+    port = 9876
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            port = int(args[idx + 1])
+            args = args[:idx] + args[idx + 2:]
+
+    # Determine workspace
+    if args and args[0] not in ("--port",):
+        ws_input = args[0]
+    else:
+        # Interactive: ask for folder name
+        print(f"\n  {_CYAN}MCP Server — Start{_NC}")
+        print(f"  Workspace is the folder MCP tools can read/write.")
+        print(f"  Enter a name (creates ~/mcp-workspaces/<name>)")
+        print(f"  Or a full path (e.g. ~/my-project)")
+        print()
+        try:
+            ws_input = input("  Workspace: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Cancelled.")
+            return
+        if not ws_input:
+            print(f"  {_RED}Workspace is required.{_NC}")
+            return
+
+    # Resolve workspace path
+    if ws_input.startswith("/") or ws_input.startswith("~"):
+        workspace = os.path.expanduser(ws_input)
+    else:
+        workspace = os.path.expanduser(f"~/mcp-workspaces/{ws_input}")
+
+    os.makedirs(workspace, exist_ok=True)
+    workspace = os.path.realpath(workspace)
+
+    # Check if already running
+    if MCP_PID_FILE.exists():
+        try:
+            old_pid = int(MCP_PID_FILE.read_text().strip())
+            if _is_running(old_pid):
+                print(f"  MCP server already running (PID {old_pid})")
+                print(f"  Stop first: {CMD} mcp stop")
+                return
+        except (ValueError, OSError):
+            pass
+
+    # Check port
+    port_pid = _port_in_use(port)
+    if port_pid:
+        print(f"  Port {port} already in use (PID {port_pid}).")
+        try:
+            answer = input("  Kill it? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\n  Cancelled.")
+            return
+        if answer == "y":
+            _kill_pid(port_pid)
+            time.sleep(1)
+        else:
+            return
+
+    print(f"  Starting MCP server...")
+    print(f"  Workspace: {workspace}")
+    print(f"  Port:      {port}")
+
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    install_dir = Path(__file__).resolve().parent.parent
+    python_bin = install_dir / ".venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+
+    if not python_bin.exists():
+        python_bin = Path(sys.executable)
+
+    mcp_script = install_dir / "mcp_server.py"
+    if not mcp_script.exists():
+        print(f"  {_RED}mcp_server.py not found at {mcp_script}{_NC}")
+        return
+
+    log_fh = open(MCP_LOG_FILE, "a")
+
+    cmd_args = [
+        str(python_bin), str(mcp_script),
+        "--workspace", workspace,
+        "--port", str(port),
+        "--no-tunnel",
+        "--no-interactive",
+    ]
+
+    # Load API key if available
+    api_key_file = DATA_DIR / ".mcp_api_key"
+    if api_key_file.exists():
+        key = api_key_file.read_text().strip()
+        if key:
+            cmd_args.extend(["--api-key", key])
+
+    if _is_windows():
+        pythonw = _find_pythonw()
+        if pythonw:
+            cmd_args[0] = pythonw
+        proc = subprocess.Popen(
+            cmd_args,
+            stdout=log_fh, stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+            close_fds=True,
+        )
+    else:
+        proc = subprocess.Popen(
+            cmd_args,
+            stdout=log_fh, stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True,
+        )
+
+    MCP_PID_FILE.write_text(str(proc.pid))
+
+    time.sleep(2)
+    if _is_running(proc.pid):
+        print(f"  {_GREEN}MCP server started (PID {proc.pid}){_NC}")
+        print(f"  Endpoint: http://0.0.0.0:{port}/mcp")
+        print(f"  Log:      {MCP_LOG_FILE}")
+        print()
+        print(f"  {_DIM}To expose via tunnel:{_NC}")
+        print(f"    {CMD} tunnel start mcp --port {port}")
+    else:
+        print(f"  {_RED}Failed to start MCP server.{_NC}")
+        # Show last lines of log
+        if MCP_LOG_FILE.exists():
+            lines = MCP_LOG_FILE.read_text(errors="replace").strip().split("\n")
+            for line in lines[-5:]:
+                print(f"    {_RED}{line.strip()[:120]}{_NC}")
+
+
+def cmd_mcp_stop():
+    """Stop MCP server."""
+    if not MCP_PID_FILE.exists():
+        print("  No MCP server running (no PID file)")
+        return
+
+    try:
+        pid = int(MCP_PID_FILE.read_text().strip())
+    except (ValueError, OSError):
+        MCP_PID_FILE.unlink(missing_ok=True)
+        print("  Invalid PID file, cleaned up.")
+        return
+
+    if not _is_running(pid):
+        print(f"  PID {pid} not running (stale PID file)")
+        MCP_PID_FILE.unlink(missing_ok=True)
+        return
+
+    print(f"  Stopping MCP server (PID {pid})...", end=" ", flush=True)
+    _kill_pid(pid)
+    time.sleep(1)
+    MCP_PID_FILE.unlink(missing_ok=True)
+    print(f"{_GREEN}Stopped{_NC}")
+
+
+def cmd_mcp_status():
+    """Show MCP server status."""
+    if MCP_PID_FILE.exists():
+        try:
+            pid = int(MCP_PID_FILE.read_text().strip())
+            if _is_running(pid):
+                print(f"  MCP Server: {_GREEN}RUNNING{_NC} (PID {pid})")
+                print(f"  Log: {MCP_LOG_FILE}")
+                return
+        except (ValueError, OSError):
+            pass
+    print(f"  MCP Server: {_DIM}STOPPED{_NC}")
+
+
 def cmd_mcp():
     """Route mcp subcommands."""
     args = sys.argv[2:]
@@ -1573,14 +1762,20 @@ def cmd_mcp():
         "list": cmd_mcp_list,
         "toggle": cmd_mcp_toggle,
         "bind": cmd_mcp_bind,
+        "start": cmd_mcp_start,
+        "stop": cmd_mcp_stop,
+        "status": cmd_mcp_status,
     }
 
     if subcmd in subcmds:
         subcmds[subcmd]()
     else:
         print(f"\n  Usage:")
-        print(f"    {CMD} mcp list                     List MCP servers for all GL accounts")
-        print(f"    {CMD} mcp toggle                   Enable/disable MCP on an account")
+        print(f"    {CMD} mcp start [folder]            Start MCP server (background)")
+        print(f"    {CMD} mcp stop                      Stop MCP server")
+        print(f"    {CMD} mcp status                    Show MCP server status")
+        print(f"    {CMD} mcp list                      List MCP servers for all GL accounts")
+        print(f"    {CMD} mcp toggle                    Enable/disable MCP on an account")
         print(f"    {CMD} mcp bind <url> [--account N]  Bind MCP URL to GL accounts")
 
 
