@@ -718,6 +718,7 @@ a:hover{text-decoration:underline}
         <div class="key-value" id="api-key-display">sk-••••••••••••</div>
       </div>
     </div>
+    <a href="/explorer" class="btn btn-sm" target="_blank" title="File Explorer" style="text-decoration:none">Explorer</a>
     <button class="btn btn-sm" id="regen-key-btn" title="Regenerate API key">&#x21bb; Regenerate</button>
     <button class="btn btn-sm" id="refresh-credits-btn" title="Refresh all credits">&#x21bb; Credits</button>
   </div>
@@ -811,6 +812,7 @@ a:hover{text-decoration:underline}
         <div class="acct-col-header" style="display:flex;align-items:center;justify-content:space-between">
           <h4>&#x1f30a; GUMLOOP <span class="acct-count" id="acct-count-gl">0</span></h4>
           <button class="btn btn-sm" onclick="showBindMcpModal()" style="font-size:11px;padding:2px 8px">Bind MCP</button>
+          <button class="btn btn-sm btn-danger" onclick="showDeleteMcpModal()" style="font-size:11px;padding:2px 8px">Delete MCP</button>
         </div>
         <div class="acct-col-filters" data-provider="gl">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -969,6 +971,25 @@ a:hover{text-decoration:underline}
       </div>
     </div>
   </div>
+
+  <!-- MODAL: Delete MCP (bulk) -->
+  <div id="mcp-delete-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;width:480px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px;color:var(--red)">Delete MCP from All GL Accounts</h3>
+        <button onclick="closeDeleteMcpModal()" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer">&times;</button>
+      </div>
+      <label style="font-size:12px;color:var(--text-dim);display:block;margin-bottom:4px">MCP URLs to delete (1 per line):</label>
+      <textarea id="mcp-delete-urls" placeholder="https://xxx.trycloudflare.com/mcp" style="min-height:60px;max-height:100px;font-size:12px;width:100%;background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:8px;resize:vertical;font-family:monospace"></textarea>
+      <div style="display:flex;gap:.5rem;margin-top:10px">
+        <button class="btn btn-danger btn-sm" id="mcp-delete-btn" onclick="startDeleteMcp()">Delete from All Accounts</button>
+        <button class="btn btn-sm" onclick="closeDeleteMcpModal()">Cancel</button>
+      </div>
+      <div id="mcp-delete-result" style="margin-top:10px;font-size:12px;display:none"></div>
+    </div>
+  </div>
+
+  <!-- Active MCP Instances Panel (shown in Tunnel & MCP tab or accounts) -->
 
   <!-- ═══════════════════════════════════════════ -->
   <!-- TAB: Batch Login                            -->
@@ -1352,15 +1373,12 @@ a:hover{text-decoration:underline}
       </div>
     </div>
 
-    <!-- MCP Workspaces -->
-    <div class="section-title" style="margin-bottom:.75rem">MCP Workspaces</div>
+    <!-- Active MCP Servers -->
+    <div class="section-title" style="margin-bottom:.75rem">Active MCP Servers</div>
     <div class="stat-card" style="padding:1.25rem">
-      <p class="text-dim" style="font-size:.82rem;margin-bottom:1rem">MCP workspace folders are directories that the MCP server can read/write. Create a workspace for each project you want Gumloop agents to access.</p>
-      <div style="display:flex;gap:.5rem;margin-bottom:1rem">
-        <input type="text" id="mcp-ws-name" placeholder="Folder name (e.g. my-project)" style="flex:1;padding:.5rem .75rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.85rem">
-        <button class="btn btn-accent btn-sm" onclick="createMcpWorkspace()">Create</button>
-      </div>
-      <div id="mcp-ws-list"></div>
+      <p class="text-dim" style="font-size:.82rem;margin-bottom:.75rem">MCP server instances. Manage via <a href="/explorer" target="_blank" style="color:var(--accent)">Explorer</a> (navigate to folder → Enable MCP).</p>
+      <div id="mcp-instances-list" style="font-size:.85rem">Loading...</div>
+      <button class="btn btn-sm" onclick="loadMcpInstances()" style="margin-top:.75rem">Refresh</button>
     </div>
   </div>
 
@@ -1947,7 +1965,7 @@ function initTabs() {
       // Load proxy data when proxy tab is activated
       if (btn.dataset.tab === 'proxy') { loadProxies('api'); loadProxies('batch'); }
       if (btn.dataset.tab === 'filter') { loadFilters(); loadGlobalFilters(); }
-      if (btn.dataset.tab === 'tunnel') { loadTunnelStatus(); loadMcpWorkspaces(); startTunnelRefresh(); }
+      if (btn.dataset.tab === 'tunnel') { loadTunnelStatus(); loadMcpInstances(); startTunnelRefresh(); }
       else { stopTunnelRefresh(); }
       if (btn.dataset.tab === 'vps') { loadVpsList(); }
       if (btn.dataset.tab === 'docs') { setupDocsHost(); }
@@ -5084,54 +5102,104 @@ async function applyNginxLocal() {
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
-async function loadMcpWorkspaces() {
+// ── MCP Instances List ──
+
+async function loadMcpInstances() {
+  var el = document.getElementById('mcp-instances-list');
   try {
-    var data = await apiFetch('/api/mcp/workspaces');
-    var list = document.getElementById('mcp-ws-list');
-    if (!data.workspaces || data.workspaces.length === 0) {
-      list.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem;padding:.5rem 0">No workspaces yet. Create one above.</div>';
+    var data = await apiFetch('/api/mcp/instances');
+    var instances = data.instances || [];
+    if (!instances.length) {
+      el.innerHTML = '<div style="color:var(--text-muted);font-size:.82rem">No MCP servers configured. Use <a href="/explorer" target="_blank" style="color:var(--accent)">Explorer</a> to enable MCP on a folder.</div>';
       return;
     }
-    var html = '<div class="table-wrap"><table><thead><tr><th>Name</th><th>Path</th><th></th></tr></thead><tbody>';
-    data.workspaces.forEach(function(ws) {
-      html += '<tr><td style="font-weight:500">' + ws.name + '</td>';
-      html += '<td class="mono text-dim" style="font-size:.78rem">' + ws.path + '</td>';
-      html += '<td><button class="btn btn-danger btn-sm" onclick="deleteMcpWorkspace(\'' + ws.name + '\')">Delete</button></td></tr>';
+    var html = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Path</th><th>Port</th><th>Status</th><th>Tunnel URL</th><th></th></tr></thead><tbody>';
+    instances.forEach(function(inst) {
+      var running = inst.status === 'running' && inst.pid > 0;
+      var badge = running ? '<span class="badge badge-active">running</span>' : '<span class="badge badge-queued">stopped</span>';
+      var url = inst.tunnel_url ? '<span class="mono" style="font-size:.72rem;cursor:pointer;color:var(--green)" onclick="navigator.clipboard.writeText(\'' + inst.tunnel_url + '/mcp\');toast(\'Copied\',\'success\')">' + inst.tunnel_url + '/mcp</span>' : '<span class="text-dim">—</span>';
+      html += '<tr>';
+      html += '<td>' + inst.id + '</td>';
+      html += '<td class="mono" style="font-size:.75rem;max-width:250px;overflow:hidden;text-overflow:ellipsis" title="' + inst.workspace_path + '">' + inst.workspace_path + '</td>';
+      html += '<td class="mono">' + inst.port + '</td>';
+      html += '<td>' + badge + '</td>';
+      html += '<td>' + url + '</td>';
+      html += '<td style="white-space:nowrap">';
+      if (running) {
+        html += '<button class="btn btn-sm" style="font-size:.7rem" onclick="mcpInstanceAction(' + inst.id + ',\'stop\')">Stop</button>';
+      } else {
+        html += '<button class="btn btn-sm" style="font-size:.7rem" onclick="mcpInstanceAction(' + inst.id + ',\'start\')">Start</button>';
+        html += ' <button class="btn btn-sm btn-danger" style="font-size:.7rem" onclick="mcpInstanceAction(' + inst.id + ',\'remove\')">Remove</button>';
+      }
+      html += '</td></tr>';
     });
     html += '</tbody></table></div>';
-    list.innerHTML = html;
-  } catch(e) { /* ignore */ }
+    el.innerHTML = html;
+  } catch(e) { el.innerHTML = '<div style="color:var(--red);font-size:.82rem">Error: ' + e.message + '</div>'; }
 }
 
-async function createMcpWorkspace() {
-  var input = document.getElementById('mcp-ws-name');
-  var name = input.value.trim();
-  if (!name) { toast('Enter a folder name', 'error'); return; }
+async function mcpInstanceAction(id, action) {
   try {
-    var data = await apiFetch('/api/mcp/setup-workspace', {
-      method: 'POST',
-      body: JSON.stringify({ name: name })
-    });
-    if (data.ok) {
-      toast('Workspace created at: ' + data.path, 'success');
-      input.value = '';
-      loadMcpWorkspaces();
-    } else {
-      toast('Error: ' + (data.error || ''), 'error');
+    if (action === 'remove') {
+      if (!confirm('Remove MCP server #' + id + '?')) return;
+      await apiFetch('/api/mcp/instances/' + id, { method: 'DELETE' });
+    } else if (action === 'start') {
+      await apiFetch('/api/mcp/instances/' + id + '/start', { method: 'POST' });
+      // Also start tunnel
+      await apiFetch('/api/mcp/instances/' + id + '/tunnel', { method: 'POST', body: JSON.stringify({ action: 'start' }) });
+    } else if (action === 'stop') {
+      await apiFetch('/api/mcp/instances/' + id + '/stop', { method: 'POST' });
     }
+    toast(action + ' OK', 'success');
+    loadMcpInstances();
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
-async function deleteMcpWorkspace(name) {
-  if (!confirm('Delete workspace "' + name + '"? This will remove the folder.')) return;
+// ── Delete MCP Modal ──
+
+function showDeleteMcpModal() {
+  document.getElementById('mcp-delete-modal').style.display = 'flex';
+  document.getElementById('mcp-delete-urls').value = '';
+  document.getElementById('mcp-delete-result').style.display = 'none';
+}
+
+function closeDeleteMcpModal() {
+  document.getElementById('mcp-delete-modal').style.display = 'none';
+}
+
+async function startDeleteMcp() {
+  var textarea = document.getElementById('mcp-delete-urls');
+  var urls = textarea.value.trim().split('\n').map(function(u) { return u.trim(); }).filter(Boolean);
+  if (!urls.length) { toast('Enter at least one URL', 'error'); return; }
+
+  var btn = document.getElementById('mcp-delete-btn');
+  btn.disabled = true; btn.textContent = 'Deleting...';
+  var resultEl = document.getElementById('mcp-delete-result');
+
   try {
-    var data = await apiFetch('/api/mcp/workspaces/' + encodeURIComponent(name), {
-      method: 'DELETE'
+    var data = await apiFetch('/api/accounts/mcp-delete-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ urls: urls })
     });
-    if (data.ok) { toast(data.message || 'Deleted', 'success'); }
-    else { toast('Error: ' + (data.error || ''), 'error'); }
-  } catch(e) { toast('Error: ' + e.message, 'error'); }
-  loadMcpWorkspaces();
+    var results = data.results || [];
+    var html = '<div style="max-height:200px;overflow-y:auto">';
+    results.forEach(function(r) {
+      if (r.ok) {
+        html += '<div style="color:var(--green)">[OK] ' + r.email + ' — ' + r.deleted + ' deleted</div>';
+      } else {
+        html += '<div style="color:var(--red)">[FAIL] ' + r.email + ' — ' + (r.error || '') + '</div>';
+      }
+    });
+    html += '</div><div style="margin-top:6px;font-weight:500">Total deleted: ' + (data.total_deleted || 0) + '</div>';
+    resultEl.innerHTML = html;
+    resultEl.style.display = 'block';
+    toast('Deleted ' + (data.total_deleted || 0) + ' MCP entries', 'success');
+  } catch(e) {
+    resultEl.innerHTML = '<div style="color:var(--red)">Error: ' + e.message + '</div>';
+    resultEl.style.display = 'block';
+    toast('Error: ' + e.message, 'error');
+  }
+  btn.disabled = false; btn.textContent = 'Delete from All Accounts';
 }
 
 function startTunnelRefresh() {
@@ -5199,8 +5267,11 @@ window.detectVpsIp = detectVpsIp;
 window.setNginxMode = setNginxMode;
 window.generateNginxConfig = generateNginxConfig;
 window.applyNginxLocal = applyNginxLocal;
-window.createMcpWorkspace = createMcpWorkspace;
-window.deleteMcpWorkspace = deleteMcpWorkspace;
+window.loadMcpInstances = loadMcpInstances;
+window.mcpInstanceAction = mcpInstanceAction;
+window.showDeleteMcpModal = showDeleteMcpModal;
+window.closeDeleteMcpModal = closeDeleteMcpModal;
+window.startDeleteMcp = startDeleteMcp;
 </script>
 </body>
 </html>
