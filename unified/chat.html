@@ -74,6 +74,26 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 pre:hover .copy-code{opacity:1}
 .copy-code:hover{color:var(--text);border-color:var(--accent)}
 
+/* Thinking blocks */
+.thinking-block{margin:.5rem 0;border:1px solid var(--thinking-border);border-radius:var(--radius-sm);background:var(--thinking-bg);overflow:hidden}
+.thinking-header{padding:.5rem .85rem;font-size:.78rem;font-weight:500;color:var(--accent);cursor:pointer;user-select:none;list-style:none;display:flex;align-items:center;gap:.4rem}
+.thinking-header::before{content:'';display:inline-block;width:0;height:0;border-left:5px solid var(--accent);border-top:4px solid transparent;border-bottom:4px solid transparent;transition:transform .15s}
+details[open] .thinking-header::before{transform:rotate(90deg)}
+.thinking-body{padding:.5rem .85rem .75rem;font-size:.84rem;color:var(--text-dim);line-height:1.6;border-top:1px solid var(--thinking-border)}
+.thinking-body p{margin:.3rem 0}
+.thinking-body ol,.thinking-body ul{margin:.3rem 0 .3rem 1.2rem}
+
+/* Tool calls */
+.tool-call{background:var(--surface3);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.45rem .75rem;margin:.4rem 0;font-size:.82rem;display:flex;align-items:baseline;gap:.4rem;flex-wrap:wrap}
+.tool-label{font-weight:600;color:var(--cyan);font-size:.75rem}
+.tool-name{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:.8rem;background:none;padding:0}
+.tool-args{color:var(--text-dim);font-family:'JetBrains Mono',monospace;font-size:.78rem;word-break:break-all}
+
+/* Tool results */
+.tool-result{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius-sm);padding:.45rem .75rem;margin:.2rem 0 .6rem;font-size:.82rem}
+.tool-result .tool-label{color:var(--green)}
+.tool-result-content{margin-top:.3rem;padding:.4rem .6rem;background:var(--surface);border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:.78rem;color:var(--text-dim);overflow-x:auto;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all}
+
 /* Input area */
 .input-area{padding:1rem 2rem 1.25rem;background:var(--surface);border-top:1px solid var(--border)}
 .input-wrap{max-width:900px;margin:0 auto;display:flex;gap:.5rem;align-items:flex-end}
@@ -271,11 +291,55 @@ function renderMsg(role, content) {
 function renderMd(text) {
   if (!text) return '';
   try {
+    // Parse special blocks before markdown
+    text = parseSpecialBlocks(text);
     var html = marked.parse(text);
     // Add copy buttons to code blocks
     html = html.replace(/<pre><code/g, '<pre><button class="copy-code" onclick="copyCodeBlock(this)">Copy</button><code');
+    // Render thinking blocks
+    html = html.replace(/%%THINKING_START%%/g, '<details class="thinking-block" open><summary class="thinking-header">Thinking</summary><div class="thinking-body">');
+    html = html.replace(/%%THINKING_END%%/g, '</div></details>');
+    // Render tool calls
+    html = html.replace(/%%TOOL_CALL%%(.*?)%%TOOL_ARGS%%(.*?)%%TOOL_END%%/g, '<div class="tool-call"><span class="tool-label">[Tool]</span> <code class="tool-name">$1</code><span class="tool-args">($2)</span></div>');
+    // Render tool results
+    html = html.replace(/%%RESULT_START%%(.*?)%%RESULT_CONTENT%%/g, '<div class="tool-result"><span class="tool-label">[Result]</span> <code class="tool-name">$1</code> →<div class="tool-result-content">');
+    html = html.replace(/%%RESULT_END%%/g, '</div></div>');
     return html;
   } catch(e) { return escHtml(text); }
+}
+
+function parseSpecialBlocks(text) {
+  // Parse "Thinking:" blocks (italic block at start or after newlines)
+  text = text.replace(/(?:^|\n)(?:_?Thinking:?_?|Thinking:)\s*([\s\S]*?)(?=\n\n(?:[^\s]|$)|\n(?:\[Tool\]|\[Result\])|$)/gi, function(match, content) {
+    if (!content.trim()) return match;
+    return '\n%%THINKING_START%%\n' + content.trim() + '\n%%THINKING_END%%\n';
+  });
+
+  // Parse [Tool] tool_name({args})
+  text = text.replace(/\[Tool\]\s*\**\s*`?(\w+)\(`?([^)]*)\)`?\**/g, function(match, name, args) {
+    return '%%TOOL_CALL%%' + name + '%%TOOL_ARGS%%' + args + '%%TOOL_END%%';
+  });
+
+  // Parse [Result] tool_name → content (until next block or double newline)
+  text = text.replace(/\[Result\]\s*\**\s*`?(\w+)`?\*?\s*→?\s*/g, function(match, name) {
+    return '%%RESULT_START%%' + name + '%%RESULT_CONTENT%%';
+  });
+
+  // Close result blocks at next [Tool], [Result], or double newline
+  var parts = text.split('%%RESULT_CONTENT%%');
+  if (parts.length > 1) {
+    for (var i = 1; i < parts.length; i++) {
+      var endIdx = parts[i].search(/\n\n(?!```)|%%TOOL_CALL%%|%%RESULT_START%%|%%THINKING_START%%/);
+      if (endIdx === -1) {
+        parts[i] = parts[i] + '%%RESULT_END%%';
+      } else {
+        parts[i] = parts[i].substring(0, endIdx) + '%%RESULT_END%%' + parts[i].substring(endIdx);
+      }
+    }
+    text = parts.join('%%RESULT_CONTENT%%');
+  }
+
+  return text;
 }
 
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
