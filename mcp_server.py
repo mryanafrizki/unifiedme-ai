@@ -691,10 +691,14 @@ async def download_file(
     try:
         if url.startswith("gl://"):
             # Gumloop storage — download via unified proxy (has correct account auth)
-            # Re-read API key from file every time (may have been updated without restart)
-            api_key = PROXY_API_KEY or _load_api_key()
-            if not api_key:
-                return {"error": "gl:// download requires API key. Set via dashboard (Tunnel & MCP → MCP API Key) or: --api-key flag."}
+            # Re-read API key fresh from file every time
+            api_key = _load_api_key()
+            if not api_key or not api_key.strip() or not api_key.startswith("sk-"):
+                return {
+                    "error": f"gl:// download requires a valid API key (sk-xxx). "
+                             f"Config file: {_MCP_CONFIG_FILE} (exists: {_MCP_CONFIG_FILE.exists()}). "
+                             f"Fix: run 'unifiedme mcp apikey sk-YOUR_KEY' on the VPS, then retry."
+                }
             log.info("[download] gl:// via proxy: %s", url[:80])
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
