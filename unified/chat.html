@@ -369,6 +369,14 @@ async function sendMessage() {
       signal: abortController.signal,
     });
 
+    // Check for HTTP errors before streaming
+    if (!resp.ok) {
+      var errText = await resp.text();
+      try { var errJson = JSON.parse(errText); errText = errJson.error || errJson.detail || errText; } catch(e) {}
+      fullResponse = '**Error ' + resp.status + ':** ' + errText;
+      throw { name: 'HttpError', message: errText };
+    }
+
     var reader = resp.body.getReader();
     var decoder = new TextDecoder();
     var buffer = '';
@@ -389,15 +397,32 @@ async function sendMessage() {
 
         try {
           var chunk = JSON.parse(payload);
-          if (chunk.error) { fullResponse += '\n\n**Error:** ' + chunk.error; break; }
-          var delta = (chunk.choices && chunk.choices[0] && chunk.choices[0].delta) || {};
+          // Check for error responses
+          if (chunk.error) {
+            var errMsg = typeof chunk.error === 'object' ? (chunk.error.message || JSON.stringify(chunk.error)) : chunk.error;
+            fullResponse += '\n\n**Error:** ' + errMsg;
+            break;
+          }
+          var choice = chunk.choices && chunk.choices[0];
+          if (!choice) continue;
+          // Check finish_reason for errors
+          if (choice.finish_reason === 'error') {
+            fullResponse += '\n\n**Error:** Model returned an error.';
+            break;
+          }
+          var delta = choice.delta || {};
           if (delta.content) {
             fullResponse += delta.content;
           }
           if (delta.thinking) {
             thinkingResponse += delta.thinking;
           }
-        } catch(pe) {}
+        } catch(pe) {
+          // Non-JSON SSE line — might be an error message
+          if (payload && payload.length > 2 && payload !== '[DONE]') {
+            fullResponse += '\n\n**Error:** ' + payload;
+          }
+        }
       }
 
       // Update streaming bubble
@@ -413,8 +438,8 @@ async function sendMessage() {
       }
     }
   } catch(e) {
-    if (e.name !== 'AbortError') {
-      fullResponse += '\n\n**Error:** ' + e.message;
+    if (e.name !== 'AbortError' && e.name !== 'HttpError') {
+      fullResponse += '\n\n**Error:** ' + (e.message || 'Connection failed');
     }
   }
 
@@ -426,7 +451,7 @@ async function sendMessage() {
 
   var streamEl = document.getElementById('streaming-content');
   if (streamEl) {
-    streamEl.innerHTML = renderMd(fullResponse) || '<em style="color:var(--text-muted)">No response</em>';
+    streamEl.innerHTML = renderMd(fullResponse) || '<em style="color:var(--red)">No response — model may be unavailable or all accounts exhausted. Try a different model.</em>';
     streamEl.removeAttribute('id');
   }
   var streamMsg = document.getElementById('streaming-msg');
