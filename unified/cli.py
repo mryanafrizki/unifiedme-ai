@@ -818,8 +818,23 @@ def _aa_log_fail(email: str, password: str, reason: str):
 
 def _aa_api(method: str, path: str, json_body=None, timeout: float = 30) -> dict:
     import httpx
-    from .config import ADMIN_PASSWORD
-    headers = {"X-Admin-Password": ADMIN_PASSWORD, "Content-Type": "application/json"}
+    # Read admin password from DB first (user may have changed it via dashboard)
+    admin_pw = ""
+    try:
+        import sqlite3
+        db_path = DATA_DIR / "unified.db"
+        if db_path.exists():
+            db = sqlite3.connect(str(db_path))
+            row = db.execute("SELECT value FROM settings WHERE key='admin_password'").fetchone()
+            if row and row[0]:
+                admin_pw = row[0]
+            db.close()
+    except Exception:
+        pass
+    if not admin_pw:
+        from .config import ADMIN_PASSWORD
+        admin_pw = ADMIN_PASSWORD
+    headers = {"X-Admin-Password": admin_pw, "Content-Type": "application/json"}
     url = f"http://localhost:{LISTEN_PORT}/api{path}"
     with httpx.Client(timeout=timeout) as client:
         if method == "GET":
