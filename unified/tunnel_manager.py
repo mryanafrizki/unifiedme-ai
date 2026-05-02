@@ -224,13 +224,19 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
     # Check if already running (from persisted state)
     existing = _load_tunnel_state(target)
     if existing.get("pid") and _is_pid_alive(existing["pid"]):
-        return {
-            "ok": True,
-            "url": existing.get("url", ""),
-            "port": existing.get("port", actual_port),
-            "pid": existing["pid"],
-            "message": "Tunnel already running",
-        }
+        existing_port = existing.get("port", default_port)
+        if existing_port == actual_port:
+            return {
+                "ok": True,
+                "url": existing.get("url", ""),
+                "port": existing_port,
+                "pid": existing["pid"],
+                "message": "Tunnel already running",
+            }
+        else:
+            # Port changed — stop old tunnel, start new one
+            log.info("Tunnel port changed %d -> %d, restarting", existing_port, actual_port)
+            stop_tunnel(target)
 
     # Start cloudflared as a detached process
     # Key: stderr goes to a LOG FILE, not a pipe.
