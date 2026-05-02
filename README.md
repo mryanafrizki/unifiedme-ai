@@ -99,7 +99,7 @@ Each deployment requires a license key. Licenses are managed centrally via Cloud
 ```
 unified/              Core proxy server
   main.py             FastAPI app + CLI license flow
-  cli.py              CLI commands (start/stop/update/etc)
+  cli.py              CLI commands (start/stop/update/tunnel/mcp)
   config.py           Configuration + model routing
   license_client.py   Central D1 sync client
   database.py         Local SQLite layer
@@ -107,23 +107,28 @@ unified/              Core proxy server
   auth_middleware.py   API key + admin auth
   router_proxy.py     /v1/* proxy routes
   router_admin.py     /api/* admin routes
+  router_chat.py      /api/chat/* chat + agent endpoints
+  router_explorer.py  /api/explorer/* file operations
+  agent_loop.py       Agent loop (LLM + MCP tool execution)
+  mcp_client.py       MCP Streamable HTTP client
+  tunnel_manager.py   Cloudflared tunnel management (multi-port)
   proxy_kiro.py       Kiro direct API proxy
   proxy_codebuddy.py  CodeBuddy proxy
   proxy_wavespeed.py  WaveSpeed proxy
   proxy_gumloop.py    Gumloop WebSocket proxy
   message_filter.py   Content filter engine
-  batch_runner.py     Batch login orchestrator
   dashboard.html      Admin dashboard UI
+  chat.html           AI chat UI (Chat + Agent mode)
+  explorer.html       File explorer + Monaco code editor
   kiro/               Kiro API client library
   gumloop/            Gumloop client library
 app/                  Browser automation (Camoufox + Playwright)
   providers/
     kiro.py           Kiro Google OAuth login
     codebuddy.py      CodeBuddy Google OAuth login
-mcp_server.py         MCP server for Gumloop (26 tools, FastMCP)
+mcp_server.py         MCP server (27 tools, FastMCP, Streamable HTTP)
 VERSION               Current version
 install.sh            Auto-installer
-migrate_to_d1.py      SQLite -> D1 migration tool
 ```
 
 ## MCP Server (Gumloop)
@@ -205,6 +210,120 @@ The API key is saved to `unified/data/.mcp_api_key` after first input. Priority 
 ```
 --api-key CLI arg  >  PROXY_API_KEY env var  >  saved config file
 ```
+
+---
+
+## Web Chat UI (`/chat`)
+
+Built-in AI chat interface with agent mode — use any model with MCP tools, similar to OpenCode.
+
+### Features
+
+- **Model selector** — dropdown + custom model input for any model
+- **Chat mode** — direct LLM streaming (text, thinking blocks, markdown, code highlighting)
+- **Agent mode** — LLM + MCP tool execution loop (file ops, bash, git, search, web)
+- **MCP integration** — connect to any MCP server, test connectivity, see tool count
+- **Streaming** — real-time SSE with thinking blocks, tool calls, tool results
+- **Session management** — create, switch, delete, export/import as JSON
+- **File upload** — attach images and text files to messages
+
+### Agent Mode
+
+Switch the dropdown to "Agent", enter your MCP server URL, click Test, then chat. The LLM will automatically call MCP tools to accomplish tasks.
+
+```
+Agent mode flow:
+  User message → LLM (with tool definitions) → tool_calls → MCP server executes
+  → results fed back to LLM → repeat until done → final response
+```
+
+Supported tools (27): `read_file`, `write_file`, `edit_file`, `bash`, `git`, `grep`, `glob_search`, `tree`, `search_docs` (Context7), `web_search`, `fetch_url`, `search_github_code` (grep.app), and more.
+
+---
+
+## File Explorer (`/explorer`)
+
+Web-based file manager with built-in code editor.
+
+### Features
+
+- **Browse** — navigate directories, breadcrumb navigation
+- **Monaco Editor** — VS Code engine, syntax highlighting for 40+ languages, Ctrl+S save
+- **File operations** — create, rename, delete, cut/copy/paste, upload, download
+- **MCP server management** — enable/disable MCP per folder, start/stop, tunnel management
+- **Sortable columns** — name, date modified, size
+- **Keyboard shortcuts** — Delete, F2 (rename), Ctrl+C/X/V, Backspace (parent dir)
+
+---
+
+## Tunnel Management
+
+Cloudflared tunnels for exposing local services via public URLs. Supports **multiple simultaneous tunnels** on different ports.
+
+### Commands
+
+```bash
+# Start tunnels (each port gets its own URL)
+unifiedme tunnel start --port 1430      # Proxy tunnel
+unifiedme tunnel start --port 4096      # OpenCode web tunnel
+unifiedme tunnel start mcp --port 9876  # MCP server tunnel
+
+# Status (shows all running tunnels)
+unifiedme tunnel status
+
+# Stop specific port
+unifiedme tunnel stop --port 4096
+
+# Stop all tunnels
+unifiedme tunnel stop all
+
+# Install cloudflared + nginx
+unifiedme tunnel install
+```
+
+### OpenCode Web via Tunnel
+
+```bash
+# Start OpenCode web in background
+nohup opencode web --port 4096 > /dev/null 2>&1 &
+
+# Create tunnel to it
+unifiedme tunnel start --port 4096
+
+# Restart OpenCode web
+pkill -f "opencode web"; sleep 1; nohup opencode web --port 4096 > /dev/null 2>&1 &
+```
+
+---
+
+## Changelog
+
+### 2025-05-02
+
+- **Agent Loop** — backend MCP tool execution for chat UI, any model can use 27 MCP tools (file ops, bash, git, Context7, grep.app, web search)
+- **Monaco Editor** — explorer file preview replaced with full VS Code editor (40+ languages, Ctrl+S save, dirty state tracking)
+- **Multiple Tunnels** — each port gets its own independent tunnel URL, `tunnel stop --port/all` support
+- **Tool Schema Cleaning** — strips `$schema`, `title`, `additionalProperties` for CodeBuddy compatibility
+- **Agent Result Formatting** — tree/entries/stdout/search results rendered as clean text instead of raw JSON
+- **MCP Ping** — `/api/chat/mcp-ping` endpoint to test MCP server connectivity
+- **Write File API** — `POST /api/explorer/write-file` for saving edited files
+
+### 2025-05-01
+
+- **Chat UI** — web AI chat with streaming, thinking blocks, tool call rendering, markdown, code highlighting, file upload, session management (CRUD, export/import)
+- **Custom Model Input** — type any model name for new/unlisted models
+- **Explorer Date Column** — sortable columns (name/date/size), default sort by newest
+- **Admin Panel** — edit license (max_accounts/devices/tier), transfer accounts between licenses
+- **Chat Error Display** — detailed errors (502/503/exhausted) with model info
+
+### Earlier
+
+- MCP server (27 tools, FastMCP, Streamable HTTP)
+- Cloudflare Worker admin panel
+- VPS orchestration (SSH, auto-install, web terminal)
+- File explorer (browse, preview, CRUD, upload)
+- Proxy with 4 providers (Kiro, CodeBuddy, WaveSpeed, Gumloop)
+- Account rotation, credit tracking, license management
 
 ---
 
