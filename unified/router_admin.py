@@ -2260,6 +2260,7 @@ async def start_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
     else:
         proc = _sp.Popen(cmd, stdout=log_fh, stderr=_sp.STDOUT,
                          start_new_session=True, close_fds=True)
+    log_fh.close()  # Parent doesn't need the handle — child inherited it
 
     await db.update_mcp_instance(mcp_id, pid=proc.pid, status="running")
     return {"ok": True, "pid": proc.pid, "port": inst["port"]}
@@ -2319,6 +2320,7 @@ async def toggle_mcp_tunnel(mcp_id: int, request: Request, _: bool = Depends(ver
         proc = _sp.Popen([cf_path, "tunnel", "--url", f"http://localhost:{port}"],
                          stdout=_sp.DEVNULL, stderr=log_fh,
                          start_new_session=True, close_fds=True)
+    log_fh.close()  # Child inherited the fd — parent can release
 
     # Poll log for URL
     import time as _time, re as _re

@@ -326,11 +326,8 @@ async def lifespan(app: FastAPI):
         await close_gumloop()
     except Exception:
         pass
-    try:
-        from .tunnel_manager import stop_all_tunnels
-        stop_all_tunnels()
-    except Exception:
-        pass
+    # NOTE: Do NOT stop tunnels or MCP servers here.
+    # They run as independent daemons and should survive proxy restarts.
     try:
         await db.close_db()
     except Exception:
