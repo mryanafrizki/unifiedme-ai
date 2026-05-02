@@ -227,6 +227,110 @@ async def chat_completions(request: Request, _: bool = Depends(verify_admin)):
     )
 
 
+# ─── Agent Mode (MCP Tool Execution) ────────────────────────────────────────
+
+
+@router.post("/agent-completions")
+async def agent_completions(request: Request, _: bool = Depends(verify_admin)):
+    """Agent mode: LLM + MCP tool execution loop with streaming.
+
+    Body: {session_id, model, messages, mcp_server_url}
+    Connects to MCP server, fetches tools, runs agent loop.
+    Streams SSE events (content, thinking, tool calls, tool results).
+    """
+    body = await request.json()
+    session_id = body.get("session_id")
+    model = str(body.get("model", "claude-sonnet-4")).strip()
+    messages = body.get("messages", [])
+    mcp_server_url = str(body.get("mcp_server_url", "")).strip()
+
+    if not messages:
+        return JSONResponse({"error": "messages required"}, status_code=400)
+    if not mcp_server_url:
+        return JSONResponse({"error": "mcp_server_url required"}, status_code=400)
+
+    # Get API key from DB
+    keys = await db.get_api_keys()
+    if not keys:
+        return JSONResponse({"error": "No API keys available"}, status_code=500)
+    _, api_key = await db.create_api_key("_chat_temp")
+
+    # Save user message to DB
+    if session_id:
+        last_msg = messages[-1] if messages else {}
+        if last_msg.get("role") == "user":
+            await db.add_chat_message(session_id, "user", last_msg["content"])
+            session = await db.get_chat_session(session_id)
+            if session and session.get("title") == "New Chat":
+                title = last_msg["content"][:50].strip()
+                if title:
+                    await db.update_chat_session(session_id, title=title)
+
+    from .agent_loop import run_agent_loop
+
+    async def stream_agent():
+        full_content = ""
+        try:
+            async for sse_event in run_agent_loop(api_key, model, messages, mcp_server_url):
+                yield sse_event
+                # Parse to collect full content for DB save
+                if sse_event.startswith("data: ") and sse_event.strip() != "data: [DONE]":
+                    try:
+                        chunk = json.loads(sse_event[6:].strip())
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        if delta.get("content"):
+                            full_content += delta["content"]
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        pass
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield "data: [DONE]\n\n"
+
+        # Save full response to DB
+        if session_id and full_content:
+            await db.add_chat_message(session_id, "assistant", full_content, model)
+
+        # Cleanup temp key
+        try:
+            all_keys = await db.get_api_keys()
+            for k in all_keys:
+                if k.get("name") == "_chat_temp":
+                    await db.revoke_api_key(k["id"])
+        except Exception:
+            pass
+
+    return StreamingResponse(
+        stream_agent(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+
+
+# ─── MCP Server Ping ────────────────────────────────────────────────────────
+
+
+@router.post("/mcp-ping")
+async def mcp_ping(request: Request, _: bool = Depends(verify_admin)):
+    """Test MCP server connectivity. Body: {mcp_server_url}."""
+    body = await request.json()
+    mcp_url = str(body.get("mcp_server_url", "")).strip()
+    if not mcp_url:
+        return JSONResponse({"error": "mcp_server_url required"}, status_code=400)
+
+    from .mcp_client import MCPClient
+
+    client = MCPClient(mcp_url, timeout=10.0)
+    try:
+        await client.connect()
+        tools = await client.list_tools()
+        tool_names = [t.get("name", "?") for t in tools]
+        return {"ok": True, "tools": len(tools), "tool_names": tool_names}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=502)
+    finally:
+        await client.disconnect()
+
+
 # ─── Models List (for chat UI) ──────────────────────────────────────────────
 
 

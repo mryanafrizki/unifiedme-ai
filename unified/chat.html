@@ -41,7 +41,8 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 .main{flex:1;display:flex;flex-direction:column;overflow:hidden}
 .topbar{display:flex;align-items:center;gap:.75rem;padding:.6rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
 .topbar select{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:.4rem .6rem;border-radius:var(--radius-sm);font-size:.82rem;font-family:'Inter',sans-serif}
-.topbar .links{margin-left:auto;display:flex;gap:.5rem}
+.topbar{flex-wrap:wrap}
+.topbar .links{display:flex;gap:.5rem}
 .topbar .links a{color:var(--text-dim);text-decoration:none;font-size:.78rem;padding:.3rem .6rem;border-radius:var(--radius-sm);border:1px solid var(--border)}
 .topbar .links a:hover{color:var(--text);border-color:var(--border-hover)}
 
@@ -153,10 +154,20 @@ details[open] .thinking-header::before{transform:rotate(90deg)}
 <!-- Main -->
 <div class="main" id="main-area" style="display:none">
   <div class="topbar">
+    <select id="mode-select" onchange="changeMode(this.value)" style="background:var(--surface3);font-weight:500">
+      <option value="chat">Chat</option>
+      <option value="agent">Agent</option>
+    </select>
     <select id="model-select" onchange="changeModel(this.value)"></select>
     <span style="color:var(--text-muted);font-size:.78rem">or</span>
     <input type="text" id="custom-model" placeholder="Custom model..." onchange="changeModel(this.value)" onkeydown="if(event.key==='Enter'){changeModel(this.value);this.blur()}" style="width:180px;padding:.35rem .6rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.82rem;font-family:'JetBrains Mono',monospace">
-    <span id="stream-status" style="font-size:.75rem;color:var(--text-muted)"></span>
+    <div id="mcp-controls" style="display:none;align-items:center;gap:.4rem">
+      <span style="color:var(--text-muted);font-size:.78rem">MCP:</span>
+      <input type="text" id="mcp-url" placeholder="http://localhost:9876" onchange="saveMcpUrl(this.value)" onkeydown="if(event.key==='Enter'){saveMcpUrl(this.value);pingMcp();this.blur()}" style="width:220px;padding:.3rem .5rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);color:var(--text);font-size:.78rem;font-family:'JetBrains Mono',monospace">
+      <button class="btn" onclick="pingMcp()" id="mcp-ping-btn" style="font-size:.72rem;padding:.25rem .5rem">Test</button>
+      <span id="mcp-status" style="font-size:.72rem;color:var(--text-muted)"></span>
+    </div>
+    <span id="stream-status" style="font-size:.75rem;color:var(--text-muted);margin-left:auto"></span>
   </div>
   <div class="messages" id="messages">
     <div class="empty-state" id="empty-state">
@@ -185,6 +196,9 @@ var pw = '';
 var sessions = [];
 var currentSession = null;
 var currentModel = 'claude-sonnet-4';
+var chatMode = 'chat'; // 'chat' or 'agent'
+var mcpServerUrl = '';
+var mcpToolCount = 0;
 var isStreaming = false;
 var pendingFiles = []; // [{name, type, content}]
 var abortController = null;
@@ -215,8 +229,62 @@ async function api(path, opts) {
 
 // ── Init ──
 async function init() {
+  // Restore saved mode + MCP URL
+  var savedMode = localStorage.getItem('chat_mode') || 'chat';
+  var savedMcpUrl = localStorage.getItem('mcp_server_url') || '';
+  chatMode = savedMode;
+  mcpServerUrl = savedMcpUrl;
+  document.getElementById('mode-select').value = chatMode;
+  if (savedMcpUrl) document.getElementById('mcp-url').value = savedMcpUrl;
+  updateMcpControls();
+
   await loadModels();
   await loadSessions();
+}
+
+// ── Mode ──
+function changeMode(mode) {
+  chatMode = mode;
+  localStorage.setItem('chat_mode', mode);
+  updateMcpControls();
+}
+
+function updateMcpControls() {
+  var el = document.getElementById('mcp-controls');
+  el.style.display = chatMode === 'agent' ? 'flex' : 'none';
+}
+
+function saveMcpUrl(url) {
+  mcpServerUrl = url.trim();
+  localStorage.setItem('mcp_server_url', mcpServerUrl);
+  // Reset status
+  document.getElementById('mcp-status').textContent = '';
+  mcpToolCount = 0;
+}
+
+async function pingMcp() {
+  var url = document.getElementById('mcp-url').value.trim();
+  if (!url) { document.getElementById('mcp-status').innerHTML = '<span style="color:var(--red)">Enter URL</span>'; return; }
+  saveMcpUrl(url);
+  var statusEl = document.getElementById('mcp-status');
+  var btn = document.getElementById('mcp-ping-btn');
+  statusEl.innerHTML = '<span style="color:var(--orange)">Testing...</span>';
+  btn.disabled = true;
+  try {
+    var resp = await api('/api/chat/mcp-ping', { method: 'POST', body: JSON.stringify({ mcp_server_url: url }) });
+    var data = await resp.json();
+    if (data.ok) {
+      mcpToolCount = data.tools || 0;
+      statusEl.innerHTML = '<span style="color:var(--green)">\u2713 ' + mcpToolCount + ' tools</span>';
+    } else {
+      statusEl.innerHTML = '<span style="color:var(--red)">\u2717 ' + (data.error || 'Failed') + '</span>';
+      mcpToolCount = 0;
+    }
+  } catch(e) {
+    statusEl.innerHTML = '<span style="color:var(--red)">\u2717 ' + e.message + '</span>';
+    mcpToolCount = 0;
+  }
+  btn.disabled = false;
 }
 
 async function loadModels() {
@@ -431,7 +499,8 @@ async function sendMessage() {
   // Stream response
   isStreaming = true;
   document.getElementById('send-btn').disabled = true;
-  document.getElementById('stream-status').innerHTML = '<span class="streaming-dot"></span> Generating...';
+  var statusLabel = chatMode === 'agent' ? 'Agent running...' : 'Generating...';
+  document.getElementById('stream-status').innerHTML = '<span class="streaming-dot"></span> ' + statusLabel;
 
   // Add assistant bubble placeholder
   msgsEl.innerHTML += '<div class="msg msg-assistant" id="streaming-msg"><div class="msg-bubble" id="streaming-content"><span class="streaming-dot"></span></div></div>';
@@ -442,10 +511,20 @@ async function sendMessage() {
 
   try {
     abortController = new AbortController();
-    var resp = await fetch('/api/chat/completions', {
+    var endpoint = '/api/chat/completions';
+    var reqBody = { session_id: currentSession.id, model: currentModel, messages: allMsgs, stream: true };
+    if (chatMode === 'agent') {
+      endpoint = '/api/chat/agent-completions';
+      reqBody.mcp_server_url = mcpServerUrl;
+      if (!mcpServerUrl) {
+        fullResponse = '**Error:** MCP server URL not set. Enter a URL in the MCP field and click Test.';
+        throw { name: 'HttpError', message: 'MCP URL not set' };
+      }
+    }
+    var resp = await fetch(endpoint, {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify({ session_id: currentSession.id, model: currentModel, messages: allMsgs, stream: true }),
+      body: JSON.stringify(reqBody),
       signal: abortController.signal,
     });
 
