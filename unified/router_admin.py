@@ -1976,14 +1976,16 @@ async def list_mcp_instances(_: bool = Depends(verify_admin)):
 
 @router.post("/mcp/instances")
 async def add_mcp_instance(request: Request, _: bool = Depends(verify_admin)):
-    """Add a new MCP server instance. Body: {workspace_path, port?}."""
+    """Add a new MCP server instance. Body: {workspace_path, port?}.
+
+    If port=0 or not provided, auto-assigns next available port starting from 9876.
+    """
     body = await request.json()
     workspace_path = str(body.get("workspace_path", "")).strip()
-    port = int(body.get("port", 9876))
+    port = int(body.get("port", 0))
     if not workspace_path:
         return JSONResponse({"error": "workspace_path is required"}, status_code=400)
 
-    from pathlib import Path as _Path
     p = _Path(workspace_path).expanduser().resolve()
     if not p.exists():
         return JSONResponse({"error": f"Path does not exist: {workspace_path}"}, status_code=400)
@@ -1994,6 +1996,14 @@ async def add_mcp_instance(request: Request, _: bool = Depends(verify_admin)):
     existing = await db.get_mcp_instance_by_path(str(p))
     if existing:
         return JSONResponse({"error": f"MCP server already exists for this path (ID {existing['id']})"}, status_code=409)
+
+    # Auto-assign port if 0
+    if port <= 0:
+        instances = await db.get_mcp_instances()
+        used_ports = {inst["port"] for inst in instances}
+        port = 9876
+        while port in used_ports:
+            port += 1
 
     mcp_id = await db.add_mcp_instance(str(p), port)
     return {"ok": True, "id": mcp_id, "workspace_path": str(p), "port": port}

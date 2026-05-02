@@ -486,14 +486,35 @@ function renderMcpBar() {
 }
 
 async function mcpBarAdd() {
-  var port = prompt('MCP server port:', '9876');
-  if (!port) return;
+  var statusEl = document.getElementById('mcp-bar-status');
+  var addBtn = document.getElementById('mcp-bar-add');
+  addBtn.disabled = true; addBtn.textContent = 'Setting up...';
+  statusEl.textContent = 'configuring...'; statusEl.className = 'badge badge-running';
+
   try {
-    var resp = await fetch('/api/mcp/instances', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ workspace_path: currentPath, port: parseInt(port) }) });
+    // 1. Add instance (backend auto-assigns port starting from 9876)
+    var resp = await fetch('/api/mcp/instances', { method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ workspace_path: currentPath, port: 0 }) });
     var data = await resp.json();
-    if (data.ok) { checkMcpForPath(currentPath); }
-    else { alert('Error: ' + (data.error || '')); }
+    if (!data.ok) { alert('Error: ' + (data.error || '')); addBtn.disabled = false; addBtn.textContent = '+ Enable MCP'; return; }
+    var mcpId = data.id;
+
+    // 2. Auto-start
+    statusEl.textContent = 'starting...';
+    await fetch('/api/mcp/instances/' + mcpId + '/start', { method: 'POST', headers: getHeaders() });
+
+    // 3. Auto-start tunnel
+    statusEl.textContent = 'starting tunnel...';
+    var tResp = await fetch('/api/mcp/instances/' + mcpId + '/tunnel', { method: 'POST', headers: getHeaders(),
+      body: JSON.stringify({ action: 'start' }) });
+    var tData = await tResp.json();
+    if (tData.url) {
+      navigator.clipboard.writeText(tData.url + '/mcp').catch(function(){});
+    }
+
+    checkMcpForPath(currentPath);
   } catch(e) { alert('Error: ' + e.message); }
+  addBtn.disabled = false; addBtn.textContent = '+ Enable MCP';
 }
 
 async function mcpBarRemove() {

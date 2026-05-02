@@ -17,6 +17,7 @@ Usage:
     unifiedme mcp start [id]       Start MCP server(s)
     unifiedme mcp stop [id]        Stop MCP server(s)
     unifiedme mcp status           Show all MCP instances
+    unifiedme mcp list             List MCP servers on Gumloop accounts
     unifiedme mcp bind <url>       Bind MCP URL to GL accounts
     unifiedme tunnel status        Show tunnel status
     unifiedme tunnel start         Start cloudflared tunnel (proxy or mcp)
