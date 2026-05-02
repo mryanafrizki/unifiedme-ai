@@ -492,16 +492,25 @@ async def mcp_delete_endpoint(account_id: int, request: Request, _: bool = Depen
     deleted_secrets = 0
     errors = []
 
+    # Normalize URLs for matching — strip trailing /mcp, /, etc.
+    def _norm(u):
+        u = u.rstrip("/")
+        if u.endswith("/mcp"):
+            u = u[:-4]
+        return u.rstrip("/")
+
+    delete_normalized = {_norm(u) for u in delete_urls}
+
     async with httpx.AsyncClient(**client_kwargs) as client:
         # Get registered MCP secrets
         resp = await client.get("https://api.gumloop.com//secrets/mcp_servers", headers=headers)
         secrets = resp.json() if resp.status_code == 200 else []
 
-        # Delete matching secrets
+        # Delete matching secrets (flexible URL matching)
         for s in secrets:
             url = s.get("url", "")
             secret_id = s.get("secret_id", "")
-            if url in delete_urls and secret_id:
+            if _norm(url) in delete_normalized and secret_id:
                 del_resp = await client.delete(
                     f"https://api.gumloop.com//secrets/mcp_servers/{secret_id}",
                     headers=headers,
@@ -517,7 +526,7 @@ async def mcp_delete_endpoint(account_id: int, request: Request, _: bool = Depen
             if resp2.status_code == 200:
                 current_tools = resp2.json().get("gummie", {}).get("tools", [])
                 new_tools = [t for t in current_tools
-                             if not (t.get("type") == "mcp_server" and t.get("mcp_server_url", "") in delete_urls)]
+                             if not (t.get("type") == "mcp_server" and _norm(t.get("mcp_server_url", "")) in delete_normalized)]
                 if len(new_tools) != len(current_tools):
                     await client.patch(
                         f"https://api.gumloop.com/gummies/{gummie_id}",
@@ -546,6 +555,14 @@ async def mcp_delete_bulk_endpoint(request: Request, _: bool = Depends(verify_ad
     if not delete_urls:
         return JSONResponse({"error": "urls list is required"}, status_code=400)
 
+    def _norm(u):
+        u = u.rstrip("/")
+        if u.endswith("/mcp"):
+            u = u[:-4]
+        return u.rstrip("/")
+
+    delete_normalized = {_norm(u) for u in delete_urls}
+
     all_accts = await db.get_accounts()
     gl_accounts = [a for a in all_accts
                    if a.get("gl_status") == "ok" and a.get("gl_refresh_token")]
@@ -553,20 +570,8 @@ async def mcp_delete_bulk_endpoint(request: Request, _: bool = Depends(verify_ad
     if not gl_accounts:
         return {"ok": True, "total": 0, "message": "No GL accounts found"}
 
-    results = []
-    for acct in gl_accounts:
-        try:
-            # Reuse the single-account endpoint logic inline
-            from starlette.testclient import TestClient
-            # Simpler: just call the function directly
-            from unittest.mock import AsyncMock
-            # Actually, let's just duplicate the core logic for bulk
-            pass
-        except Exception:
-            pass
-
-    # Simpler approach: iterate and call per-account
     import httpx as _httpx
+    results = []
     total_deleted = 0
     for acct in gl_accounts:
         refresh_tok = acct.get("gl_refresh_token", "")
@@ -604,7 +609,7 @@ async def mcp_delete_bulk_endpoint(request: Request, _: bool = Depends(verify_ad
             for s in secrets:
                 url = s.get("url", "")
                 secret_id = s.get("secret_id", "")
-                if url in delete_urls and secret_id:
+                if _norm(url) in delete_normalized and secret_id:
                     dr = await client.delete(f"https://api.gumloop.com//secrets/mcp_servers/{secret_id}", headers=hdrs)
                     if dr.status_code in (200, 204):
                         acct_deleted += 1
@@ -614,7 +619,7 @@ async def mcp_delete_bulk_endpoint(request: Request, _: bool = Depends(verify_ad
                 resp2 = await client.get(f"https://api.gumloop.com/gummies/{gummie_id}", headers=hdrs)
                 if resp2.status_code == 200:
                     tools = resp2.json().get("gummie", {}).get("tools", [])
-                    new_tools = [t for t in tools if not (t.get("type") == "mcp_server" and t.get("mcp_server_url", "") in delete_urls)]
+                    new_tools = [t for t in tools if not (t.get("type") == "mcp_server" and _norm(t.get("mcp_server_url", "")) in delete_normalized)]
                     if len(new_tools) != len(tools):
                         await client.patch(f"https://api.gumloop.com/gummies/{gummie_id}", json={"tools": new_tools}, headers=hdrs)
 

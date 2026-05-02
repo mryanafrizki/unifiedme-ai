@@ -811,6 +811,7 @@ a:hover{text-decoration:underline}
       <div class="acct-col" id="acct-col-gl">
         <div class="acct-col-header" style="display:flex;align-items:center;justify-content:space-between">
           <h4>&#x1f30a; GUMLOOP <span class="acct-count" id="acct-count-gl">0</span></h4>
+          <button class="btn btn-sm" onclick="showMcpListModal()" style="font-size:11px;padding:2px 8px">MCP List</button>
           <button class="btn btn-sm" onclick="showBindMcpModal()" style="font-size:11px;padding:2px 8px">Bind MCP</button>
           <button class="btn btn-sm btn-danger" onclick="showDeleteMcpModal()" style="font-size:11px;padding:2px 8px">Delete MCP</button>
         </div>
@@ -989,7 +990,16 @@ a:hover{text-decoration:underline}
     </div>
   </div>
 
-  <!-- Active MCP Instances Panel (shown in Tunnel & MCP tab or accounts) -->
+  <!-- MODAL: MCP List (per account) -->
+  <div id="mcp-list-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:none;align-items:center;justify-content:center">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:18px 22px;width:600px;max-width:90vw;max-height:80vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,.5)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin:0;font-size:15px">MCP Servers — All GL Accounts</h3>
+        <button onclick="closeMcpListModal()" style="background:none;border:none;color:var(--text-muted);font-size:18px;cursor:pointer">&times;</button>
+      </div>
+      <div id="mcp-list-content" style="font-size:12px;font-family:monospace">Loading...</div>
+    </div>
+  </div>
 
   <!-- ═══════════════════════════════════════════ -->
   <!-- TAB: Batch Login                            -->
@@ -5153,6 +5163,49 @@ async function mcpInstanceAction(id, action) {
   } catch(e) { toast('Error: ' + e.message, 'error'); }
 }
 
+// ── MCP List Modal ──
+
+function showMcpListModal() {
+  document.getElementById('mcp-list-modal').style.display = 'flex';
+  loadMcpListModal();
+}
+
+function closeMcpListModal() {
+  document.getElementById('mcp-list-modal').style.display = 'none';
+}
+
+async function loadMcpListModal() {
+  var el = document.getElementById('mcp-list-content');
+  el.innerHTML = 'Loading MCP servers for all accounts...';
+
+  // Get GL accounts from current state
+  var glAccounts = (state.accounts || []).filter(function(a) { return a.gl_status === 'ok' && a.gl_gummie_id; });
+  if (!glAccounts.length) { el.innerHTML = '<div style="color:var(--text-muted)">No active GL accounts.</div>'; return; }
+
+  var html = '';
+  for (var i = 0; i < glAccounts.length; i++) {
+    var acct = glAccounts[i];
+    html += '<div style="margin-bottom:12px"><strong style="color:var(--text)">' + acct.email + '</strong>';
+    try {
+      var data = await apiFetch('/api/accounts/' + acct.id + '/mcp-list');
+      var servers = data.mcp_servers || [];
+      if (!servers.length) {
+        html += '<div style="color:var(--text-muted);margin-left:12px">(no MCP servers)</div>';
+      } else {
+        servers.forEach(function(s) {
+          var dot = s.active ? '<span style="color:var(--green)">ON</span>' : '<span style="color:var(--text-muted)">OFF</span>';
+          html += '<div style="margin-left:12px">[' + dot + '] ' + (s.name || '?') + ' — <span style="color:var(--accent)">' + (s.url || '') + '</span></div>';
+        });
+      }
+    } catch(e) {
+      html += '<div style="color:var(--red);margin-left:12px">Error: ' + e.message + '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html + '<div style="color:var(--text-muted)">Loading ' + (i+1) + '/' + glAccounts.length + '...</div>';
+  }
+  el.innerHTML = html;
+}
+
 // ── Add MCP from Dashboard ──
 
 async function addMcpFromDashboard() {
@@ -5331,6 +5384,8 @@ window.addMcpFromDashboard = addMcpFromDashboard;
 window.loadMcpInstances = loadMcpInstances;
 window.mcpInstanceAction = mcpInstanceAction;
 window.showDeleteMcpModal = showDeleteMcpModal;
+window.showMcpListModal = showMcpListModal;
+window.closeMcpListModal = closeMcpListModal;
 window.closeDeleteMcpModal = closeDeleteMcpModal;
 window.startDeleteMcp = startDeleteMcp;
 </script>
