@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>File Explorer — UnifiedMe</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#1a1d27;--surface2:#222636;--surface3:#2a2f3f;
+  --border:#2e3348;--border-hover:#3d4460;
+  --text:#e4e6f0;--text-dim:#8b90a8;--text-muted:#5c6180;
+  --accent:#6c8aff;--accent-dim:#4a65d4;
+  --green:#34d399;--red:#f87171;--orange:#fbbf24;
+  --radius:8px;--radius-sm:6px;
+}
+html{font-size:14px}
+body{font-family:'Outfit',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:flex;flex-direction:column}
+code,.mono{font-family:'JetBrains Mono',monospace}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+/* Auth */
+#auth-screen{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:9999}
+.auth-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:2rem;width:360px;text-align:center}
+.auth-box h2{margin-bottom:1rem;font-size:1.3rem}
+.auth-box input{width:100%;padding:.7rem 1rem;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:.9rem;outline:none;margin-bottom:.75rem}
+.auth-box input:focus{border-color:var(--accent)}
+.auth-box button{width:100%;padding:.7rem;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);font-size:.9rem;font-weight:500;cursor:pointer}
+.auth-box button:hover{background:var(--accent-dim)}
+.auth-error{color:var(--red);font-size:.82rem;margin-top:.5rem;display:none}
+
+/* Layout */
+#app{display:none;flex:1;display:flex;flex-direction:column}
+.topbar{display:flex;align-items:center;gap:1rem;padding:.6rem 1.25rem;background:var(--surface);border-bottom:1px solid var(--border)}
+.topbar .brand{font-weight:700;font-size:1.1rem;letter-spacing:-.02em}
+.topbar .brand span{color:var(--accent)}
+.breadcrumb{display:flex;align-items:center;gap:.25rem;flex:1;overflow-x:auto;padding:0 .5rem}
+.breadcrumb a{color:var(--accent);text-decoration:none;font-size:.85rem;white-space:nowrap}
+.breadcrumb a:hover{text-decoration:underline}
+.breadcrumb .sep{color:var(--text-muted);font-size:.75rem}
+
+.main{display:flex;flex:1;overflow:hidden}
+.file-list{flex:1;overflow-y:auto;padding:1rem}
+.preview-panel{width:50%;border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden}
+.preview-panel.open{display:flex}
+.preview-header{display:flex;align-items:center;justify-content:space-between;padding:.6rem 1rem;background:var(--surface);border-bottom:1px solid var(--border)}
+.preview-header .name{font-weight:500;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.preview-body{flex:1;overflow:auto;padding:1rem}
+
+/* File list */
+.file-entry{display:flex;align-items:center;gap:.75rem;padding:.55rem .85rem;border-radius:var(--radius-sm);cursor:pointer;transition:background .15s}
+.file-entry:hover{background:var(--surface2)}
+.file-entry.selected{background:var(--surface3);border:1px solid var(--border)}
+.file-icon{width:20px;text-align:center;font-size:1rem;flex-shrink:0}
+.file-name{flex:1;font-size:.88rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.file-meta{font-size:.75rem;color:var(--text-muted);white-space:nowrap}
+.dir-icon{color:var(--accent)}
+.file-icon-img{color:var(--green)}
+.file-icon-code{color:var(--orange)}
+
+/* Preview */
+.preview-code{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:.75rem;font-family:'JetBrains Mono',monospace;font-size:.78rem;line-height:1.6;white-space:pre-wrap;word-break:break-word;overflow:auto;max-height:100%}
+.preview-image{max-width:100%;max-height:80vh;border-radius:var(--radius)}
+.preview-info{color:var(--text-dim);font-size:.85rem}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:.3rem;padding:.4rem .75rem;border-radius:var(--radius-sm);font-size:.8rem;font-weight:500;cursor:pointer;border:1px solid var(--border);background:var(--surface2);color:var(--text);font-family:'Outfit',sans-serif;transition:all .15s;white-space:nowrap}
+.btn:hover{border-color:var(--border-hover);background:var(--surface3)}
+.btn-accent{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-accent:hover{background:var(--accent-dim)}
+
+.empty-state{text-align:center;padding:3rem;color:var(--text-muted)}
+</style>
+</head>
+<body>
+
+<!-- Auth Screen -->
+<div id="auth-screen">
+  <div class="auth-box">
+    <h2>File Explorer</h2>
+    <input type="password" id="auth-pw" placeholder="Admin password" autofocus>
+    <button id="auth-btn" onclick="doLogin()">Login</button>
+    <div class="auth-error" id="auth-err"></div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <div class="topbar">
+    <div class="brand"><span>Explorer</span></div>
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <a href="/dashboard" class="btn" style="font-size:.75rem">Dashboard</a>
+  </div>
+  <div class="main">
+    <div class="file-list" id="file-list"></div>
+    <div class="preview-panel" id="preview-panel">
+      <div class="preview-header">
+        <span class="name" id="preview-name">—</span>
+        <div style="display:flex;gap:.4rem">
+          <button class="btn" id="btn-download" onclick="downloadCurrent()">Download</button>
+          <button class="btn" onclick="closePreview()">Close</button>
+        </div>
+      </div>
+      <div class="preview-body" id="preview-body"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+var adminPassword = '';
+var currentPath = '~';
+var currentFile = '';
+
+function getHeaders() {
+  return { 'Authorization': 'Bearer ' + adminPassword, 'Content-Type': 'application/json' };
+}
+
+async function doLogin() {
+  var pw = document.getElementById('auth-pw').value.trim();
+  if (!pw) return;
+  // Test auth by calling list
+  try {
+    var resp = await fetch('/api/explorer/list?path=~', { headers: { 'Authorization': 'Bearer ' + pw } });
+    if (resp.ok) {
+      adminPassword = pw;
+      localStorage.setItem('explorer_pw', pw);
+      document.getElementById('auth-screen').style.display = 'none';
+      document.getElementById('app').style.display = 'flex';
+      loadDir('~');
+    } else {
+      document.getElementById('auth-err').textContent = 'Invalid password';
+      document.getElementById('auth-err').style.display = 'block';
+    }
+  } catch(e) {
+    document.getElementById('auth-err').textContent = 'Connection error';
+    document.getElementById('auth-err').style.display = 'block';
+  }
+}
+
+// Auto-login from saved password
+(function() {
+  var saved = localStorage.getItem('explorer_pw') || localStorage.getItem('admin_pw');
+  if (saved) {
+    adminPassword = saved;
+    fetch('/api/explorer/list?path=~', { headers: { 'Authorization': 'Bearer ' + saved } })
+      .then(function(r) {
+        if (r.ok) {
+          document.getElementById('auth-screen').style.display = 'none';
+          document.getElementById('app').style.display = 'flex';
+          loadDir('~');
+        }
+      }).catch(function(){});
+  }
+  document.getElementById('auth-pw').addEventListener('keydown', function(e) { if (e.key === 'Enter') doLogin(); });
+})();
+
+async function loadDir(path) {
+  currentPath = path;
+  currentFile = '';
+  closePreview();
+  try {
+    var resp = await fetch('/api/explorer/list?path=' + encodeURIComponent(path), { headers: getHeaders() });
+    if (!resp.ok) { document.getElementById('file-list').innerHTML = '<div class="empty-state">Error loading directory</div>'; return; }
+    var data = await resp.json();
+    renderBreadcrumb(data.path);
+    renderFileList(data.entries, data.path);
+  } catch(e) {
+    document.getElementById('file-list').innerHTML = '<div class="empty-state">Error: ' + e.message + '</div>';
+  }
+}
+
+function renderBreadcrumb(fullPath) {
+  var parts = fullPath.replace(/\\/g, '/').split('/').filter(Boolean);
+  var bc = document.getElementById('breadcrumb');
+  var html = '<a href="#" onclick="loadDir(\'/\');return false">/</a>';
+  var accumulated = '';
+  parts.forEach(function(part, i) {
+    accumulated += '/' + part;
+    html += '<span class="sep">/</span>';
+    html += '<a href="#" onclick="loadDir(\'' + accumulated.replace(/'/g, "\\'") + '\');return false">' + part + '</a>';
+  });
+  bc.innerHTML = html;
+}
+
+function renderFileList(entries, basePath) {
+  var el = document.getElementById('file-list');
+  if (!entries.length) { el.innerHTML = '<div class="empty-state">Empty directory</div>'; return; }
+  var html = '';
+  entries.forEach(function(e) {
+    var fullPath = basePath + '/' + e.name;
+    var icon = getIcon(e);
+    if (e.type === 'dir') {
+      html += '<div class="file-entry" ondblclick="loadDir(\'' + fullPath.replace(/'/g, "\\'") + '\')" onclick="this.classList.toggle(\'selected\')">';
+    } else {
+      html += '<div class="file-entry" onclick="previewFile(\'' + fullPath.replace(/'/g, "\\'") + '\')">';
+    }
+    html += '<span class="file-icon ' + icon.cls + '">' + icon.icon + '</span>';
+    html += '<span class="file-name">' + e.name + '</span>';
+    html += '<span class="file-meta">' + (e.size_human || '') + '</span>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function getIcon(entry) {
+  if (entry.type === 'dir') return { icon: '\ud83d\udcc1', cls: 'dir-icon' };
+  var ext = entry.extension;
+  var imgExts = ['.png','.jpg','.jpeg','.gif','.webp','.svg','.bmp','.ico'];
+  var codeExts = ['.py','.js','.ts','.jsx','.tsx','.html','.css','.json','.yaml','.yml','.sh','.go','.rs','.java','.c','.cpp','.rb','.php'];
+  if (imgExts.indexOf(ext) >= 0) return { icon: '\ud83d\uddbc\ufe0f', cls: 'file-icon-img' };
+  if (codeExts.indexOf(ext) >= 0) return { icon: '\ud83d\udcdd', cls: 'file-icon-code' };
+  return { icon: '\ud83d\udcc4', cls: '' };
+}
+
+async function previewFile(path) {
+  currentFile = path;
+  document.getElementById('preview-panel').classList.add('open');
+  document.getElementById('preview-name').textContent = path.split('/').pop();
+  document.getElementById('preview-body').innerHTML = '<div class="preview-info">Loading...</div>';
+
+  try {
+    var resp = await fetch('/api/explorer/read?path=' + encodeURIComponent(path), { headers: getHeaders() });
+    var data = await resp.json();
+
+    if (data.error) {
+      document.getElementById('preview-body').innerHTML = '<div class="preview-info" style="color:var(--red)">' + data.error + '</div>';
+      return;
+    }
+
+    if (data.too_large) {
+      document.getElementById('preview-body').innerHTML = '<div class="preview-info">' + data.message + '<br><br>Size: ' + data.size_human + '</div>';
+      return;
+    }
+
+    if (data.type === 'image') {
+      document.getElementById('preview-body').innerHTML = '<img class="preview-image" src="/api/explorer/raw?path=' + encodeURIComponent(path) + '&' + getAuthParam() + '">';
+      return;
+    }
+
+    if (data.type === 'binary') {
+      document.getElementById('preview-body').innerHTML = '<div class="preview-info">' + data.message + '<br>Type: ' + data.mime + '<br>Size: ' + data.size_human + '</div>';
+      return;
+    }
+
+    // Text/code preview
+    var escaped = data.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    document.getElementById('preview-body').innerHTML = '<pre class="preview-code">' + escaped + '</pre>';
+
+  } catch(e) {
+    document.getElementById('preview-body').innerHTML = '<div class="preview-info" style="color:var(--red)">Error: ' + e.message + '</div>';
+  }
+}
+
+function closePreview() {
+  document.getElementById('preview-panel').classList.remove('open');
+  currentFile = '';
+}
+
+function downloadCurrent() {
+  if (!currentFile) return;
+  var url = '/api/explorer/download?path=' + encodeURIComponent(currentFile);
+  // Auth via query param workaround for direct download
+  window.open(url + '&' + getAuthParam(), '_blank');
+}
+
+function getAuthParam() {
+  return 'password=' + encodeURIComponent(adminPassword);
+}
+</script>
+</body>
+</html>

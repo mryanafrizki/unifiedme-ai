@@ -21,6 +21,7 @@ from .router_proxy import router as proxy_router
 from .router_admin import router as admin_router
 from .router_vps import router as vps_router
 from .router_terminal import router as terminal_router
+from .router_explorer import router as explorer_router
 from .proxy_kiro import close_all_clients as close_kiro
 from .proxy_codebuddy import close_all_clients as close_codebuddy
 from .proxy_wavespeed import close_all_clients as close_wavespeed
@@ -364,13 +365,15 @@ app.include_router(proxy_router)
 app.include_router(admin_router)
 app.include_router(vps_router)
 app.include_router(terminal_router)
+app.include_router(explorer_router)
 
 
 # ---------------------------------------------------------------------------
-# Dashboard
+# Dashboard + Explorer
 # ---------------------------------------------------------------------------
 
 DASHBOARD_PATH = BASE_DIR / "dashboard.html"
+EXPLORER_PATH = BASE_DIR / "explorer.html"
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -385,6 +388,17 @@ async def serve_dashboard():
     )
 
 
+@app.get("/explorer", response_class=HTMLResponse)
+async def serve_explorer():
+    """Serve the file explorer UI."""
+    if EXPLORER_PATH.exists():
+        return FileResponse(EXPLORER_PATH, media_type="text/html")
+    return HTMLResponse(
+        "<html><body><h1>Explorer not found</h1></body></html>",
+        status_code=200,
+    )
+
+
 @app.get("/")
 async def root():
     """Health check / info endpoint."""
@@ -395,6 +409,7 @@ async def root():
             "proxy": "/v1/chat/completions, /v1/messages, /v1/models",
             "admin": "/api/accounts, /api/keys, /api/stats, /api/batch/*",
             "dashboard": "/dashboard",
+            "explorer": "/explorer",
             "docs": "/docs",
         },
     }
