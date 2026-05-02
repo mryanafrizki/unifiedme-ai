@@ -2232,6 +2232,14 @@ async def start_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
     if not inst:
         return JSONResponse({"error": "Not found"}, status_code=404)
 
+    # Validate workspace path exists on THIS machine
+    ws = _Path(inst["workspace_path"])
+    if not ws.exists():
+        return JSONResponse({
+            "error": f"Workspace path does not exist on this machine: {inst['workspace_path']}. "
+                     f"Remove this instance and add a new one with a valid path."
+        }, status_code=400)
+
     # Already running?
     if inst.get("pid") and _pid_alive(inst["pid"]):
         return {"ok": True, "pid": inst["pid"], "message": "Already running"}
@@ -2251,12 +2259,23 @@ async def start_mcp_instance(mcp_id: int, _: bool = Depends(verify_admin)):
         "--port", str(inst["port"]),
         "--no-tunnel", "--no-interactive",
     ]
-    # Load API key
+    # Load API key — from file first, then generate from DB if needed
+    api_key = ""
     api_key_file = install_dir / "unified" / "data" / ".mcp_api_key"
     if api_key_file.exists():
-        key = api_key_file.read_text().strip()
-        if key:
-            cmd.extend(["--api-key", key])
+        api_key = api_key_file.read_text().strip()
+    if not api_key:
+        # Try to get first active API key from DB and regenerate a temp one
+        keys = await db.get_api_keys()
+        if keys:
+            # We can't recover the full key from hash, so generate a new one for MCP
+            _, new_key = await db.create_api_key("mcp-auto")
+            api_key = new_key
+            # Save for future MCP starts
+            api_key_file.parent.mkdir(parents=True, exist_ok=True)
+            api_key_file.write_text(api_key)
+    if api_key:
+        cmd.extend(["--api-key", api_key])
 
     log_fh = open(log_file, "a")
     if os.name == "nt":

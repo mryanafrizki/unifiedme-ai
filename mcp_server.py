@@ -691,6 +691,8 @@ async def download_file(
     try:
         if url.startswith("gl://"):
             # Gumloop storage — download via unified proxy (has correct account auth)
+            if not PROXY_API_KEY:
+                return {"error": "gl:// download requires API key. Set it via --api-key or PROXY_API_KEY env var."}
             log.info("[download] gl:// via proxy: %s", url[:80])
             async with httpx.AsyncClient(timeout=60) as client:
                 resp = await client.post(
