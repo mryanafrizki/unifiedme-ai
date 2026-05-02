@@ -202,17 +202,22 @@ def _is_pid_alive(pid: int) -> bool:
         return False
 
 
-def start_tunnel(target: str, port: int | None = None) -> dict:
-    """Start a cloudflared tunnel for the given target.
+def _target_key(target: str, port: int) -> str:
+    """Build state key for a tunnel. Supports multiple tunnels on different ports."""
+    return f"{target}-{port}"
 
-    Cloudflared runs as a fully detached daemon that survives CLI exit.
-    State (PID, URL, port) is persisted to disk.
+
+def start_tunnel(target: str, port: int | None = None) -> dict:
+    """Start a cloudflared tunnel for the given target and port.
+
+    Each port gets its own independent tunnel with its own URL.
+    Multiple tunnels can run simultaneously on different ports.
 
     Args:
-        target: "proxy" or "mcp"
-        port: Override port (default: 1430 for proxy, 9876 for mcp)
+        target: "proxy" or "mcp" (label only, multiple per target allowed)
+        port: Port to tunnel (default: 1430 for proxy, 9876 for mcp)
 
-    Returns: {ok, url, error}
+    Returns: {ok, url, port, pid, error}
     """
     cf_path = check_cloudflared()
     if not cf_path:
@@ -220,29 +225,24 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
 
     default_port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
     actual_port = port or default_port
+    key = _target_key(target, actual_port)
 
-    # Check if already running (from persisted state)
-    existing = _load_tunnel_state(target)
+    # Check if this exact port tunnel is already running
+    existing = _load_tunnel_state(key)
     if existing.get("pid") and _is_pid_alive(existing["pid"]):
-        existing_port = existing.get("port", default_port)
-        if existing_port == actual_port:
-            return {
-                "ok": True,
-                "url": existing.get("url", ""),
-                "port": existing_port,
-                "pid": existing["pid"],
-                "message": "Tunnel already running",
-            }
-        else:
-            # Port changed — stop old tunnel, start new one
-            log.info("Tunnel port changed %d -> %d, restarting", existing_port, actual_port)
-            stop_tunnel(target)
+        return {
+            "ok": True,
+            "url": existing.get("url", ""),
+            "port": existing.get("port", actual_port),
+            "pid": existing["pid"],
+            "message": "Tunnel already running",
+        }
 
     # Start cloudflared as a detached process
     # Key: stderr goes to a LOG FILE, not a pipe.
     # If we use PIPE, the pipe closes when CLI exits → cloudflared gets broken pipe → crashes.
     _TUNNEL_STATE_DIR.mkdir(parents=True, exist_ok=True)
-    log_file_path = _TUNNEL_STATE_DIR / f"{target}.log"
+    log_file_path = _TUNNEL_STATE_DIR / f"{key}.log"
 
     try:
         log_fh = open(log_file_path, "w")
@@ -286,8 +286,8 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
                 "started_at": time.time(),
                 "target": target,
             }
-            _save_tunnel_state(target, state)
-            log.info("Tunnel started for %s: %s (port %d, PID %d)", target, tunnel_url, actual_port, proc.pid)
+            _save_tunnel_state(key, state)
+            log.info("Tunnel started for %s: %s (port %d, PID %d)", key, tunnel_url, actual_port, proc.pid)
             return {"ok": True, "url": tunnel_url, "port": actual_port, "pid": proc.pid}
         else:
             if proc.poll() is not None:
@@ -295,7 +295,7 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
                 return {"ok": False, "error": f"cloudflared exited: {content}"}
 
             # Process running but no URL yet — save PID anyway
-            _save_tunnel_state(target, {
+            _save_tunnel_state(key, {
                 "pid": proc.pid, "url": "", "port": actual_port,
                 "started_at": time.time(), "target": target,
             })
@@ -305,19 +305,31 @@ def start_tunnel(target: str, port: int | None = None) -> dict:
         return {"ok": False, "error": str(e)}
 
 
-def stop_tunnel(target: str) -> dict:
+def stop_tunnel(target: str, port: int | None = None) -> dict:
     """Stop a cloudflared tunnel by killing its PID from persisted state.
 
     Args:
         target: "proxy" or "mcp"
+        port: Specific port to stop. If None, stops the default port for target.
 
     Returns: {ok, message}
     """
-    state = _load_tunnel_state(target)
+    default_port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
+    actual_port = port or default_port
+    key = _target_key(target, actual_port)
+
+    state = _load_tunnel_state(key)
     pid = state.get("pid", 0)
 
+    # Fallback: try legacy key (just target name) for backward compat
+    if not pid:
+        state = _load_tunnel_state(target)
+        pid = state.get("pid", 0)
+        if pid:
+            key = target  # use legacy key for cleanup
+
     if not pid or not _is_pid_alive(pid):
-        _clear_tunnel_state(target)
+        _clear_tunnel_state(key)
         return {"ok": True, "message": "No tunnel running"}
 
     try:
@@ -325,7 +337,6 @@ def stop_tunnel(target: str) -> dict:
             subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
         else:
             os.kill(pid, 15)  # SIGTERM
-            # Wait a bit, then force kill if needed
             for _ in range(10):
                 time.sleep(0.5)
                 if not _is_pid_alive(pid):
@@ -333,71 +344,132 @@ def stop_tunnel(target: str) -> dict:
             else:
                 os.kill(pid, 9)  # SIGKILL
 
-        log.info("Tunnel stopped for %s (PID %d, was: %s)", target, pid, state.get("url", ""))
-        _clear_tunnel_state(target)
-        return {"ok": True, "message": f"Tunnel for {target} stopped (PID {pid})"}
+        log.info("Tunnel stopped for %s (PID %d, was: %s)", key, pid, state.get("url", ""))
+        _clear_tunnel_state(key)
+        return {"ok": True, "message": f"Tunnel stopped (port {actual_port}, PID {pid})"}
 
     except Exception as e:
-        _clear_tunnel_state(target)
+        _clear_tunnel_state(key)
         return {"ok": False, "error": str(e)}
 
 
-def get_tunnel_status(target: str | None = None) -> dict:
-    """Get tunnel status for one or all targets.
-
-    Reads persisted state from disk and verifies PID is still alive.
+def get_tunnel_status(target: str | None = None, port: int | None = None) -> dict:
+    """Get tunnel status for a specific tunnel or all tunnels.
 
     Args:
         target: "proxy", "mcp", or None for all
+        port: Specific port. If None with target, returns default port status.
 
-    Returns: dict with tunnel info
+    Returns: dict with tunnel info, or dict of all tunnels
     """
+    if target and port:
+        key = _target_key(target, port)
+        return _get_single_tunnel_status(key, target, port)
+
     if target:
-        state = _load_tunnel_state(target)
-        pid = state.get("pid", 0)
+        # Check default port for this target
         default_port = LISTEN_PORT if target == "proxy" else MCP_DEFAULT_PORT
+        key = _target_key(target, default_port)
+        result = _get_single_tunnel_status(key, target, default_port)
+        # Also check legacy key
+        if result["status"] == "stopped":
+            legacy = _get_single_tunnel_status(target, target, default_port)
+            if legacy["status"] == "running":
+                return legacy
+        return result
+
+    # All tunnels — scan state directory
+    return _get_all_tunnel_statuses()
+
+
+def _get_single_tunnel_status(key: str, target: str, port: int) -> dict:
+    """Get status for a single tunnel by state key."""
+    state = _load_tunnel_state(key)
+    pid = state.get("pid", 0)
+
+    if pid and _is_pid_alive(pid):
+        uptime = 0
+        started_at = state.get("started_at", 0)
+        if started_at:
+            uptime = int(time.time() - started_at)
+        return {
+            "target": state.get("target", target),
+            "status": "running",
+            "url": state.get("url", ""),
+            "port": state.get("port", port),
+            "pid": pid,
+            "uptime_seconds": uptime,
+            "error": "",
+        }
+    else:
+        if state:
+            _clear_tunnel_state(key)
+        return {
+            "target": target,
+            "status": "stopped",
+            "url": "",
+            "port": port,
+            "pid": 0,
+            "uptime_seconds": 0,
+            "error": "",
+        }
+
+
+def _get_all_tunnel_statuses() -> dict:
+    """Scan state directory and return all tunnel statuses."""
+    result = {}
+    _TUNNEL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+    for f in _TUNNEL_STATE_DIR.glob("*.json"):
+        key = f.stem
+        try:
+            state = json.loads(f.read_text())
+        except Exception:
+            continue
+        pid = state.get("pid", 0)
+        port = state.get("port", 0)
+        target = state.get("target", key)
 
         if pid and _is_pid_alive(pid):
             uptime = 0
             started_at = state.get("started_at", 0)
             if started_at:
                 uptime = int(time.time() - started_at)
-            return {
+            result[key] = {
                 "target": target,
                 "status": "running",
                 "url": state.get("url", ""),
-                "port": state.get("port", default_port),
+                "port": port,
                 "pid": pid,
                 "uptime_seconds": uptime,
                 "error": "",
             }
         else:
-            # PID dead or no state — clean up
-            if state:
-                _clear_tunnel_state(target)
-            return {
-                "target": target,
-                "status": "stopped",
-                "url": "",
-                "port": default_port,
-                "pid": 0,
-                "uptime_seconds": 0,
-                "error": "",
-            }
+            _clear_tunnel_state(key)
 
-    # All tunnels
-    result = {}
-    for t in ("proxy", "mcp"):
-        result[t] = get_tunnel_status(t)
     return result
 
 
 def stop_all_tunnels():
     """Stop all running tunnels. Called on shutdown."""
-    for target in ("proxy", "mcp"):
-        state = _load_tunnel_state(target)
-        if state.get("pid"):
-            stop_tunnel(target)
+    _TUNNEL_STATE_DIR.mkdir(parents=True, exist_ok=True)
+    for f in _TUNNEL_STATE_DIR.glob("*.json"):
+        key = f.stem
+        try:
+            state = json.loads(f.read_text())
+        except Exception:
+            continue
+        pid = state.get("pid", 0)
+        if pid and _is_pid_alive(pid):
+            try:
+                if platform.system() == "Windows":
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True, timeout=10)
+                else:
+                    os.kill(pid, 15)
+                log.info("Stopped tunnel %s (PID %d)", key, pid)
+            except Exception:
+                pass
+        _clear_tunnel_state(key)
 
 
 # ─── Nginx Config Generation ────────────────────────────────────────────────

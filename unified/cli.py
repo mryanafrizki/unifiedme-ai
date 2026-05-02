@@ -2079,15 +2079,28 @@ def cmd_tunnel_start():
 
 def cmd_tunnel_stop():
     """Stop cloudflared tunnel."""
-    from .tunnel_manager import stop_tunnel
+    from .tunnel_manager import stop_tunnel, stop_all_tunnels
 
     args = sys.argv[3:]
     target = "proxy"
+    port = None
+
     if args and args[0] in ("proxy", "mcp"):
         target = args[0]
+        args = args[1:]
+    if args and args[0] == "all":
+        print(f"  Stopping all tunnels...", end=" ", flush=True)
+        stop_all_tunnels()
+        print(f"{_GREEN}Done{_NC}")
+        return
+    if "--port" in args:
+        idx = args.index("--port")
+        if idx + 1 < len(args):
+            port = int(args[idx + 1])
 
-    print(f"  Stopping {target} tunnel...", end=" ", flush=True)
-    result = stop_tunnel(target)
+    label = f"port {port}" if port else target
+    print(f"  Stopping tunnel ({label})...", end=" ", flush=True)
+    result = stop_tunnel(target, port)
     if result.get("ok"):
         print(f"{_GREEN}Done{_NC}")
     else:
@@ -2110,24 +2123,25 @@ def cmd_tunnel_status():
     print(f"  OS:          {sys_info['os']}")
     print()
 
-    # Tunnels
-    for target in ("proxy", "mcp"):
-        info = get_tunnel_status(target)
+    # All tunnels
+    all_tunnels = get_tunnel_status()
+    if not all_tunnels:
+        print(f"  {_DIM}No tunnels running{_NC}")
+        print()
+        return
+
+    for key, info in all_tunnels.items():
         status = info.get("status", "stopped")
-        if status == "running":
-            color = _GREEN
-            url = info.get("url", "")
-            uptime = info.get("uptime_seconds", 0)
-            m, s = uptime // 60, uptime % 60
-            print(f"  {_WHITE}{target.upper()}{_NC}: {color}{status}{_NC}")
-            print(f"    URL:    {url}")
-            print(f"    Port:   {info.get('port', '-')}")
-            print(f"    PID:    {info.get('pid', '-')}")
-            print(f"    Uptime: {m}m {s}s")
-        else:
-            print(f"  {_WHITE}{target.upper()}{_NC}: {_DIM}{status}{_NC}")
-            if info.get("error"):
-                print(f"    Error: {info['error']}")
+        target = info.get("target", key)
+        port = info.get("port", "?")
+        color = _GREEN
+        url = info.get("url", "")
+        uptime = info.get("uptime_seconds", 0)
+        m, s = uptime // 60, uptime % 60
+        print(f"  {_WHITE}{target.upper()} :{port}{_NC}: {color}{status}{_NC}")
+        print(f"    URL:    {url}")
+        print(f"    PID:    {info.get('pid', '-')}")
+        print(f"    Uptime: {m}m {s}s")
         print()
 
 
@@ -2173,10 +2187,14 @@ def cmd_tunnel():
         subcmds[subcmd]()
     else:
         print(f"\n  Usage:")
-        print(f"    {CMD} tunnel status              Show tunnel status")
-        print(f"    {CMD} tunnel start [proxy|mcp]   Start cloudflared tunnel")
-        print(f"    {CMD} tunnel stop [proxy|mcp]    Stop tunnel")
-        print(f"    {CMD} tunnel install             Install cloudflared + nginx")
+        print(f"    {CMD} tunnel status                       Show all tunnels")
+        print(f"    {CMD} tunnel start --port 4096            Start tunnel on port 4096")
+        print(f"    {CMD} tunnel start mcp --port 9876        Start MCP tunnel")
+        print(f"    {CMD} tunnel stop --port 4096             Stop tunnel on port 4096")
+        print(f"    {CMD} tunnel stop all                     Stop all tunnels")
+        print(f"    {CMD} tunnel install                      Install cloudflared + nginx")
+        print()
+        print(f"  Multiple tunnels can run simultaneously on different ports.")
 
 
 def cmd_vps_list():
