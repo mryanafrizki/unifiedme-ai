@@ -86,11 +86,33 @@ echo -e "  ${GREEN}[OK]${NC} Python dependencies installed"
 # ─── Step 7: CLI + directories ──────────────────────────────────────────────
 
 echo -e "  ${CYAN}[7/8]${NC} Setting up CLI + directories..."
-chmod +x unifiedme 2>/dev/null || true
-ln -sf "$INSTALL_DIR/unifiedme" /usr/local/bin/unifiedme 2>/dev/null || true
 mkdir -p "$INSTALL_DIR/unified/data"
 mkdir -p "$HOME/mcp-workspaces"
-echo -e "  ${GREEN}[OK]${NC} CLI ready, directories created"
+
+# Generate CLI wrapper with correct paths (don't use the repo's unifiedme — it has dev machine paths)
+VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
+cat > "$INSTALL_DIR/unifiedme" << WRAPPER
+#!/usr/bin/env bash
+cd "$INSTALL_DIR" || { echo "Not found: $INSTALL_DIR"; exit 1; }
+exec "$VENV_PYTHON" -m unified.cli "\$@"
+WRAPPER
+chmod +x "$INSTALL_DIR/unifiedme"
+
+# Install to /usr/local/bin so it's in PATH everywhere
+cp "$INSTALL_DIR/unifiedme" /usr/local/bin/unifiedme 2>/dev/null || true
+chmod +x /usr/local/bin/unifiedme 2>/dev/null || true
+
+# Also install to ~/.local/bin as fallback
+mkdir -p "$HOME/.local/bin" 2>/dev/null || true
+cp "$INSTALL_DIR/unifiedme" "$HOME/.local/bin/unifiedme" 2>/dev/null || true
+chmod +x "$HOME/.local/bin/unifiedme" 2>/dev/null || true
+
+# Ensure ~/.local/bin is in PATH (for non-root users)
+if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc" 2>/dev/null || true
+fi
+
+echo -e "  ${GREEN}[OK]${NC} CLI ready: $(which unifiedme 2>/dev/null || echo "$INSTALL_DIR/unifiedme")"
 
 # ─── Step 8: Firewall ───────────────────────────────────────────────────────
 
