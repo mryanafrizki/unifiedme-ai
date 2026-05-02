@@ -94,6 +94,22 @@ code,.mono{font-family:'JetBrains Mono',monospace}
     <div class="breadcrumb" id="breadcrumb"></div>
     <a href="/dashboard" class="btn" style="font-size:.75rem">Dashboard</a>
   </div>
+  <!-- Toolbar -->
+  <div style="display:flex;align-items:center;gap:.4rem;padding:.4rem 1rem;background:var(--surface);border-bottom:1px solid var(--border);flex-wrap:wrap">
+    <button class="btn" onclick="createNewFolder()" title="New Folder">New Folder</button>
+    <button class="btn" onclick="createNewFile()" title="New File">New File</button>
+    <span style="width:1px;height:20px;background:var(--border);margin:0 .3rem"></span>
+    <button class="btn" id="btn-cut" onclick="cutSelected()" disabled>Cut</button>
+    <button class="btn" id="btn-copy" onclick="copySelected()" disabled>Copy</button>
+    <button class="btn" id="btn-paste" onclick="pasteClipboard()" disabled>Paste</button>
+    <span style="width:1px;height:20px;background:var(--border);margin:0 .3rem"></span>
+    <button class="btn" id="btn-rename" onclick="renameSelected()" disabled>Rename</button>
+    <button class="btn" id="btn-delete" onclick="deleteSelected()" disabled style="color:var(--red)">Delete</button>
+    <span style="width:1px;height:20px;background:var(--border);margin:0 .3rem"></span>
+    <label class="btn" style="cursor:pointer">Upload <input type="file" id="upload-input" onchange="uploadFile(this)" style="display:none" multiple></label>
+    <div style="flex:1"></div>
+    <span id="status-bar" style="font-size:.72rem;color:var(--text-muted)"></span>
+  </div>
   <div class="main">
     <div class="file-list" id="file-list"></div>
     <div class="preview-panel" id="preview-panel">
@@ -113,6 +129,8 @@ code,.mono{font-family:'JetBrains Mono',monospace}
 var adminPassword = '';
 var currentPath = '~';
 var currentFile = '';
+var selectedEntry = null; // {name, type, fullPath}
+var clipboard = null; // {action: 'copy'|'cut', path, name, type}
 
 function getHeaders() {
   return { 'Authorization': 'Bearer ' + adminPassword, 'Content-Type': 'application/json' };
@@ -191,18 +209,39 @@ function renderFileList(entries, basePath) {
   var html = '';
   entries.forEach(function(e) {
     var fullPath = basePath + '/' + e.name;
+    var esc = fullPath.replace(/'/g, "\\'");
     var icon = getIcon(e);
-    if (e.type === 'dir') {
-      html += '<div class="file-entry" ondblclick="loadDir(\'' + fullPath.replace(/'/g, "\\'") + '\')" onclick="this.classList.toggle(\'selected\')">';
-    } else {
-      html += '<div class="file-entry" onclick="previewFile(\'' + fullPath.replace(/'/g, "\\'") + '\')">';
-    }
+    var dblclick = e.type === 'dir' ? ' ondblclick="loadDir(\'' + esc + '\')"' : ' ondblclick="previewFile(\'' + esc + '\')"';
+    html += '<div class="file-entry" onclick="selectEntry(\'' + esc + '\',\'' + e.name.replace(/'/g, "\\'") + '\',\'' + e.type + '\')"' + dblclick + '>';
     html += '<span class="file-icon ' + icon.cls + '">' + icon.icon + '</span>';
     html += '<span class="file-name">' + e.name + '</span>';
     html += '<span class="file-meta">' + (e.size_human || '') + '</span>';
     html += '</div>';
   });
   el.innerHTML = html;
+  selectedEntry = null;
+  updateToolbar();
+  document.getElementById('status-bar').textContent = entries.length + ' items';
+}
+
+function selectEntry(fullPath, name, type) {
+  // Deselect all
+  document.querySelectorAll('.file-entry.selected').forEach(function(el) { el.classList.remove('selected'); });
+  // Select clicked
+  event.currentTarget.classList.add('selected');
+  selectedEntry = { fullPath: fullPath, name: name, type: type };
+  updateToolbar();
+  // Single click on file also opens preview
+  if (type === 'file') previewFile(fullPath);
+}
+
+function updateToolbar() {
+  var has = !!selectedEntry;
+  document.getElementById('btn-cut').disabled = !has;
+  document.getElementById('btn-copy').disabled = !has;
+  document.getElementById('btn-rename').disabled = !has;
+  document.getElementById('btn-delete').disabled = !has;
+  document.getElementById('btn-paste').disabled = !clipboard;
 }
 
 function getIcon(entry) {
@@ -269,6 +308,115 @@ function downloadCurrent() {
 function getAuthParam() {
   return 'password=' + encodeURIComponent(adminPassword);
 }
+
+// ── File Operations ──
+
+async function createNewFolder() {
+  var name = prompt('New folder name:');
+  if (!name) return;
+  try {
+    var resp = await fetch('/api/explorer/mkdir', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: currentPath + '/' + name }) });
+    var data = await resp.json();
+    if (data.ok) loadDir(currentPath);
+    else alert('Error: ' + (data.error || ''));
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function createNewFile() {
+  var name = prompt('New file name:');
+  if (!name) return;
+  try {
+    var resp = await fetch('/api/explorer/create-file', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: currentPath + '/' + name }) });
+    var data = await resp.json();
+    if (data.ok) loadDir(currentPath);
+    else alert('Error: ' + (data.error || ''));
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function renameSelected() {
+  if (!selectedEntry) return;
+  var newName = prompt('Rename to:', selectedEntry.name);
+  if (!newName || newName === selectedEntry.name) return;
+  try {
+    var resp = await fetch('/api/explorer/rename', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntry.fullPath, new_name: newName }) });
+    var data = await resp.json();
+    if (data.ok) loadDir(currentPath);
+    else alert('Error: ' + (data.error || ''));
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+async function deleteSelected() {
+  if (!selectedEntry) return;
+  if (!confirm('Delete "' + selectedEntry.name + '"?')) return;
+  try {
+    var resp = await fetch('/api/explorer/delete', { method: 'POST', headers: getHeaders(), body: JSON.stringify({ path: selectedEntry.fullPath }) });
+    var data = await resp.json();
+    if (data.ok) { closePreview(); loadDir(currentPath); }
+    else alert('Error: ' + (data.error || ''));
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function cutSelected() {
+  if (!selectedEntry) return;
+  clipboard = { action: 'cut', path: selectedEntry.fullPath, name: selectedEntry.name, type: selectedEntry.type };
+  document.getElementById('status-bar').textContent = 'Cut: ' + selectedEntry.name;
+  updateToolbar();
+}
+
+function copySelected() {
+  if (!selectedEntry) return;
+  clipboard = { action: 'copy', path: selectedEntry.fullPath, name: selectedEntry.name, type: selectedEntry.type };
+  document.getElementById('status-bar').textContent = 'Copied: ' + selectedEntry.name;
+  updateToolbar();
+}
+
+async function pasteClipboard() {
+  if (!clipboard) return;
+  var dest = currentPath + '/' + clipboard.name;
+  var endpoint = clipboard.action === 'cut' ? '/api/explorer/move' : '/api/explorer/copy';
+  try {
+    var resp = await fetch(endpoint, { method: 'POST', headers: getHeaders(), body: JSON.stringify({ source: clipboard.path, destination: dest }) });
+    var data = await resp.json();
+    if (data.ok) {
+      if (clipboard.action === 'cut') clipboard = null;
+      loadDir(currentPath);
+      document.getElementById('status-bar').textContent = 'Pasted: ' + clipboard?.name || '';
+    } else {
+      alert('Error: ' + (data.error || ''));
+    }
+  } catch(e) { alert('Error: ' + e.message); }
+  updateToolbar();
+}
+
+async function uploadFile(input) {
+  var files = input.files;
+  if (!files.length) return;
+  for (var i = 0; i < files.length; i++) {
+    var formData = new FormData();
+    formData.append('file', files[i]);
+    try {
+      await fetch('/api/explorer/upload?path=' + encodeURIComponent(currentPath) + '&' + getAuthParam(), {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer ' + adminPassword },
+        body: formData,
+      });
+    } catch(e) { alert('Upload error: ' + e.message); }
+  }
+  input.value = '';
+  loadDir(currentPath);
+  document.getElementById('status-bar').textContent = files.length + ' file(s) uploaded';
+}
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (e.key === 'Delete' && selectedEntry) { deleteSelected(); }
+  if (e.key === 'F2' && selectedEntry) { e.preventDefault(); renameSelected(); }
+  if (e.ctrlKey && e.key === 'c' && selectedEntry) { copySelected(); }
+  if (e.ctrlKey && e.key === 'x' && selectedEntry) { cutSelected(); }
+  if (e.ctrlKey && e.key === 'v' && clipboard) { pasteClipboard(); }
+  if (e.key === 'Backspace') { var parent = document.querySelector('.breadcrumb a:nth-last-child(3)'); if (parent) parent.click(); }
+});
 </script>
 </body>
 </html>

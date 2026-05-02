@@ -32,7 +32,7 @@ log = logging.getLogger("unified.tunnel")
 # ─── Constants ───────────────────────────────────────────────────────────────
 
 MCP_DEFAULT_PORT = 9876
-MCP_WORKSPACE_BASE = Path.home() / "mcp-workspaces"
+MCP_WORKSPACE_BASE = DATA_DIR / "workspaces"
 
 # ─── Tunnel State ────────────────────────────────────────────────────────────
 

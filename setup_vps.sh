@@ -87,7 +87,7 @@ echo -e "  ${GREEN}[OK]${NC} Python dependencies installed"
 
 echo -e "  ${CYAN}[7/8]${NC} Setting up CLI + directories..."
 mkdir -p "$INSTALL_DIR/unified/data"
-mkdir -p "$HOME/mcp-workspaces"
+mkdir -p "$INSTALL_DIR/unified/data/workspaces"
 
 # Generate CLI wrapper with correct paths (don't use the repo's unifiedme — it has dev machine paths)
 VENV_PYTHON="$INSTALL_DIR/.venv/bin/python"
@@ -136,7 +136,7 @@ echo -e "  ${GREEN}+==========================================+${NC}"
 echo ""
 echo -e "  Version:   ${CYAN}$VERSION${NC}"
 echo -e "  Path:      ${DIM}$INSTALL_DIR${NC}"
-echo -e "  MCP Dir:   ${DIM}$HOME/mcp-workspaces${NC}"
+echo -e "  MCP Dir:   ${DIM}$INSTALL_DIR/unified/data/workspaces${NC}"
 echo ""
 echo -e "  ${YELLOW}Next steps:${NC}"
 echo -e "    1. Run:  ${CYAN}unifiedme run${NC}"

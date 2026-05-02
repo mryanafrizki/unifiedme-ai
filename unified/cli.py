@@ -1576,7 +1576,7 @@ def cmd_mcp_start():
 
     Usage:
         unifiedme mcp start                          Interactive (asks folder name)
-        unifiedme mcp start my-project               Workspace = ~/mcp-workspaces/my-project
+        unifiedme mcp start my-project               Workspace = unified/data/workspaces/my-project
         unifiedme mcp start ~/some/path              Workspace = ~/some/path (absolute)
         unifiedme mcp start my-project --port 9876   Custom port
     """
@@ -1611,7 +1611,8 @@ def cmd_mcp_start():
     if ws_input.startswith("/") or ws_input.startswith("~"):
         workspace = os.path.expanduser(ws_input)
     else:
-        workspace = os.path.expanduser(f"~/mcp-workspaces/{ws_input}")
+        install_dir = Path(__file__).resolve().parent.parent
+        workspace = str(install_dir / "unified" / "data" / "workspaces" / ws_input)
 
     os.makedirs(workspace, exist_ok=True)
     workspace = os.path.realpath(workspace)

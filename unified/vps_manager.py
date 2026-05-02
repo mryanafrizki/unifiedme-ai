@@ -403,8 +403,7 @@ chmod +x unifiedme 2>/dev/null || true
 ln -sf "$INSTALL_DIR/unifiedme" /usr/local/bin/unifiedme 2>/dev/null || true
 
 echo "@@STEP@@Creating directories..."
-mkdir -p "$INSTALL_DIR/unified/data"
-mkdir -p "$HOME/mcp-workspaces"
+mkdir -p "$INSTALL_DIR/unified/data/workspaces"
 
 echo "@@STEP@@Configuring firewall..."
 ufw allow 22/tcp   >/dev/null 2>&1 || true
@@ -492,7 +491,7 @@ async def setup_remote_mcp_workspace(
     if not safe_name:
         return {"ok": False, "error": "Invalid folder name"}
 
-    cmd = f'mkdir -p "$HOME/mcp-workspaces/{safe_name}" && echo "$HOME/mcp-workspaces/{safe_name}"'
+    cmd = f'INSTALL_DIR="$HOME/unifiedme-ai"; mkdir -p "$INSTALL_DIR/unified/data/workspaces/{safe_name}" && echo "$INSTALL_DIR/unified/data/workspaces/{safe_name}"'
     result = await run_command(host, username, password, cmd, port)
 
     if result.get("error"):
@@ -506,7 +505,7 @@ async def list_remote_mcp_workspaces(
     host: str, username: str, password: str, port: int = 22,
 ) -> dict:
     """List MCP workspace folders on a remote VPS."""
-    cmd = 'ls -1d "$HOME/mcp-workspaces"/*/ 2>/dev/null || echo ""'
+    cmd = 'ls -1d "$HOME/unifiedme-ai/unified/data/workspaces"/*/ 2>/dev/null || echo ""'
     result = await run_command(host, username, password, cmd, port)
 
     if result.get("error"):

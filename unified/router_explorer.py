@@ -191,6 +191,148 @@ async def download_file(path: str, _: bool = Depends(verify_admin)):
     )
 
 
+@router.post("/mkdir")
+async def make_directory(request: Request, _: bool = Depends(verify_admin)):
+    """Create a new directory. Body: {path}."""
+    body = await request.json()
+    path_str = str(body.get("path", "")).strip()
+    if not path_str:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    p = Path(path_str).expanduser().resolve()
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+        return {"ok": True, "path": str(p)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/create-file")
+async def create_file(request: Request, _: bool = Depends(verify_admin)):
+    """Create a new empty file or with content. Body: {path, content?}."""
+    body = await request.json()
+    path_str = str(body.get("path", "")).strip()
+    content = str(body.get("content", ""))
+    if not path_str:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    p = Path(path_str).expanduser().resolve()
+    if p.exists():
+        return JSONResponse({"error": "File already exists"}, status_code=409)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(content, encoding="utf-8")
+        return {"ok": True, "path": str(p)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/rename")
+async def rename_item(request: Request, _: bool = Depends(verify_admin)):
+    """Rename a file or directory. Body: {path, new_name}."""
+    body = await request.json()
+    path_str = str(body.get("path", "")).strip()
+    new_name = str(body.get("new_name", "")).strip()
+    if not path_str or not new_name:
+        return JSONResponse({"error": "path and new_name are required"}, status_code=400)
+    src = Path(path_str).expanduser().resolve()
+    if not src.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    dst = src.parent / new_name
+    if dst.exists():
+        return JSONResponse({"error": f"'{new_name}' already exists"}, status_code=409)
+    try:
+        src.rename(dst)
+        return {"ok": True, "old": str(src), "new": str(dst)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/delete")
+async def delete_item(request: Request, _: bool = Depends(verify_admin)):
+    """Delete a file or directory. Body: {path}."""
+    import shutil
+    body = await request.json()
+    path_str = str(body.get("path", "")).strip()
+    if not path_str:
+        return JSONResponse({"error": "path is required"}, status_code=400)
+    p = Path(path_str).expanduser().resolve()
+    if not p.exists():
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    try:
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+        return {"ok": True, "deleted": str(p)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/copy")
+async def copy_item(request: Request, _: bool = Depends(verify_admin)):
+    """Copy a file or directory. Body: {source, destination}."""
+    import shutil
+    body = await request.json()
+    src_str = str(body.get("source", "")).strip()
+    dst_str = str(body.get("destination", "")).strip()
+    if not src_str or not dst_str:
+        return JSONResponse({"error": "source and destination are required"}, status_code=400)
+    src = Path(src_str).expanduser().resolve()
+    dst = Path(dst_str).expanduser().resolve()
+    if not src.exists():
+        return JSONResponse({"error": "Source not found"}, status_code=404)
+    try:
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+        return {"ok": True, "source": str(src), "destination": str(dst)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/move")
+async def move_item(request: Request, _: bool = Depends(verify_admin)):
+    """Move (cut+paste) a file or directory. Body: {source, destination}."""
+    import shutil
+    body = await request.json()
+    src_str = str(body.get("source", "")).strip()
+    dst_str = str(body.get("destination", "")).strip()
+    if not src_str or not dst_str:
+        return JSONResponse({"error": "source and destination are required"}, status_code=400)
+    src = Path(src_str).expanduser().resolve()
+    dst = Path(dst_str).expanduser().resolve()
+    if not src.exists():
+        return JSONResponse({"error": "Source not found"}, status_code=404)
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+        return {"ok": True, "source": str(src), "destination": str(dst)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.post("/upload")
+async def upload_file(request: Request, path: str = "", _: bool = Depends(verify_admin)):
+    """Upload a file via multipart form. Query: ?path=/target/dir."""
+    from fastapi import UploadFile, File, Form
+    form = await request.form()
+    file = form.get("file")
+    if not file:
+        return JSONResponse({"error": "No file uploaded"}, status_code=400)
+
+    target_dir = Path(path or "~").expanduser().resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    dest = target_dir / file.filename
+
+    try:
+        content = await file.read()
+        dest.write_bytes(content)
+        return {"ok": True, "path": str(dest), "size": len(content)}
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 def _url_encode(s: str) -> str:
     """URL-encode a string for query params."""
     from urllib.parse import quote
