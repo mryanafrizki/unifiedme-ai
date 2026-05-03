@@ -1222,7 +1222,7 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
     if not accounts:
         return JSONResponse({"error": "No valid accounts"}, status_code=400)
 
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop")]
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai")]
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
 
