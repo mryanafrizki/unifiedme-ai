@@ -99,13 +99,84 @@ def get_system_info() -> dict:
 
 
 async def install_cloudflared() -> dict:
-    """Install cloudflared on Linux. Returns {ok, message, error}."""
-    if platform.system() != "Linux":
-        return {"ok": False, "error": "Auto-install only supported on Linux"}
-
+    """Install cloudflared on Linux or Windows. Returns {ok, message, error}."""
     if check_cloudflared():
         return {"ok": True, "message": "cloudflared already installed"}
 
+    system = platform.system()
+
+    if system == "Windows":
+        return await _install_cloudflared_windows()
+    elif system == "Linux":
+        return await _install_cloudflared_linux()
+    else:
+        return {"ok": False, "error": f"Auto-install not supported on {system}"}
+
+
+async def _install_cloudflared_windows() -> dict:
+    """Install cloudflared on Windows via direct binary download."""
+    try:
+        # Determine architecture
+        machine = platform.machine().lower()
+        if machine in ("amd64", "x86_64"):
+            arch = "amd64"
+        elif machine in ("arm64", "aarch64"):
+            arch = "arm64"
+        else:
+            arch = "amd64"  # default
+
+        url = f"https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-{arch}.exe"
+        install_dir = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "cloudflared"
+        install_dir.mkdir(parents=True, exist_ok=True)
+        exe_path = install_dir / "cloudflared.exe"
+
+        log.info("Downloading cloudflared for Windows from %s", url)
+
+        # Download using PowerShell (available on all Windows)
+        ps_cmd = (
+            f'powershell -Command "'
+            f"[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; "
+            f"Invoke-WebRequest -Uri '{url}' -OutFile '{exe_path}' -UseBasicParsing"
+            f'"'
+        )
+        proc = await asyncio.create_subprocess_shell(
+            ps_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+
+        if not exe_path.exists():
+            return {"ok": False, "error": f"Download failed: {stderr.decode()[:200]}"}
+
+        # Add to PATH for current session
+        current_path = os.environ.get("PATH", "")
+        if str(install_dir) not in current_path:
+            os.environ["PATH"] = f"{install_dir};{current_path}"
+
+        # Also add to user PATH permanently via PowerShell
+        ps_path_cmd = (
+            f'powershell -Command "'
+            f"$p = [Environment]::GetEnvironmentVariable('PATH','User'); "
+            f"if ($p -notlike '*{install_dir}*') {{ "
+            f"[Environment]::SetEnvironmentVariable('PATH', '{install_dir};' + $p, 'User') }}"
+            f'"'
+        )
+        await asyncio.create_subprocess_shell(ps_path_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+
+        if check_cloudflared() or exe_path.exists():
+            return {"ok": True, "message": f"cloudflared installed to {exe_path}"}
+
+        return {"ok": False, "error": "Download succeeded but binary not found in PATH"}
+
+    except asyncio.TimeoutError:
+        return {"ok": False, "error": "Download timed out (120s)"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+async def _install_cloudflared_linux() -> dict:
+    """Install cloudflared on Linux."""
     try:
         # Try official install method
         cmds = [

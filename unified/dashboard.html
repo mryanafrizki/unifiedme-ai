@@ -4242,57 +4242,92 @@ async function startBatch() {
   }
 }
 
+// Polling-based batch status (works through Cloudflare tunnel, unlike SSE)
+var _batchPollTimer = null;
+var _batchLogsSince = 0;
+
 function connectBatchSSE() {
+  // Use polling instead of SSE for tunnel compatibility
+  stopBatchPolling();
+  _batchLogsSince = 0;
+  _batchPollTimer = setInterval(pollBatchStatus, 1500);
+  pollBatchStatus(); // immediate first poll
+}
+
+function stopBatchPolling() {
+  if (_batchPollTimer) {
+    clearInterval(_batchPollTimer);
+    _batchPollTimer = null;
+  }
+  // Also close legacy SSE if any
   if (state.batchEventSource) {
     state.batchEventSource.close();
-  }
-
-  const url = '/api/events?token=' + encodeURIComponent(getAdminPassword());
-  const es = new EventSource(url);
-  state.batchEventSource = es;
-
-  es.onmessage = function(event) {
-    try {
-      const data = JSON.parse(event.data);
-      handleBatchEvent(data);
-    } catch (e) {
-      // Plain text message
-      addLog(event.data, 'info');
-    }
-  };
-
-  es.addEventListener('account_status', function(event) {
-    try {
-      const data = JSON.parse(event.data);
-      handleBatchEvent(data);
-    } catch (e) {}
-  });
-
-  es.addEventListener('batch_complete', function(event) {
-    addLog('Batch login complete!', 'ok');
-    state.batchRunning = false;
-    document.getElementById('batch-start-btn').disabled = false;
-    document.getElementById('batch-cancel-btn').disabled = true;
-    es.close();
     state.batchEventSource = null;
-    loadAccounts();
-  });
+  }
+}
 
-  es.addEventListener('log', function(event) {
-    try {
-      const data = JSON.parse(event.data);
-      const level = data.level || 'info';
-      addLog(data.message || event.data, level);
-    } catch (e) {
-      addLog(event.data, 'info');
-    }
-  });
+async function pollBatchStatus() {
+  try {
+    var data = await apiFetch('/api/batch/status?logs_since=' + _batchLogsSince);
+    if (!data) return;
 
-  es.onerror = function() {
-    if (state.batchRunning) {
-      addLog('SSE connection lost. Reconnecting...', 'warn');
+    // Update jobs
+    if (data.jobs) {
+      state.batchJobs = data.jobs;
+      renderBatchJobs();
     }
-  };
+
+    // Process new logs
+    if (data.logs && data.logs.length > 0) {
+      for (var i = 0; i < data.logs.length; i++) {
+        var log = data.logs[i];
+        var email = log.email || '';
+        var msg = log.message || '';
+        var provider = log.provider ? '[' + log.provider + '] ' : '';
+        var logLevel = log.type === 'error' ? 'err' : log.type === 'result' ? 'ok' : 'info';
+        addLog('[' + email + '] ' + provider + msg, logLevel);
+
+        // Update job status from log events
+        var job = state.batchJobs.find(function(j) { return j.email === email; });
+        if (job && log.type === 'job_log') {
+          job.message = msg;
+        }
+      }
+      _batchLogsSince = data.logs_total || (_batchLogsSince + data.logs.length);
+    }
+
+    // Update job provider results
+    if (data.jobs) {
+      data.jobs.forEach(function(j) {
+        var job = state.batchJobs.find(function(bj) { return bj.email === j.email; });
+        if (job) {
+          if (j.kiro !== undefined) job.kiro = j.kiro;
+          if (j.codebuddy !== undefined) job.codebuddy = j.codebuddy;
+          if (j.wavespeed !== undefined) job.wavespeed = j.wavespeed;
+          if (j.gumloop !== undefined) job.gumloop = j.gumloop;
+          job.status = j.status;
+          job.in_db = j.in_db;
+        }
+      });
+      renderBatchJobs();
+      renderBatchResults();
+    }
+
+    // Check if batch finished
+    if (!data.running && state.batchRunning) {
+      var success = data.jobs.filter(function(j) { return j.status === 'success'; }).length;
+      var failed = data.jobs.filter(function(j) { return j.status === 'failed'; }).length;
+      addLog('Batch complete! Success: ' + success + ', Failed: ' + failed, 'ok');
+      state.batchRunning = false;
+      document.getElementById('batch-start-btn').disabled = false;
+      document.getElementById('batch-cancel-btn').disabled = true;
+      stopBatchPolling();
+      renderBatchResults();
+      loadAccounts();
+    }
+  } catch (e) {
+    // Network error — keep polling, will retry
+  }
 }
 
 function handleBatchEvent(data) {
@@ -4360,10 +4395,7 @@ async function cancelBatch() {
   state.batchRunning = false;
   document.getElementById('batch-start-btn').disabled = false;
   document.getElementById('batch-cancel-btn').disabled = true;
-  if (state.batchEventSource) {
-    state.batchEventSource.close();
-    state.batchEventSource = null;
-  }
+  stopBatchPolling();
 }
 
 async function loadBatchStatus() {
