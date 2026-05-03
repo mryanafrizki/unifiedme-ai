@@ -206,6 +206,8 @@ async function doLogin() {
 })();
 
 async function loadDir(path) {
+  // Normalize Windows backslashes to forward slashes for safe JS string handling
+  path = path.replace(/\\/g, '/');
   currentPath = path;
   currentFile = '';
   selectedEntries = [];
@@ -215,9 +217,10 @@ async function loadDir(path) {
     var resp = await fetch('/api/explorer/list?path=' + encodeURIComponent(path), { headers: getHeaders() });
     if (!resp.ok) { document.getElementById('file-list').innerHTML = '<div class="empty-state">Error loading directory</div>'; return; }
     var data = await resp.json();
-    renderBreadcrumb(data.path);
-    renderFileList(data.entries, data.path);
-    checkMcpForPath(data.path);
+    var normPath = (data.path || '').replace(/\\/g, '/');
+    renderBreadcrumb(normPath);
+    renderFileList(data.entries, normPath);
+    checkMcpForPath(normPath);
   } catch(e) {
     document.getElementById('file-list').innerHTML = '<div class="empty-state">Error: ' + e.message + '</div>';
   }
@@ -270,7 +273,7 @@ function renderFileList(entries, basePath) {
 
   currentSorted = sorted;
   sorted.forEach(function(e, idx) {
-    var fullPath = basePath + '/' + e.name;
+    var fullPath = (basePath + '/' + e.name).replace(/\\/g, '/');
     var esc = fullPath.replace(/'/g, "\\'");
     var nameEsc = e.name.replace(/'/g, "\\'");
     var icon = getIcon(e);
