@@ -665,8 +665,15 @@ async def _run_signup_flow(page, email: str, password: str, manager):
 
     emit({"type": "progress", "step": "done", "message": "Logged in to chat.b.ai!"})
 
+    # ── Reload page to ensure session is fully established ──────────
+    try:
+        await page.goto("https://chat.b.ai/chat", wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(5)
+    except Exception:
+        await asyncio.sleep(3)
+
     # ── Claim signup bonus ─────────────────────────────────────────
-    await asyncio.sleep(5)  # Wait for claim popup to appear
+    await asyncio.sleep(3)  # Wait for claim popup to appear
     emit({"type": "progress", "step": "claim", "message": "Looking for claim bonus button..."})
 
     claimed = False
@@ -720,42 +727,21 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # Wait for claim API call to complete
     await asyncio.sleep(3)
 
-    # ── Create API key via tRPC (pure HTTP, no DOM) ───────────────────
-    emit({"type": "progress", "step": "api_key", "message": "Creating API key via tRPC..."})
+    # ── Create API key via tRPC ────────────────────────────────────────
+    emit({"type": "progress", "step": "api_key", "message": "Creating API key..."})
     api_key = ""
 
     try:
-        # Get session cookie and x-ainft-chat-auth header from browser
-        cookies = await page.context.cookies(["https://chat.b.ai"])
-        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
-
-        # Get x-ainft-chat-auth from page (set by frontend JS)
-        auth_header = await page.evaluate("""() => {
-            // Try to find it in recent XHR requests or localStorage
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                const val = localStorage.getItem(key);
-                if (key.includes('auth') && val && val.length > 20) return val;
-            }
-            return '';
-        }""") or ""
-
-        # Also try to extract from a live request by fetching session
-        if not auth_header:
-            auth_header = await page.evaluate("""async () => {
-                try {
-                    const resp = await fetch('/api/auth/session', { credentials: 'include' });
-                    // The x-ainft-chat-auth is set by middleware, we need to get it from the page state
-                    return '';
-                } catch(e) { return ''; }
-            }""") or ""
+        # Navigate to /key page first — this loads frontend JS that sets x-ainft-chat-auth
+        await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(5)  # Let frontend JS initialize and set auth headers
 
         import random
         _adj = ["fast", "main", "dev", "prod", "test", "local", "cloud", "app", "my", "lab"]
         _noun = ["server", "worker", "agent", "bot", "runner", "node", "service", "client", "hub", "api"]
         key_name = f"{random.choice(_adj)}-{random.choice(_noun)}-{random.randint(10, 99)}"
 
-        # Create API key via page.evaluate fetch (uses browser's cookies automatically)
+        # Create API key via page.evaluate fetch — browser context has all cookies + headers
         result = await page.evaluate("""async (keyName) => {
             try {
                 const resp = await fetch('/trpc/lambda/apiKey.createApiKey?batch=1', {
@@ -830,7 +816,12 @@ async def _run_signup_flow(page, email: str, password: str, manager):
         pass
 
     # ── Emit result for batch runner ────────────────────────────────
-    success = bool(session_token or api_key)
+    # If we got here, login was successful (failures return early above)
+    success = bool(api_key or session_token)
+    if not success:
+        # Last resort: we know login worked, just couldn't extract credentials
+        emit({"type": "debug", "step": "result", "message": "Login succeeded but no api_key or session_token extracted"})
+        success = bool(api_key)  # Only truly success if we have api_key for proxy use
     emit({
         "type": "result",
         "success": success,
