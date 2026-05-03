@@ -223,7 +223,7 @@ async def chat_completions(request: Request, _: bool = Depends(verify_admin)):
     return StreamingResponse(
         stream_response(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache, no-store", "Connection": "keep-alive", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"},
     )
 
 
@@ -302,7 +302,7 @@ async def agent_completions(request: Request, _: bool = Depends(verify_admin)):
     return StreamingResponse(
         stream_agent(),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+        headers={"Cache-Control": "no-cache, no-store", "Connection": "keep-alive", "X-Accel-Buffering": "no", "X-Content-Type-Options": "nosniff"},
     )
 
 

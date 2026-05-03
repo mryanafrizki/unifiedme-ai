@@ -1160,15 +1160,30 @@ async def get_stats(request: Request, _: bool = Depends(verify_admin)):
 
 @router.get("/events")
 async def sse_events(request: Request, _: bool = Depends(verify_admin)):
-    """SSE stream for batch login progress."""
+    """SSE stream for batch login progress.
+
+    Includes padding to prevent Cloudflare/proxy buffering of small SSE chunks.
+    """
     queue = batch_state.subscribe()
+
+    # Padding comment to force Cloudflare to flush (>1KB initial payload)
+    _FLUSH_PADDING = ": " + "x" * 2048 + "\n\n"
 
     async def event_stream():
         try:
+            # Send initial padding to bust proxy buffers
+            yield _FLUSH_PADDING
+            yield ": connected\n\n"
+
             while True:
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=30)
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                    event = await asyncio.wait_for(queue.get(), timeout=15)
+                    data = json.dumps(event, ensure_ascii=False)
+                    # Pad small events to >256 bytes to prevent buffering
+                    padding = ""
+                    if len(data) < 256:
+                        padding = " " * (256 - len(data))
+                    yield f"data: {data}{padding}\n\n"
                 except asyncio.TimeoutError:
                     yield ": keepalive\n\n"
                 except asyncio.CancelledError:
@@ -1180,9 +1195,11 @@ async def sse_events(request: Request, _: bool = Depends(verify_admin)):
         event_stream(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+            "Transfer-Encoding": "chunked",
         },
     )
 
