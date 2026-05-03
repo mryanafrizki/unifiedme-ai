@@ -911,6 +911,8 @@ async def _run_chatbai_login(job: AccountJob, proxy_override: str | None = None)
                 continue
             try:
                 parsed = json.loads(text)
+                if not isinstance(parsed, dict):
+                    continue  # Skip non-dict JSON (strings, arrays, etc.)
                 if parsed.get("type") == "result":
                     result_data = {"chatbai": parsed}
                 batch_state.broadcast({
@@ -920,7 +922,7 @@ async def _run_chatbai_login(job: AccountJob, proxy_override: str | None = None)
                     "step": parsed.get("step", ""),
                     "message": parsed.get("message", text[:200]),
                 })
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, ValueError):
                 if is_stderr:
                     log.debug("[chatbai stderr] %s", text[:200])
 
