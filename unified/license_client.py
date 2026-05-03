@@ -236,6 +236,25 @@ def get_license_info() -> dict:
     return _license_info or {}
 
 
+async def check_emails_global(emails: list[str], providers: list[str]) -> dict:
+    """Check D1 for globally used emails across all licenses.
+
+    Args:
+        emails: List of email addresses to check
+        providers: List of provider names to check against
+
+    Returns: {ok, duplicates: {email: [provider, ...]}, duplicate_count}
+    """
+    if not _license_key:
+        return {"duplicates": {}, "duplicate_count": 0}
+
+    return await _api_post("/api/sync/check-emails", {
+        "license_key": _license_key,
+        "emails": emails,
+        "providers": providers,
+    }, timeout=30)
+
+
 # ─── Sync: Pull ─────────────────────────────────────────────────────────────
 
 async def pull_sync() -> dict:

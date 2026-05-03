@@ -95,6 +95,28 @@ batch_state = BatchState()
 
 
 # ---------------------------------------------------------------------------
+# Global duplicate check (D1)
+# ---------------------------------------------------------------------------
+
+async def _check_global_duplicates(emails: list[str], providers: list[str]) -> dict[str, list[str]]:
+    """Check D1 for emails already used globally across all licenses.
+
+    Returns: {email: [provider, ...]} for emails that are duplicates.
+    """
+    from . import license_client
+
+    if not emails or not license_client.is_licensed():
+        return {}
+
+    try:
+        result = await license_client.check_emails_global(emails, providers)
+        return result.get("duplicates", {})
+    except Exception as e:
+        log.warning("Global duplicate check failed (continuing without): %s", e)
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # Batch orchestrator
 # ---------------------------------------------------------------------------
 
@@ -117,11 +139,16 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
     batch_state.concurrency = max(1, concurrency)
     batch_state._active_procs.clear()
 
+    # ── Global duplicate check via D1 (cross-license) ──
+    global_duplicates = await _check_global_duplicates(
+        [email for email, _ in accounts], providers
+    )
+
     skipped = 0
     for email, password in accounts:
         existing = await db.get_account_by_email(email)
 
-        # Filter out providers that are already OK for this account
+        # Filter out providers that are already OK for this account (local check)
         needed_providers = list(providers)
         if existing:
             if "kiro" in needed_providers and existing.get("kiro_status") == "ok":
@@ -132,6 +159,13 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
                 needed_providers.remove("wavespeed")
             if "gumloop" in needed_providers and existing.get("gl_status") == "ok":
                 needed_providers.remove("gumloop")
+
+        # Filter out providers already used globally (D1 cross-license check)
+        if email in global_duplicates:
+            for prov in global_duplicates[email]:
+                mapped = "codebuddy" if prov == "codebuddy" else prov
+                if mapped in needed_providers:
+                    needed_providers.remove(mapped)
 
         if not needed_providers:
             skipped += 1

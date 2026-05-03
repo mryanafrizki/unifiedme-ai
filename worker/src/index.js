@@ -106,6 +106,7 @@ async function handleRequest(request, env) {
   // ── Sync endpoints ──────────────────────────────────────────────────────
   if (path === '/api/sync/pull' && method === 'GET') return syncPull(db, url);
   if (path === '/api/sync/push' && method === 'POST') return syncPush(db, request);
+  if (path === '/api/sync/check-emails' && method === 'POST') return syncCheckEmails(db, request);
 
   // ── Admin endpoints (require password) ──────────────────────────────────
   if (path.startsWith('/api/admin/')) {
@@ -395,6 +396,11 @@ async function syncPush(db, request) {
     }
   }
 
+  // Record used emails (global duplicate prevention)
+  if (accounts && Array.isArray(accounts) && accounts.length > 0) {
+    await recordUsedEmails(db, license.id, accounts);
+  }
+
   // Upsert settings
   if (settings && typeof settings === 'object') {
     for (const [key, value] of Object.entries(settings)) {
@@ -536,6 +542,92 @@ async function syncPush(db, request) {
     alerts_inserted: alertsInserted,
     proxies_upserted: proxiesUpserted,
   });
+}
+
+// ─── Sync: Check Emails (global duplicate prevention) ───────────────────────
+
+async function syncCheckEmails(db, request) {
+  const body = await request.json();
+  const { license_key, emails, providers } = body;
+  if (!license_key) return err('license_key required');
+  if (!emails || !Array.isArray(emails) || emails.length === 0) return err('emails array required');
+
+  const license = await validateLicense(db, license_key);
+  if (!license) return err('Invalid or expired license', 401);
+
+  // Ensure table exists (idempotent)
+  await db.prepare(`CREATE TABLE IF NOT EXISTS used_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    license_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(email, provider)
+  )`).run();
+
+  // Check which email+provider combos already exist in used_emails
+  const duplicates = {};
+  const providerList = providers || ['kiro', 'codebuddy', 'wavespeed', 'gumloop'];
+
+  // Process in chunks of 100 to avoid query size limits
+  const chunkSize = 100;
+  for (let i = 0; i < emails.length; i += chunkSize) {
+    const chunk = emails.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(',');
+
+    for (const provider of providerList) {
+      const rows = await db.prepare(
+        `SELECT email FROM used_emails WHERE email IN (${placeholders}) AND provider = ?`
+      ).bind(...chunk, provider).all();
+
+      if (rows.results) {
+        for (const row of rows.results) {
+          if (!duplicates[row.email]) duplicates[row.email] = [];
+          duplicates[row.email].push(provider);
+        }
+      }
+    }
+  }
+
+  return json({
+    ok: true,
+    total_checked: emails.length,
+    duplicates: duplicates,
+    duplicate_count: Object.keys(duplicates).length,
+  });
+}
+
+// ─── Sync: Record Used Emails ───────────────────────────────────────────────
+
+async function recordUsedEmails(db, licenseId, accounts) {
+  // Ensure table exists
+  await db.prepare(`CREATE TABLE IF NOT EXISTS used_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, provider TEXT NOT NULL,
+    license_id TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')), UNIQUE(email, provider)
+  )`).run();
+
+  // Auto-record emails that have successful provider status
+  let recorded = 0;
+  for (const acc of accounts) {
+    if (!acc.email) continue;
+    const providers = [];
+    if (acc.kiro_status === 'ok' || acc.kiro_status === 'exhausted') providers.push('kiro');
+    if (acc.cb_status === 'ok' || acc.cb_status === 'exhausted') providers.push('codebuddy');
+    if (acc.ws_status === 'ok' || acc.ws_status === 'exhausted') providers.push('wavespeed');
+    if (acc.gl_status === 'ok' || acc.gl_status === 'exhausted') providers.push('gumloop');
+
+    for (const provider of providers) {
+      try {
+        await db.prepare(
+          `INSERT OR IGNORE INTO used_emails (email, provider, license_id) VALUES (?, ?, ?)`
+        ).bind(acc.email, provider, licenseId).run();
+        recorded++;
+      } catch (e) {
+        // Ignore duplicate constraint errors
+      }
+    }
+  }
+  return recorded;
 }
 
 // ─── Admin: Licenses ────────────────────────────────────────────────────────

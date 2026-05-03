@@ -212,6 +212,18 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 14. Used emails (global duplicate prevention — never deleted)
+CREATE TABLE IF NOT EXISTS used_emails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    license_id TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(email, provider)
+);
+
+CREATE INDEX IF NOT EXISTS idx_used_emails_email ON used_emails(email);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_device_license ON device_bindings(license_id);
 CREATE INDEX IF NOT EXISTS idx_device_lastseen ON device_bindings(last_seen);
