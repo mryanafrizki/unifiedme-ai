@@ -206,7 +206,23 @@ async def fill_google_email(page, email: str) -> bool:
     await asyncio.sleep(0.3)
     await loc.press("Control+a")
     await loc.press("Backspace")
-    await loc.press_sequentially(email, delay=50)
+
+    # Type email with verification + fallback (press_sequentially can miss chars)
+    await loc.press_sequentially(email, delay=60)
+    await asyncio.sleep(0.3)
+    typed = await loc.input_value()
+    if typed.strip().lower() != email.strip().lower():
+        # Fallback: clear and use fill()
+        await loc.press("Control+a")
+        await loc.press("Backspace")
+        await loc.fill(email)
+        await asyncio.sleep(0.3)
+        typed = await loc.input_value()
+        if typed.strip().lower() != email.strip().lower():
+            # Last resort: keyboard.type
+            await loc.press("Control+a")
+            await loc.press("Backspace")
+            await page.keyboard.type(email, delay=35)
     await asyncio.sleep(0.5)
 
     clicked = await page.evaluate("""() => {
@@ -242,7 +258,23 @@ async def fill_google_password(page, password: str) -> bool:
     await asyncio.sleep(0.3)
     await loc.press("Control+a")
     await loc.press("Backspace")
-    await loc.press_sequentially(password, delay=60)
+
+    # Type password with verification + fallback
+    await loc.press_sequentially(password, delay=70)
+    await asyncio.sleep(0.3)
+    typed = await loc.input_value()
+    if len(typed) != len(password):
+        # Fallback: clear and use fill()
+        await loc.press("Control+a")
+        await loc.press("Backspace")
+        await loc.fill(password)
+        await asyncio.sleep(0.3)
+        typed = await loc.input_value()
+        if len(typed) != len(password):
+            # Last resort: keyboard.type
+            await loc.press("Control+a")
+            await loc.press("Backspace")
+            await page.keyboard.type(password, delay=35)
     await asyncio.sleep(0.5)
 
     clicked = await page.evaluate("""() => {
