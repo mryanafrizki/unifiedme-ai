@@ -254,26 +254,45 @@ async def run_login(email: str, password: str, proxy_url: str = "") -> dict:
     page.set_default_timeout(30000)
 
     try:
-        # Step 1: Navigate to chat.b.ai
+        # Step 1: Navigate to chat.b.ai — wait for full load
         emit({"type": "progress", "step": "navigate", "message": "Opening chat.b.ai..."})
-        await page.goto("https://chat.b.ai/chat", wait_until="domcontentloaded", timeout=30000)
-        await asyncio.sleep(3)
+        await page.goto("https://chat.b.ai/chat", wait_until="load", timeout=60000)
 
-        # Step 2: Click Log in
-        emit({"type": "progress", "step": "login", "message": "Clicking Log in..."})
-        for _ in range(10):
-            clicked = await page.evaluate("""() => {
+        # Step 2: Wait for "Log in" button to appear, then click
+        emit({"type": "progress", "step": "login", "message": "Waiting for Log in button..."})
+        try:
+            await page.wait_for_function("""() => {
                 for (const b of document.querySelectorAll('button')) {
-                    if (b.textContent.trim() === 'Log in' && b.offsetParent !== null) { b.click(); return true; }
+                    if (b.textContent.trim() === 'Log in' && b.offsetParent !== null) return true;
                 }
                 return false;
-            }""")
-            if clicked:
-                break
-            await asyncio.sleep(1)
-        await asyncio.sleep(2)
+            }""", timeout=30000)
+        except Exception:
+            pass
+        await asyncio.sleep(1)
 
-        # Step 3: Click Continue with Google (opens popup)
+        clicked = await page.evaluate("""() => {
+            for (const b of document.querySelectorAll('button')) {
+                if (b.textContent.trim() === 'Log in' && b.offsetParent !== null) { b.click(); return true; }
+            }
+            return false;
+        }""")
+        if not clicked:
+            return {"success": False, "error": "Log in button not found"}
+        emit({"type": "progress", "step": "login", "message": "Clicked Log in"})
+
+        # Step 3: Wait for "Continue with Google" button, then click (opens popup)
+        try:
+            await page.wait_for_function("""() => {
+                for (const b of document.querySelectorAll('button, a, div[role="button"]')) {
+                    if ((b.textContent||'').toLowerCase().includes('continue with google') && b.offsetParent !== null) return true;
+                }
+                return false;
+            }""", timeout=15000)
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+
         emit({"type": "progress", "step": "google", "message": "Clicking Continue with Google..."})
 
         popup_page = None
@@ -287,18 +306,14 @@ async def run_login(email: str, password: str, proxy_url: str = "") -> dict:
 
         page.context.on("page", on_popup)
 
-        for _ in range(10):
-            clicked = await page.evaluate("""() => {
-                for (const b of document.querySelectorAll('button, a, div[role="button"]')) {
-                    if ((b.textContent||'').toLowerCase().includes('continue with google') && b.offsetParent !== null) {
-                        b.click(); return true;
-                    }
+        await page.evaluate("""() => {
+            for (const b of document.querySelectorAll('button, a, div[role="button"]')) {
+                if ((b.textContent||'').toLowerCase().includes('continue with google') && b.offsetParent !== null) {
+                    b.click(); return true;
                 }
-                return false;
-            }""")
-            if clicked:
-                break
-            await asyncio.sleep(1)
+            }
+            return false;
+        }""")
 
         try:
             await asyncio.wait_for(popup_future, timeout=8)
