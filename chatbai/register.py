@@ -423,35 +423,57 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
     from browserforge.fingerprints import Screen
     from camoufox.async_api import AsyncCamoufox
 
-    proxy_msg = f" via {proxy_url}" if proxy_url else ""
-    print()
-    print("=" * 64)
-    print("  chat.b.ai Signup Interceptor (Google OAuth)")
-    print("=" * 64)
-    print()
-    print(f"  Email  : {email}")
-    print(f"  Proxy  : {proxy_url or 'none'}")
-    print(f"  Mode   : {'headless' if headless else 'visible'}")
-    print()
-    print("  All API calls will be captured.")
-    print("  Press Ctrl+C when done to save the log.")
-    print("=" * 64)
-    print()
+    # Also respect BATCHER_CAMOUFOX_HEADLESS env var (set by batch_runner)
+    if os.getenv("BATCHER_CAMOUFOX_HEADLESS", "").lower() in ("true", "1"):
+        headless = True
+
+    emit({"type": "progress", "step": "init", "message": f"Starting ChatBAI signup for {email}..."})
 
     # ── Launch Camoufox ─────────────────────────────────────────────
     proxy_cfg = {"server": proxy_url} if proxy_url else None
 
-    manager = AsyncCamoufox(
-        headless=headless,
-        os="windows",
-        block_webrtc=True,
-        humanize=False,
-        screen=Screen(max_width=1920, max_height=1080),
-        proxy=proxy_cfg,
-    )
-    browser = await manager.__aenter__()
-    page = await browser.new_page()
-    page.set_default_timeout(30000)
+    try:
+        manager = AsyncCamoufox(
+            headless=headless,
+            os="windows",
+            block_webrtc=True,
+            humanize=False,
+            screen=Screen(max_width=1920, max_height=1080),
+            proxy=proxy_cfg,
+        )
+    except Exception as exc:
+        emit({"type": "result", "success": False, "error": f"Browser launch failed: {exc}", "email": email})
+        return
+    try:
+        browser = await manager.__aenter__()
+    except Exception as exc:
+        emit({"type": "result", "success": False, "error": f"Browser start failed: {exc}", "email": email})
+        return
+
+    try:
+        page = await browser.new_page()
+        page.set_default_timeout(30000)
+    except Exception as exc:
+        emit({"type": "result", "success": False, "error": f"Page creation failed: {exc}", "email": email})
+        try:
+            await manager.__aexit__(None, None, None)
+        except Exception:
+            pass
+        return
+
+    try:
+        await _run_signup_flow(page, email, password, manager)
+    except Exception as exc:
+        emit({"type": "result", "success": False, "error": f"Signup flow error: {exc}", "email": email})
+    finally:
+        try:
+            await manager.__aexit__(None, None, None)
+        except Exception:
+            pass
+
+
+async def _run_signup_flow(page, email: str, password: str, manager):
+    """Core signup flow — separated for clean error handling."""
 
     # ── HTTP interceptor ────────────────────────────────────────────
     async def on_response(response):
@@ -783,11 +805,6 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
         "user_id": user_id,
         "claimed": claimed,
     })
-
-    try:
-        await manager.__aexit__(None, None, None)
-    except Exception:
-        pass
 
 
 def save_logs():
