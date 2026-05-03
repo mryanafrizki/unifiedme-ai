@@ -953,33 +953,46 @@ async def _import_chatbai(job: AccountJob) -> bool:
     cbai_data = job.result.get("chatbai", {})
     api_key = cbai_data.get("api_key", "")
     session_token = cbai_data.get("session_token", "")
+
+    log.info("ChatBAI import for %s: api_key=%s, session_token=%s, account_id=%s",
+             job.email, bool(api_key), bool(session_token), job.account_id)
+
     if not api_key and not session_token:
+        batch_state.broadcast({
+            "type": "import_error", "provider": "chatbai",
+            "email": job.email, "error": "No api_key or session_token",
+        })
+        return False
+
+    if not job.account_id:
+        batch_state.broadcast({
+            "type": "import_error", "provider": "chatbai",
+            "email": job.email, "error": "No account_id (account not created in DB)",
+        })
         return False
 
     try:
-        if job.account_id:
-            await db.update_account(
-                job.account_id,
-                cbai_status="ok",
-                cbai_api_key=api_key,
-                cbai_session_token=session_token,
-                cbai_credits=CBAI_DEFAULT_CREDITS,
-                cbai_error="",
-                cbai_error_count=0,
-            )
+        await db.update_account(
+            job.account_id,
+            cbai_status="ok",
+            cbai_api_key=api_key,
+            cbai_session_token=session_token,
+            cbai_credits=CBAI_DEFAULT_CREDITS,
+            cbai_error="",
+            cbai_error_count=0,
+        )
         batch_state.broadcast({
             "type": "import_ok",
             "provider": "chatbai",
             "email": job.email,
         })
+        log.info("ChatBAI import OK for %s (api_key=%s)", job.email, api_key[:20] if api_key else "none")
         return True
     except Exception as exc:
-        log.exception("ChatBAI import error for %s: %s", job.email, exc)
+        log.exception("ChatBAI import FAILED for %s: %s", job.email, exc)
         batch_state.broadcast({
-            "type": "import_error",
-            "provider": "chatbai",
-            "email": job.email,
-            "error": str(exc),
+            "type": "import_error", "provider": "chatbai",
+            "email": job.email, "error": str(exc),
         })
         return False
 
