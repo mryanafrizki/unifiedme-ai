@@ -241,7 +241,14 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             result.update(gl_result)
 
         if "chatbai" in job.providers:
-            cbai_result, _ = await _run_chatbai_login(job, proxy_override=proxy_url_used or None)
+            # ChatBAI: use smart rotate per-job (get fresh proxy each time)
+            cbai_proxy = proxy_url_used or None
+            smart = (await db.get_setting("batch_smart_rotate", "false")).lower() in ("true", "1")
+            if smart:
+                fresh_proxy = await db.get_proxy_for_batch()
+                if fresh_proxy:
+                    cbai_proxy = fresh_proxy["url"]
+            cbai_result, _ = await _run_chatbai_login(job, proxy_override=cbai_proxy)
             result.update(cbai_result)
 
         job.result = result
