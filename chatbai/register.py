@@ -720,112 +720,58 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # Wait for claim API call to complete
     await asyncio.sleep(3)
 
-    # ── Navigate to API key page and create key ─────────────────────
-    emit({"type": "progress", "step": "api_key", "message": "Getting API key..."})
+    # ── Navigate to API key page ──────────────────────────────────────
+    emit({"type": "progress", "step": "api_key", "message": "Navigating to API key page..."})
     api_key = ""
 
-    # Set up response interceptor to capture API key from tRPC response
+    # Intercept tRPC responses to capture API key when created
     _captured_api_key = {"key": ""}
 
     async def _capture_api_key_response(response):
-        if "apiKey.createApiKey" in response.url or "apiKey.create" in response.url:
-            try:
+        try:
+            if "apiKey" in response.url and response.status == 200:
                 body = await response.text()
                 import re
                 match = re.search(r'sk-[a-zA-Z0-9]{20,}', body)
                 if match:
                     _captured_api_key["key"] = match.group(0)
-                    emit({"type": "debug", "step": "api_key", "message": f"Captured from response: {match.group(0)[:20]}..."})
-            except Exception:
-                pass
+                    emit({"type": "progress", "step": "api_key", "message": f"API key captured: {match.group(0)[:20]}..."})
+        except Exception:
+            pass
 
     page.on("response", _capture_api_key_response)
 
     try:
         await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
+    except Exception as e:
+        emit({"type": "debug", "step": "api_key", "message": f"Navigate to /key failed: {e}"})
 
-        # Click "Create Key" or similar button
-        for _ in range(5):
-            clicked = await page.evaluate("""() => {
-                for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                    const txt = (btn.textContent || '').trim().toLowerCase();
-                    if (btn.offsetParent === null) continue;
-                    if (txt.includes('create') && (txt.includes('key') || txt.includes('api'))) {
-                        btn.click(); return 'clicked:' + txt.substring(0, 30);
-                    }
-                }
-                return null;
-            }""")
-            if clicked:
-                emit({"type": "debug", "step": "api_key", "message": clicked})
-                await asyncio.sleep(2)
-                break
-            await asyncio.sleep(1)
-
-        # Fill random key name if input field appears
-        import random
-        _adj = ["fast", "main", "dev", "prod", "test", "local", "cloud", "app", "my", "lab"]
-        _noun = ["server", "worker", "agent", "bot", "runner", "node", "service", "client", "hub", "api"]
-        key_name = f"{random.choice(_adj)}-{random.choice(_noun)}-{random.randint(10, 99)}"
+    # Wait for user to manually create API key, or auto-capture if it happens
+    # Poll for up to 30 seconds
+    for _ in range(30):
+        if _captured_api_key["key"]:
+            api_key = _captured_api_key["key"]
+            break
+        # Also check DOM
         try:
-            name_filled = await page.evaluate("""(name) => {
-                const inputs = document.querySelectorAll('input[type="text"], input[placeholder*="name"], input[placeholder*="Name"], input:not([type])');
-                for (const inp of inputs) {
-                    if (inp.offsetParent === null) continue;
-                    inp.focus();
-                    // Use React setter
-                    const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
-                    const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : null;
-                    if (setter) setter.call(inp, name);
-                    else inp.value = name;
-                    inp.dispatchEvent(new Event('input', { bubbles: true }));
-                    inp.dispatchEvent(new Event('change', { bubbles: true }));
-                    return 'filled:' + name;
-                }
-                return null;
-            }""", key_name)
-            if name_filled:
-                emit({"type": "debug", "step": "api_key", "message": name_filled})
-                await asyncio.sleep(1)
-
-                # Click Create/Submit button inside the form/modal
-                await page.evaluate("""() => {
-                    for (const btn of document.querySelectorAll('button')) {
-                        const txt = (btn.textContent || '').trim().toLowerCase();
-                        if (btn.offsetParent === null) continue;
-                        if (txt === 'create' || txt === 'create key' || txt === 'submit' || txt === 'confirm' || txt === 'add') {
-                            btn.click(); return true;
-                        }
-                    }
-                    return false;
-                }""")
-                await asyncio.sleep(5)
-        except Exception:
-            pass
-
-        # Check captured key from response interceptor first
-        api_key = _captured_api_key["key"]
-
-        # Fallback: extract from page DOM
-        if not api_key:
-            api_key = await page.evaluate("""() => {
-                const text = document.body.innerText || '';
-                const match = text.match(/sk-[a-zA-Z0-9]{20,}/);
-                if (match) return match[0];
+            found = await page.evaluate("""() => {
                 for (const el of document.querySelectorAll('input, code, pre, span, td, div, p')) {
                     const val = (el.value || el.textContent || '').trim();
                     if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80 && !val.includes(' ')) return val;
                 }
                 return '';
-            }""") or ""
+            }""")
+            if found:
+                api_key = found
+                emit({"type": "progress", "step": "api_key", "message": f"API key found: {found[:20]}..."})
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(1)
 
-        if api_key:
-            emit({"type": "progress", "step": "api_key", "message": f"API key: {api_key[:20]}..."})
-        else:
-            emit({"type": "debug", "step": "api_key", "message": "Could not extract API key"})
-    except Exception as e:
-        emit({"type": "debug", "step": "api_key", "message": f"API key error: {e}"})
+    if not api_key:
+        emit({"type": "debug", "step": "api_key", "message": "No API key captured (will use session_token)"})
 
     # ── Extract session token from cookies ──────────────────────────
     session_token = ""
