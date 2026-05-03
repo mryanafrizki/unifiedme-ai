@@ -780,12 +780,12 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
             "id": model_name,
             "object": "model",
             "created": 1700000000,
-            "owned_by": "kiro" if tier == Tier.STANDARD else (
-"wavespeed" if tier == Tier.WAVESPEED else (
-                "gumloop" if tier == Tier.MAX_GL else (
-                    "chatbai" if tier == Tier.CHATBAI else "codebuddy"
-                )
-                )
+            "owned_by": (
+                "kiro" if tier == Tier.STANDARD else
+                "wavespeed" if tier == Tier.WAVESPEED else
+                "gumloop" if tier == Tier.MAX_GL else
+                "chatbai" if tier == Tier.CHATBAI else
+                "codebuddy"
             ),
             "permission": [],
             "root": model_name,
