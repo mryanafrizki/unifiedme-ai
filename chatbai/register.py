@@ -720,58 +720,91 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # Wait for claim API call to complete
     await asyncio.sleep(3)
 
-    # ── Navigate to API key page ──────────────────────────────────────
-    emit({"type": "progress", "step": "api_key", "message": "Navigating to API key page..."})
+    # ── Create API key via tRPC (pure HTTP, no DOM) ───────────────────
+    emit({"type": "progress", "step": "api_key", "message": "Creating API key via tRPC..."})
     api_key = ""
 
-    # Intercept tRPC responses to capture API key when created
-    _captured_api_key = {"key": ""}
-
-    async def _capture_api_key_response(response):
-        try:
-            if "apiKey" in response.url and response.status == 200:
-                body = await response.text()
-                import re
-                match = re.search(r'sk-[a-zA-Z0-9]{20,}', body)
-                if match:
-                    _captured_api_key["key"] = match.group(0)
-                    emit({"type": "progress", "step": "api_key", "message": f"API key captured: {match.group(0)[:20]}..."})
-        except Exception:
-            pass
-
-    page.on("response", _capture_api_key_response)
-
     try:
-        await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(2)
+        # Get session cookie and x-ainft-chat-auth header from browser
+        cookies = await page.context.cookies(["https://chat.b.ai"])
+        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+
+        # Get x-ainft-chat-auth from page (set by frontend JS)
+        auth_header = await page.evaluate("""() => {
+            // Try to find it in recent XHR requests or localStorage
+            for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                const val = localStorage.getItem(key);
+                if (key.includes('auth') && val && val.length > 20) return val;
+            }
+            return '';
+        }""") or ""
+
+        # Also try to extract from a live request by fetching session
+        if not auth_header:
+            auth_header = await page.evaluate("""async () => {
+                try {
+                    const resp = await fetch('/api/auth/session', { credentials: 'include' });
+                    // The x-ainft-chat-auth is set by middleware, we need to get it from the page state
+                    return '';
+                } catch(e) { return ''; }
+            }""") or ""
+
+        import random
+        _adj = ["fast", "main", "dev", "prod", "test", "local", "cloud", "app", "my", "lab"]
+        _noun = ["server", "worker", "agent", "bot", "runner", "node", "service", "client", "hub", "api"]
+        key_name = f"{random.choice(_adj)}-{random.choice(_noun)}-{random.randint(10, 99)}"
+
+        # Create API key via page.evaluate fetch (uses browser's cookies automatically)
+        result = await page.evaluate("""async (keyName) => {
+            try {
+                const resp = await fetch('/trpc/lambda/apiKey.createApiKey?batch=1', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({"0": {"json": {"name": keyName}}})
+                });
+                const text = await resp.text();
+                return { status: resp.status, body: text };
+            } catch(e) {
+                return { status: 0, body: String(e) };
+            }
+        }""", key_name)
+
+        status = result.get("status", 0)
+        body = result.get("body", "")
+        emit({"type": "debug", "step": "api_key", "message": f"tRPC createApiKey status={status}, body={body[:200]}"})
+
+        if status == 200 and body:
+            import re
+            match = re.search(r'sk-[a-zA-Z0-9]{20,}', body)
+            if match:
+                api_key = match.group(0)
+                emit({"type": "progress", "step": "api_key", "message": f"API key created: {api_key[:20]}..."})
+
+        # Fallback: check if key already exists on /key page
+        if not api_key:
+            try:
+                await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=15000)
+                await asyncio.sleep(3)
+                api_key = await page.evaluate("""() => {
+                    for (const el of document.querySelectorAll('input, code, pre, span, td, div, p')) {
+                        const val = (el.value || el.textContent || '').trim();
+                        if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80 && !val.includes(' ')) return val;
+                    }
+                    return '';
+                }""") or ""
+                if api_key:
+                    emit({"type": "progress", "step": "api_key", "message": f"API key from page: {api_key[:20]}..."})
+            except Exception:
+                pass
+
+        if not api_key:
+            emit({"type": "debug", "step": "api_key", "message": "Could not create/find API key"})
     except Exception as e:
-        emit({"type": "debug", "step": "api_key", "message": f"Navigate to /key failed: {e}"})
-
-    # Wait for user to manually create API key, or auto-capture if it happens
-    # Poll for up to 30 seconds
-    for _ in range(30):
-        if _captured_api_key["key"]:
-            api_key = _captured_api_key["key"]
-            break
-        # Also check DOM
-        try:
-            found = await page.evaluate("""() => {
-                for (const el of document.querySelectorAll('input, code, pre, span, td, div, p')) {
-                    const val = (el.value || el.textContent || '').trim();
-                    if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80 && !val.includes(' ')) return val;
-                }
-                return '';
-            }""")
-            if found:
-                api_key = found
-                emit({"type": "progress", "step": "api_key", "message": f"API key found: {found[:20]}..."})
-                break
-        except Exception:
-            pass
-        await asyncio.sleep(1)
-
-    if not api_key:
-        emit({"type": "debug", "step": "api_key", "message": "No API key captured (will use session_token)"})
+        emit({"type": "debug", "step": "api_key", "message": f"API key error: {e}"})
 
     # ── Extract session token from cookies ──────────────────────────
     session_token = ""
