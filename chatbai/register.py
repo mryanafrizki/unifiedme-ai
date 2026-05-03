@@ -229,10 +229,11 @@ async def fill_google_password(page, password: str) -> bool:
     await asyncio.sleep(0.3)
     await locator.press("Control+a")
     await locator.press("Backspace")
-        # Type each char individually with random delay (more human-like)
-        for ch in password:
-            await locator.press(ch)
-            await asyncio.sleep(0.05 + 0.1 * __import__('random').random())  # 50-150ms per char
+    # Type each char individually with random delay (more human-like)
+    import random as _rnd
+    for ch in password:
+        await locator.press(ch)
+        await asyncio.sleep(0.05 + 0.1 * _rnd.random())  # 50-150ms per char
     await asyncio.sleep(0.3)
 
     typed = await locator.input_value()
