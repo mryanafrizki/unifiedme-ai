@@ -663,19 +663,30 @@ async def _run_signup_flow(page, email: str, password: str, manager):
         emit({"type": "result", "success": False, "error": "Failed to redirect to chat.b.ai after consent", "email": email})
         return
 
-    emit({"type": "progress", "step": "done", "message": "Logged in to chat.b.ai!"})
+    emit({"type": "progress", "step": "done", "message": "Consent done, waiting for OAuth callback to complete..."})
 
-    # ── Reload page to ensure session is fully established ──────────
-    try:
-        await page.goto("https://chat.b.ai/chat", wait_until="load", timeout=30000)
-    except Exception:
-        pass
-    # Wait for page to be fully interactive (JS loaded, session settled)
-    try:
-        await page.wait_for_function("() => document.readyState === 'complete'", timeout=15000)
-    except Exception:
-        pass
-    await asyncio.sleep(5)
+    # ── Wait for OAuth callback to actually complete ────────────────
+    # Don't reload — let the page finish the callback naturally
+    # Poll /api/auth/session until it returns a user (not null)
+    for _ in range(30):
+        try:
+            session = await page.evaluate("""async () => {
+                try {
+                    const resp = await fetch('/api/auth/session', { credentials: 'include' });
+                    const data = await resp.json();
+                    return data && data.user ? data.user.id : null;
+                } catch(e) { return null; }
+            }""")
+            if session:
+                emit({"type": "progress", "step": "session", "message": f"Session confirmed: {session}"})
+                break
+        except Exception:
+            pass
+        await asyncio.sleep(1)
+    else:
+        emit({"type": "debug", "step": "session", "message": "Session not confirmed after 30s, proceeding anyway"})
+
+    await asyncio.sleep(3)
 
     # ── Claim signup bonus ─────────────────────────────────────────
     emit({"type": "progress", "step": "claim", "message": "Looking for claim bonus button..."})
