@@ -12,7 +12,7 @@ Usage:
 
 Output:
     - Console: live filtered request log
-    - _tmp_chatbai/intercept_chatbai_log.json: full HAR dump on exit
+    - chatbai/register_log.json: full HAR dump on exit
 
 Press Ctrl+C when done to save the log.
 """
@@ -62,7 +62,7 @@ if sys.platform == "win32":
 # ── Config ──────────────────────────────────────────────────────────
 CHATBAI_URL = "https://chat.b.ai"
 OUTPUT_DIR = Path(__file__).parent
-LOG_FILE = OUTPUT_DIR / "intercept_chatbai_log.json"
+LOG_FILE = OUTPUT_DIR / "register_log.json"
 
 # Domains to capture
 CAPTURE_DOMAINS = [
