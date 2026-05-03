@@ -247,36 +247,48 @@ async def fill_google_email(page, email: str) -> bool:
 
 
 async def fill_google_password(page, password: str) -> bool:
-    """Fill Google password step."""
+    """Fill Google password step with retry logic."""
     try:
         await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=10000)
     except Exception:
         return False
 
-    loc = page.locator('input[name="Passwd"]').first
-    await loc.click(force=True)
-    await asyncio.sleep(0.3)
-    await loc.press("Control+a")
-    await loc.press("Backspace")
+    # Try up to 3 times to type password correctly
+    for attempt in range(3):
+        loc = page.locator('input[name="Passwd"]').first
+        await loc.click(force=True)
+        await asyncio.sleep(0.5)
 
-    # Type password with verification + fallback
-    await loc.press_sequentially(password, delay=70)
-    await asyncio.sleep(0.3)
-    typed = await loc.input_value()
-    if len(typed) != len(password):
-        # Fallback: clear and use fill()
+        # Clear field
         await loc.press("Control+a")
         await loc.press("Backspace")
-        await loc.fill(password)
         await asyncio.sleep(0.3)
-        typed = await loc.input_value()
-        if len(typed) != len(password):
-            # Last resort: keyboard.type
-            await loc.press("Control+a")
-            await loc.press("Backspace")
-            await page.keyboard.type(password, delay=35)
-    await asyncio.sleep(0.5)
 
+        # Type with press_sequentially (most reliable for Google)
+        await loc.press_sequentially(password, delay=80)
+        await asyncio.sleep(0.5)
+
+        # Verify what was typed
+        typed = await loc.input_value()
+        emit({"type": "debug", "step": "password", "message": f"Attempt {attempt+1}: typed {len(typed)} chars, expected {len(password)}"})
+
+        if len(typed) >= len(password):
+            break
+
+        # Retry: click field again, clear, try keyboard.type
+        emit({"type": "debug", "step": "password", "message": f"Retry with keyboard.type..."})
+        await loc.click(force=True)
+        await asyncio.sleep(0.3)
+        await loc.press("Control+a")
+        await loc.press("Backspace")
+        await asyncio.sleep(0.3)
+        await page.keyboard.type(password, delay=50)
+        await asyncio.sleep(0.5)
+        typed = await loc.input_value()
+        if len(typed) >= len(password):
+            break
+
+    # Click Next
     clicked = await page.evaluate("""() => {
         const btn = document.querySelector('#passwordNext button');
         if (btn) { btn.click(); return true; }
@@ -285,6 +297,7 @@ async def fill_google_password(page, password: str) -> bool:
     if not clicked:
         await loc.press("Enter")
 
+    # Wait for result
     for _ in range(20):
         await asyncio.sleep(1)
         try:
@@ -302,7 +315,7 @@ async def fill_google_password(page, password: str) -> bool:
                 return text.includes('wrong password') || text.includes('incorrect');
             }""")
             if has_error:
-                emit({"type": "error", "step": "password", "message": "Wrong password"})
+                emit({"type": "error", "step": "password", "message": "Wrong password detected by Google"})
                 return False
         except Exception:
             pass
@@ -674,26 +687,26 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     emit({"type": "progress", "step": "email", "message": f"Filling email: {email}"})
     ok = await fill_google_email(google_page, email)
     if not ok:
-        emit({"type": "error", "step": "email", "message": "Failed to fill email"})
-        emit({"type": "error", "step": "email", "message": "Failed to fill email"})
-    else:
-        await asyncio.sleep(1)
+        emit({"type": "result", "success": False, "error": "Failed to fill Google email", "email": email})
+        return
 
-        # ── Fill Google password ────────────────────────────────────
-        emit({"type": "progress", "step": "password", "message": "Filling password..."})
-        ok = await fill_google_password(google_page, password)
-        if not ok:
-            emit({"type": "error", "step": "password", "message": "Failed to fill password"})
-            emit({"type": "error", "step": "password", "message": "Failed to fill password"})
-        else:
-            # ── Handle consent + redirect ───────────────────────────
-            emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
-            landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=popup_page)
-            if landed:
-                emit({"type": "progress", "step": "done", "message": "Logged in to chat.b.ai!"})
-            else:
-                emit({"type": "debug", "step": "redirect_timeout", "url": page.url[:80]})
-                emit({"type": "error", "step": "redirect", "message": "Redirect timeout"})
+    await asyncio.sleep(1)
+
+    # ── Fill Google password ────────────────────────────────────────
+    emit({"type": "progress", "step": "password", "message": "Filling password..."})
+    ok = await fill_google_password(google_page, password)
+    if not ok:
+        emit({"type": "result", "success": False, "error": "Failed to fill Google password (wrong password or typing failed)", "email": email})
+        return
+
+    # ── Handle consent + redirect ───────────────────────────────────
+    emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
+    landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=popup_page)
+    if not landed:
+        emit({"type": "result", "success": False, "error": "Failed to redirect to chat.b.ai after consent", "email": email})
+        return
+
+    emit({"type": "progress", "step": "done", "message": "Logged in to chat.b.ai!"})
 
     # ── Claim signup bonus ─────────────────────────────────────────
     await asyncio.sleep(5)  # Wait for claim popup to appear
