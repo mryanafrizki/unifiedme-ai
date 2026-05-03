@@ -662,49 +662,90 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
         await asyncio.sleep(1)
 
     if not claimed:
-        # Fallback: check if already claimed via tRPC
         emit({"type": "debug", "step": "claim", "message": "No claim button found, checking if auto-claimed..."})
 
     # Wait for claim API call to complete
     await asyncio.sleep(3)
 
-    # ── Extract account info ────────────────────────────────────────
-    emit({"type": "progress", "step": "extract", "message": "Extracting account info..."})
+    # ── Navigate to API key page and create key ─────────────────────
+    emit({"type": "progress", "step": "api_key", "message": "Getting API key..."})
+    api_key = ""
     try:
-        info = await page.evaluate("""() => {
-            const result = {};
-            for (let i = 0; i < localStorage.length; i++) {
-                const key = localStorage.key(i);
-                const val = localStorage.getItem(key);
-                if (key.toLowerCase().includes('token') || key.toLowerCase().includes('auth')
-                    || key.toLowerCase().includes('session') || key.toLowerCase().includes('user')) {
-                    result[key] = val ? val.substring(0, 500) : '';
+        await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=20000)
+        await asyncio.sleep(3)
+
+        # Click "Create Key" or similar button
+        for _ in range(5):
+            clicked = await page.evaluate("""() => {
+                for (const btn of document.querySelectorAll('button, div[role="button"]')) {
+                    const txt = (btn.textContent || '').trim().toLowerCase();
+                    if (btn.offsetParent === null) continue;
+                    if (txt.includes('create') && (txt.includes('key') || txt.includes('api'))) {
+                        btn.click(); return 'clicked:' + txt.substring(0, 30);
+                    }
                 }
+                return null;
+            }""")
+            if clicked:
+                emit({"type": "debug", "step": "api_key", "message": clicked})
+                await asyncio.sleep(3)
+                break
+            await asyncio.sleep(1)
+
+        # Extract API key from page (sk-xxx pattern)
+        api_key = await page.evaluate("""() => {
+            const text = document.body.innerText || '';
+            const match = text.match(/sk-[a-zA-Z0-9]{20,}/);
+            if (match) return match[0];
+            // Check inputs and code elements
+            for (const el of document.querySelectorAll('input, code, pre, span, td')) {
+                const val = (el.value || el.textContent || '').trim();
+                if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80) return val;
             }
-            result['_cookies'] = document.cookie.substring(0, 1000);
-            result['_url'] = window.location.href;
-            return result;
-        }""")
-        emit({"type": "account_info", "data": info})
+            return '';
+        }""") or ""
+
+        if api_key:
+            emit({"type": "progress", "step": "api_key", "message": f"API key: {api_key[:20]}..."})
+        else:
+            emit({"type": "debug", "step": "api_key", "message": "Could not extract API key from /key page"})
+    except Exception as e:
+        emit({"type": "debug", "step": "api_key", "message": f"API key extraction error: {e}"})
+
+    # ── Extract session token from cookies ──────────────────────────
+    session_token = ""
+    try:
+        cookies = await page.context.cookies(["https://chat.b.ai"])
+        for cookie in cookies:
+            if cookie.get("name") == "__Secure-authjs.session-token":
+                session_token = cookie.get("value", "")
+                break
     except Exception:
         pass
 
-    # ── Keep alive until Ctrl+C ─────────────────────────────────────
-    print()
-    print("=" * 64)
-    print("  Interceptor running. All traffic is being captured.")
-    print("  Press Ctrl+C to save and exit.")
-    print("=" * 64)
-    print()
-
+    # ── Extract user info ───────────────────────────────────────────
+    user_id = ""
     try:
-        while True:
-            await asyncio.sleep(1)
-    except (KeyboardInterrupt, asyncio.CancelledError):
+        info = await page.evaluate("""() => {
+            const cookies = document.cookie;
+            const match = cookies.match(/ainft_posthog_id=(user_[a-zA-Z0-9]+)/);
+            return match ? match[1] : '';
+        }""")
+        user_id = info or ""
+    except Exception:
         pass
 
-    # ── Save logs ───────────────────────────────────────────────────
-    save_logs()
+    # ── Emit result for batch runner ────────────────────────────────
+    success = bool(session_token or api_key)
+    emit({
+        "type": "result",
+        "success": success,
+        "email": email,
+        "api_key": api_key,
+        "session_token": session_token[:200] if session_token else "",
+        "user_id": user_id,
+        "claimed": claimed,
+    })
 
     try:
         await manager.__aexit__(None, None, None)
