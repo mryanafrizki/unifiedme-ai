@@ -3744,7 +3744,7 @@ function renderModelColumn(containerId, models, tier) {
     container.innerHTML = '<div class="empty-state">No models in this tier</div>';
     return;
   }
-  var chatbaiPremium = ['bchatai-gpt-5.5','bchatai-gpt-5.4','bchatai-gpt-5.4-pro','bchatai-claude-opus-4.7','bchatai-claude-opus-4.6','bchatai-claude-opus-4.5'];
+  var chatbaiPremium = ['bchatai-gpt-5.5','bchatai-gpt-5.4','bchatai-gpt-5.4-pro','bchatai-claude-opus-4.7','bchatai-claude-opus-4.6','bchatai-claude-opus-4.5','bchatai-claude-sonnet-4.6','bchatai-claude-sonnet-4.5'];
   container.innerHTML = models.map(m => {
     const isThinking = m.name.endsWith('-thinking');
     const isPremium = tier === 'chatbai' && chatbaiPremium.includes(m.name);

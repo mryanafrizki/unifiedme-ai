@@ -167,8 +167,6 @@ _CHATBAI_MODELS = [
     "bchatai-gpt-5.4-nano",
     "bchatai-gpt-5.2",
     "bchatai-claude-haiku-4.5",
-    "bchatai-claude-sonnet-4.5",
-    "bchatai-claude-sonnet-4.6",
     "bchatai-gemini-3.1-pro",
     "bchatai-gemini-3-flash",
     "bchatai-minimax-m2.5",
@@ -181,6 +179,8 @@ _CHATBAI_MODELS = [
     "bchatai-claude-opus-4.7",
     "bchatai-claude-opus-4.6",
     "bchatai-claude-opus-4.5",
+    "bchatai-claude-sonnet-4.6",
+    "bchatai-claude-sonnet-4.5",
 ]
 
 # Build lookup: model_name → Tier

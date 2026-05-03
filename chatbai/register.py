@@ -727,6 +727,27 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # Wait for claim API call to complete
     await asyncio.sleep(3)
 
+    # ── Extract session token + user info BEFORE navigating away ────
+    session_token = ""
+    user_id = ""
+    try:
+        cookies = await page.context.cookies(["https://chat.b.ai"])
+        for cookie in cookies:
+            if cookie.get("name") == "__Secure-authjs.session-token":
+                session_token = cookie.get("value", "")
+                break
+    except Exception:
+        pass
+    try:
+        user_id = await page.evaluate("""() => {
+            const cookies = document.cookie;
+            const match = cookies.match(/ainft_posthog_id=(user_[a-zA-Z0-9]+)/);
+            return match ? match[1] : '';
+        }""") or ""
+    except Exception:
+        pass
+    emit({"type": "debug", "step": "extract", "message": f"session_token={'yes' if session_token else 'no'}, user_id={user_id or 'none'}"})
+
     # ── Create API key via tRPC ────────────────────────────────────────
     emit({"type": "progress", "step": "api_key", "message": "Creating API key..."})
     api_key = ""
@@ -792,36 +813,12 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     except Exception as e:
         emit({"type": "debug", "step": "api_key", "message": f"API key error: {e}"})
 
-    # ── Extract session token from cookies ──────────────────────────
-    session_token = ""
-    try:
-        cookies = await page.context.cookies(["https://chat.b.ai"])
-        for cookie in cookies:
-            if cookie.get("name") == "__Secure-authjs.session-token":
-                session_token = cookie.get("value", "")
-                break
-    except Exception:
-        pass
-
-    # ── Extract user info ───────────────────────────────────────────
-    user_id = ""
-    try:
-        info = await page.evaluate("""() => {
-            const cookies = document.cookie;
-            const match = cookies.match(/ainft_posthog_id=(user_[a-zA-Z0-9]+)/);
-            return match ? match[1] : '';
-        }""")
-        user_id = info or ""
-    except Exception:
-        pass
+    # session_token and user_id already extracted above (before API key step)
 
     # ── Emit result for batch runner ────────────────────────────────
     # If we got here, login was successful (failures return early above)
+    # api_key is needed for proxy, session_token is backup
     success = bool(api_key or session_token)
-    if not success:
-        # Last resort: we know login worked, just couldn't extract credentials
-        emit({"type": "debug", "step": "result", "message": "Login succeeded but no api_key or session_token extracted"})
-        success = bool(api_key)  # Only truly success if we have api_key for proxy use
     emit({
         "type": "result",
         "success": success,
