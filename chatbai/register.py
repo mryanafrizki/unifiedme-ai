@@ -688,9 +688,46 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
             }""")
             if clicked:
                 emit({"type": "debug", "step": "api_key", "message": clicked})
-                await asyncio.sleep(3)
+                await asyncio.sleep(2)
                 break
             await asyncio.sleep(1)
+
+        # Fill random key name if input field appears
+        import random
+        _adj = ["fast", "main", "dev", "prod", "test", "local", "cloud", "app", "my", "lab"]
+        _noun = ["server", "worker", "agent", "bot", "runner", "node", "service", "client", "hub", "api"]
+        key_name = f"{random.choice(_adj)}-{random.choice(_noun)}-{random.randint(10, 99)}"
+        try:
+            name_filled = await page.evaluate("""(name) => {
+                const inputs = document.querySelectorAll('input[type="text"], input[placeholder*="name"], input[placeholder*="Name"], input:not([type])');
+                for (const inp of inputs) {
+                    if (inp.offsetParent === null) continue;
+                    inp.focus();
+                    inp.value = name;
+                    inp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inp.dispatchEvent(new Event('change', { bubbles: true }));
+                    return 'filled:' + name;
+                }
+                return null;
+            }""", key_name)
+            if name_filled:
+                emit({"type": "debug", "step": "api_key", "message": name_filled})
+                await asyncio.sleep(1)
+
+                # Click Create/Submit button inside the form/modal
+                await page.evaluate("""() => {
+                    for (const btn of document.querySelectorAll('button')) {
+                        const txt = (btn.textContent || '').trim().toLowerCase();
+                        if (btn.offsetParent === null) continue;
+                        if (txt === 'create' || txt === 'create key' || txt === 'submit' || txt === 'confirm') {
+                            btn.click(); return true;
+                        }
+                    }
+                    return false;
+                }""")
+                await asyncio.sleep(3)
+        except Exception:
+            pass
 
         # Extract API key from page (sk-xxx pattern)
         api_key = await page.evaluate("""() => {
