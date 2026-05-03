@@ -1240,17 +1240,9 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
 
 @router.get("/batch/status")
 async def batch_status_endpoint(request: Request, _: bool = Depends(verify_admin)):
-    """Get batch status including job logs for polling-based updates.
-
-    Query params:
-        logs_since: Only return logs newer than this index (per job) to reduce payload.
-    """
-    logs_since = int(request.query_params.get("logs_since", 0))
-
+    """Get batch status including failed jobs (not saved to DB)."""
     jobs = []
     failed_jobs = []
-    all_logs: list[dict] = []
-
     for j in batch_state.jobs:
         job_info = {
             "id": j.id,
@@ -1259,16 +1251,9 @@ async def batch_status_endpoint(request: Request, _: bool = Depends(verify_admin
             "status": j.status,
             "logs_count": len(j.logs),
             "in_db": j.account_id is not None,
-            "proxy_used": getattr(j, '_assigned_proxy', ''),
+            "proxy_used": getattr(j, '_proxy_used', ''),
         }
-        # Include result summary for completed jobs
-        if j.result:
-            for prov in j.providers:
-                prov_result = j.result.get(prov, {})
-                job_info[prov] = prov_result.get("success", False)
-
         jobs.append(job_info)
-
         if j.status == "failed" and j.account_id is None:
             errors = {}
             if j.result:
@@ -1281,34 +1266,14 @@ async def batch_status_endpoint(request: Request, _: bool = Depends(verify_admin
                 "errors": errors,
                 "providers": j.providers,
             })
-
-        # Collect logs (only new ones since logs_since)
-        for idx, log_entry in enumerate(j.logs):
-            if idx < logs_since:
-                continue
-            parsed = log_entry.get("parsed", {})
-            raw = log_entry.get("raw", "")
-            all_logs.append({
-                "idx": idx,
-                "email": j.email,
-                "type": parsed.get("type", "stdout") if parsed else "stdout",
-                "provider": parsed.get("provider", "") if parsed else "",
-                "step": parsed.get("step", "") if parsed else "",
-                "message": parsed.get("message", raw) if parsed else raw,
-                "proxy_used": parsed.get("proxy_used", "") if parsed else "",
-            })
-
     # Timing info
     started_times = [j.started_at for j in batch_state.jobs if j.started_at > 0]
     finished_times = [j.finished_at for j in batch_state.jobs if j.finished_at > 0]
 
     return {
         "running": batch_state.running,
-        "cancelled": batch_state.cancelled,
         "jobs": jobs,
         "failed_jobs": failed_jobs,
-        "logs": all_logs,
-        "logs_total": sum(len(j.logs) for j in batch_state.jobs),
         "started_at": min(started_times) if started_times else 0,
         "finished_at": max(finished_times) if finished_times else 0,
     }
