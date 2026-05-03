@@ -667,17 +667,21 @@ async def _run_signup_flow(page, email: str, password: str, manager):
 
     # ── Reload page to ensure session is fully established ──────────
     try:
-        await page.goto("https://chat.b.ai/chat", wait_until="domcontentloaded", timeout=20000)
-        await asyncio.sleep(5)
+        await page.goto("https://chat.b.ai/chat", wait_until="load", timeout=30000)
     except Exception:
-        await asyncio.sleep(3)
+        pass
+    # Wait for page to be fully interactive (JS loaded, session settled)
+    try:
+        await page.wait_for_function("() => document.readyState === 'complete'", timeout=15000)
+    except Exception:
+        pass
+    await asyncio.sleep(5)
 
     # ── Claim signup bonus ─────────────────────────────────────────
-    await asyncio.sleep(3)  # Wait for claim popup to appear
     emit({"type": "progress", "step": "claim", "message": "Looking for claim bonus button..."})
 
     claimed = False
-    for attempt in range(20):
+    for attempt in range(30):  # 30 seconds to find claim button
         try:
             # Priority 1: Find the big "Claim" button inside a modal/dialog (BAI Welcome Gift popup)
             clicked = await page.evaluate("""() => {
