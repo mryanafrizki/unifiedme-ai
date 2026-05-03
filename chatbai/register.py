@@ -428,6 +428,7 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
         headless = True
 
     emit({"type": "progress", "step": "init", "message": f"Starting ChatBAI signup for {email}..."})
+    emit({"type": "debug", "step": "init", "message": f"headless={headless}, proxy={proxy_url or 'none'}, BATCHER_HEADLESS={os.getenv('BATCHER_CAMOUFOX_HEADLESS', 'unset')}"})
 
     # ── Launch Camoufox ─────────────────────────────────────────────
     proxy_cfg = {"server": proxy_url} if proxy_url else None
