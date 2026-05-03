@@ -264,6 +264,8 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN cbai_error TEXT DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN cbai_error_count INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN last_used_cbai TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN cbai_verified INTEGER DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN cbai_test_error TEXT DEFAULT ''",
         # Proxy pool separation + selection
         "ALTER TABLE proxies ADD COLUMN purpose TEXT DEFAULT 'api'",
         "ALTER TABLE proxies ADD COLUMN checked INTEGER DEFAULT 0",

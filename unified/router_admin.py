@@ -115,6 +115,8 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
             "cbai_error": acc.get("cbai_error", ""),
             "cbai_error_count": acc.get("cbai_error_count", 0),
             "last_used_cbai": acc.get("last_used_cbai", ""),
+            "cbai_verified": acc.get("cbai_verified", 0),
+            "cbai_test_error": acc.get("cbai_test_error", ""),
         }
         bucket = acc["status"] if acc["status"] in grouped else "active"
         grouped[bucket].append(info)
@@ -1929,6 +1931,28 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             latency = int((_time.monotonic() - t0) * 1000)
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
+    elif provider == "cbai" or provider == "chatbai":
+        cbai_key = acc.get("cbai_api_key", "")
+        if not cbai_key:
+            return {"ok": False, "error": "No ChatBAI API key"}
+        from .chatbai.proxy import proxy_chat_completions as cbai_proxy
+        body = {"model": "glm-5", "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
+        proxy_info = await db.get_proxy_for_api_call()
+        px = proxy_info["url"] if proxy_info else None
+        t0 = _time.monotonic()
+        try:
+            response, cost = await cbai_proxy(body, cbai_key, False, proxy_url=px)
+            latency = int((_time.monotonic() - t0) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            await db.log_usage(None, acct_id, "glm-5", "chatbai", status, latency,
+                               request_body='{"test":"batch"}', proxy_url=px or "")
+            if status == 200:
+                return {"ok": True, "latency_ms": latency}
+            return {"ok": False, "error": f"HTTP {status}", "latency_ms": latency}
+        except Exception as e:
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
+
     return {"ok": False, "error": f"Unknown provider: {provider}"}
 
 
@@ -1940,6 +1964,8 @@ async def approve_account(account_id: int, provider: str, _: bool = Depends(veri
         "codebuddy": "cb_verified",
         "wavespeed": "ws_verified",
         "gumloop": "gl_verified",
+        "chatbai": "cbai_verified",
+        "cbai": "cbai_verified",
     }
     col = col_map.get(provider)
     if not col:
@@ -1962,6 +1988,7 @@ async def approve_all_accounts(request: Request, _: bool = Depends(verify_admin)
             ("codebuddy", "cb_status", "cb_verified"),
             ("wavespeed", "ws_status", "ws_verified"),
             ("gumloop", "gl_status", "gl_verified"),
+            ("cbai", "cbai_status", "cbai_verified"),
         ]:
             if provider and prov != provider:
                 continue
