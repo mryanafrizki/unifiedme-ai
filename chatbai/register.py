@@ -185,54 +185,101 @@ async def fill_google_email(page, email: str) -> bool:
         return False
 
 
+async def _inject_input_value(page, selector: str, value: str) -> bool:
+    """Inject value into input using React's native setter (bypasses Google's input guard)."""
+    try:
+        return bool(await page.evaluate("""({sel, val}) => {
+            const el = document.querySelector(sel);
+            if (!el || el.offsetParent === null) return false;
+            el.focus();
+            // Use React's native value setter to bypass input guards
+            const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+            const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : null;
+            if (setter) {
+                setter.call(el, val);
+            } else {
+                el.value = val;
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            // Also dispatch keydown/keyup for good measure
+            el.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+            el.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+            return el.value === val;
+        }""", {"sel": selector, "val": value}))
+    except Exception:
+        return False
+
+
 async def fill_google_password(page, password: str) -> bool:
-    """Fill Google password step (matches gumloop_login.py pattern)."""
+    """Fill Google password step — multiple strategies."""
     try:
         await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=10000)
-        locator = page.locator('input[name="Passwd"]').first
+    except Exception:
+        return False
+
+    locator = page.locator('input[name="Passwd"]').first
+
+    # Strategy 1: press_sequentially (human-like, works in most cases)
+    await locator.click(force=True)
+    await asyncio.sleep(0.3)
+    await locator.press("Control+a")
+    await locator.press("Backspace")
+    await locator.press_sequentially(password, delay=70)
+    await asyncio.sleep(0.3)
+
+    typed = await locator.input_value()
+    emit({"type": "debug", "step": "password", "message": f"Strategy 1 (press_sequentially): typed={len(typed)}, expected={len(password)}"})
+
+    if len(typed) != len(password):
+        # Strategy 2: JS injection via React setter
+        emit({"type": "debug", "step": "password", "message": "Trying Strategy 2 (JS inject)..."})
+        ok = await _inject_input_value(page, 'input[name="Passwd"]', password)
+        typed = await locator.input_value()
+        emit({"type": "debug", "step": "password", "message": f"Strategy 2: injected={ok}, typed={len(typed)}"})
+
+    if len(typed) != len(password):
+        # Strategy 3: keyboard.type (low-level)
+        emit({"type": "debug", "step": "password", "message": "Trying Strategy 3 (keyboard.type)..."})
         await locator.click(force=True)
         await asyncio.sleep(0.2)
         await locator.press("Control+a")
         await locator.press("Backspace")
-        await locator.press_sequentially(password, delay=70)
-        await asyncio.sleep(0.5)
+        await page.keyboard.type(password, delay=50)
+        await asyncio.sleep(0.3)
+        typed = await locator.input_value()
+        emit({"type": "debug", "step": "password", "message": f"Strategy 3: typed={len(typed)}"})
 
-        # Remember URL before clicking Next
-        url_before = page.url
+    # Remember URL before clicking Next
+    url_before = page.url
 
-        # Click Next
-        await page.evaluate("""() => {
-            const btn = document.querySelector('#passwordNext button');
-            if (btn) btn.click();
-        }""")
+    # Click Next
+    await page.evaluate("""() => {
+        const btn = document.querySelector('#passwordNext button');
+        if (btn) btn.click();
+    }""")
 
-        # Wait for navigation away from password page (consent, redirect, or error)
-        for _ in range(15):
-            await asyncio.sleep(1)
-            try:
-                current_url = page.url
-                # URL changed — password step is done
-                if current_url != url_before:
-                    emit({"type": "debug", "step": "password", "message": f"Navigated to: {current_url[:80]}"})
-                    await asyncio.sleep(1)
-                    return True
-                # Check for password error (Google's specific error element)
-                has_error = await page.evaluate("""() => {
-                    const err = document.querySelector('.LXRPh');
-                    return err && err.offsetParent !== null ? err.textContent : null;
-                }""")
-                if has_error:
-                    emit({"type": "error", "step": "password", "message": f"Google error: {has_error}"})
-                    return False
-            except Exception:
-                pass
+    # Wait for navigation away from password page
+    for _ in range(15):
+        await asyncio.sleep(1)
+        try:
+            current_url = page.url
+            if current_url != url_before:
+                emit({"type": "debug", "step": "password", "message": f"Navigated to: {current_url[:80]}"})
+                await asyncio.sleep(1)
+                return True
+            has_error = await page.evaluate("""() => {
+                const err = document.querySelector('.LXRPh');
+                return err && err.offsetParent !== null ? err.textContent : null;
+            }""")
+            if has_error:
+                emit({"type": "error", "step": "password", "message": f"Google error: {has_error}"})
+                return False
+        except Exception:
+            pass
 
-        # 15s passed, assume it worked (slow connection)
-        emit({"type": "debug", "step": "password", "message": "No navigation after 15s, proceeding anyway"})
-        return True
-    except Exception as exc:
-        emit({"type": "debug", "step": "password", "message": f"fill_google_password error: {exc}"})
-        return False
+    emit({"type": "debug", "step": "password", "message": "No navigation after 15s, proceeding anyway"})
+    return True
 
 
 async def handle_consent_and_redirect(
