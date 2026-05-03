@@ -109,6 +109,12 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
             "last_used_gl": acc.get("last_used_gl", ""),
             "gl_verified": acc.get("gl_verified", 0),
             "gl_test_error": acc.get("gl_test_error", ""),
+            "cbai_status": acc.get("cbai_status", "none"),
+            "cbai_api_key": acc.get("cbai_api_key", ""),
+            "cbai_credits": acc.get("cbai_credits", 0),
+            "cbai_error": acc.get("cbai_error", ""),
+            "cbai_error_count": acc.get("cbai_error_count", 0),
+            "last_used_cbai": acc.get("last_used_cbai", ""),
         }
         bucket = acc["status"] if acc["status"] in grouped else "active"
         grouped[bucket].append(info)
