@@ -164,7 +164,7 @@ def format_entry(entry: dict) -> str:
 async def fill_google_email(page, email: str) -> bool:
     """Fill Google email step (matches gumloop_login.py pattern)."""
     try:
-        await page.wait_for_selector("#identifierId", state="visible", timeout=10000)
+        await page.wait_for_selector("#identifierId", state="visible", timeout=30000)
         locator = page.locator("#identifierId").first
         await locator.click(force=True)
         await asyncio.sleep(0.2)
@@ -218,7 +218,7 @@ async def _inject_input_value(page, selector: str, value: str) -> bool:
 async def fill_google_password(page, password: str) -> bool:
     """Fill Google password step — multiple strategies."""
     try:
-        await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=10000)
+        await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=30000)
     except Exception:
         return False
 
