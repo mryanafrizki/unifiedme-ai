@@ -162,164 +162,77 @@ def format_entry(entry: dict) -> str:
 # ── Google OAuth helpers (from gumloop_login.py / wavespeed/register.py pattern) ──
 
 async def fill_google_email(page, email: str) -> bool:
-    """Fill Google email step. Handles account picker too."""
-    for _ in range(15):
-        has_input = await page.evaluate("""() => {
-            const el = document.querySelector('#identifierId');
-            return el && el.offsetParent !== null;
-        }""")
-        if has_input:
-            break
-
-        # Check for "Use another account"
-        clicked = await page.evaluate("""() => {
-            for (const el of document.querySelectorAll('li, div[role="link"], div[data-identifier]')) {
-                const txt = (el.textContent || '').toLowerCase();
-                if (txt.includes('use another account') || txt.includes('gunakan akun lain')) {
-                    el.click(); return true;
-                }
-            }
-            return false;
-        }""")
-        if clicked:
-            emit({"type": "debug", "step": "email", "message": "Clicked 'Use another account'"})
-            await asyncio.sleep(2)
-            continue
-
-        # Already at password step?
-        at_pw = await page.evaluate("""() => {
-            const pw = document.querySelector('input[name="Passwd"]');
-            return pw && pw.offsetParent !== null;
-        }""")
-        if at_pw:
-            return True
-
-        await asyncio.sleep(1)
-
+    """Fill Google email step (matches gumloop_login.py pattern)."""
     try:
-        await page.wait_for_selector("#identifierId", state="visible", timeout=5000)
-    except Exception:
+        await page.wait_for_selector("#identifierId", state="visible", timeout=10000)
+        locator = page.locator("#identifierId").first
+        await locator.click(force=True)
+        await asyncio.sleep(0.2)
+        await locator.press("Control+a")
+        await locator.press("Backspace")
+        await locator.press_sequentially(email, delay=60)
+        await asyncio.sleep(0.5)
+
+        # Click Next
+        await page.evaluate("""() => {
+            const btn = document.querySelector('#identifierNext button');
+            if (btn) btn.click();
+        }""")
+        await asyncio.sleep(2)
+        return True
+    except Exception as exc:
+        emit({"type": "debug", "step": "email", "message": f"fill_google_email error: {exc}"})
         return False
-
-    loc = page.locator("#identifierId").first
-    await loc.click(force=True)
-    await asyncio.sleep(0.3)
-    await loc.press("Control+a")
-    await loc.press("Backspace")
-
-    # Type email with verification + fallback (press_sequentially can miss chars)
-    await loc.press_sequentially(email, delay=60)
-    await asyncio.sleep(0.3)
-    typed = await loc.input_value()
-    if typed.strip().lower() != email.strip().lower():
-        # Fallback: clear and use fill()
-        await loc.press("Control+a")
-        await loc.press("Backspace")
-        await loc.fill(email)
-        await asyncio.sleep(0.3)
-        typed = await loc.input_value()
-        if typed.strip().lower() != email.strip().lower():
-            # Last resort: keyboard.type
-            await loc.press("Control+a")
-            await loc.press("Backspace")
-            await page.keyboard.type(email, delay=35)
-    await asyncio.sleep(0.5)
-
-    clicked = await page.evaluate("""() => {
-        const btn = document.querySelector('#identifierNext button');
-        if (btn) { btn.click(); return true; }
-        return false;
-    }""")
-    if not clicked:
-        await loc.press("Enter")
-
-    try:
-        await page.wait_for_function("""() => {
-            const el = document.querySelector('#identifierId');
-            if (!el || el.offsetParent === null) return true;
-            const pw = document.querySelector('input[name="Passwd"]');
-            if (pw && pw.offsetParent !== null) return true;
-            return false;
-        }""", timeout=10000)
-    except Exception:
-        pass
-    return True
 
 
 async def fill_google_password(page, password: str) -> bool:
-    """Fill Google password step with retry logic."""
+    """Fill Google password step (matches gumloop_login.py pattern)."""
     try:
         await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=10000)
-    except Exception:
+        locator = page.locator('input[name="Passwd"]').first
+        await locator.click(force=True)
+        await asyncio.sleep(0.2)
+        await locator.press("Control+a")
+        await locator.press("Backspace")
+        await locator.press_sequentially(password, delay=70)
+        await asyncio.sleep(0.5)
+
+        # Remember URL before clicking Next
+        url_before = page.url
+
+        # Click Next
+        await page.evaluate("""() => {
+            const btn = document.querySelector('#passwordNext button');
+            if (btn) btn.click();
+        }""")
+
+        # Wait for navigation away from password page (consent, redirect, or error)
+        for _ in range(15):
+            await asyncio.sleep(1)
+            try:
+                current_url = page.url
+                # URL changed — password step is done
+                if current_url != url_before:
+                    emit({"type": "debug", "step": "password", "message": f"Navigated to: {current_url[:80]}"})
+                    await asyncio.sleep(1)
+                    return True
+                # Check for password error (Google's specific error element)
+                has_error = await page.evaluate("""() => {
+                    const err = document.querySelector('.LXRPh');
+                    return err && err.offsetParent !== null ? err.textContent : null;
+                }""")
+                if has_error:
+                    emit({"type": "error", "step": "password", "message": f"Google error: {has_error}"})
+                    return False
+            except Exception:
+                pass
+
+        # 15s passed, assume it worked (slow connection)
+        emit({"type": "debug", "step": "password", "message": "No navigation after 15s, proceeding anyway"})
+        return True
+    except Exception as exc:
+        emit({"type": "debug", "step": "password", "message": f"fill_google_password error: {exc}"})
         return False
-
-    # Try up to 3 times to type password correctly
-    for attempt in range(3):
-        loc = page.locator('input[name="Passwd"]').first
-        await loc.click(force=True)
-        await asyncio.sleep(0.5)
-
-        # Clear field
-        await loc.press("Control+a")
-        await loc.press("Backspace")
-        await asyncio.sleep(0.3)
-
-        # Type with press_sequentially (most reliable for Google)
-        await loc.press_sequentially(password, delay=80)
-        await asyncio.sleep(0.5)
-
-        # Verify what was typed
-        typed = await loc.input_value()
-        emit({"type": "debug", "step": "password", "message": f"Attempt {attempt+1}: typed {len(typed)} chars, expected {len(password)}"})
-
-        if len(typed) >= len(password):
-            break
-
-        # Retry: click field again, clear, try keyboard.type
-        emit({"type": "debug", "step": "password", "message": f"Retry with keyboard.type..."})
-        await loc.click(force=True)
-        await asyncio.sleep(0.3)
-        await loc.press("Control+a")
-        await loc.press("Backspace")
-        await asyncio.sleep(0.3)
-        await page.keyboard.type(password, delay=50)
-        await asyncio.sleep(0.5)
-        typed = await loc.input_value()
-        if len(typed) >= len(password):
-            break
-
-    # Click Next
-    clicked = await page.evaluate("""() => {
-        const btn = document.querySelector('#passwordNext button');
-        if (btn) { btn.click(); return true; }
-        return false;
-    }""")
-    if not clicked:
-        await loc.press("Enter")
-
-    # Wait for result
-    for _ in range(20):
-        await asyncio.sleep(1)
-        try:
-            url = page.url
-            if "accounts.google.com" not in url:
-                return True
-            pw_visible = await page.evaluate("""() => {
-                const pw = document.querySelector('input[name="Passwd"]');
-                return pw && pw.offsetParent !== null;
-            }""")
-            if not pw_visible:
-                return True
-            has_error = await page.evaluate("""() => {
-                const text = (document.body?.innerText || '').toLowerCase();
-                return text.includes('wrong password') || text.includes('incorrect');
-            }""")
-            if has_error:
-                emit({"type": "error", "step": "password", "message": "Wrong password detected by Google"})
-                return False
-        except Exception:
-            pass
-    return True
 
 
 async def handle_consent_and_redirect(
