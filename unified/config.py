@@ -15,6 +15,7 @@ LISTEN_PORT = int(os.getenv("UNIFIED_PORT", "1430"))
 KIRO_UPSTREAM = os.getenv("KIRO_UPSTREAM", "http://127.0.0.1:1434")
 CODEBUDDY_UPSTREAM = os.getenv("CODEBUDDY_UPSTREAM", "https://www.codebuddy.ai")
 WAVESPEED_UPSTREAM = os.getenv("WAVESPEED_UPSTREAM", "https://llm.wavespeed.ai")
+CHATBAI_UPSTREAM = os.getenv("CHATBAI_UPSTREAM", "https://api.b.ai")
 
 # Gumloop
 GUMLOOP_API_BASE = os.getenv("GUMLOOP_API_BASE", "https://api.gumloop.com")
@@ -33,6 +34,7 @@ KIRO_ADMIN_PASSWORD = os.getenv("KIRO_ADMIN_PASSWORD", "kUcingku0")
 KIRO_DEFAULT_CREDITS = 550.0
 CB_DEFAULT_CREDITS = 250.0
 WS_DEFAULT_CREDITS = 1.0  # $1 trial credit
+CBAI_DEFAULT_CREDITS = 1.0  # ChatBAI signup bonus credits (estimated $1 worth)
 
 # ---------------------------------------------------------------------------
 # Version
@@ -57,6 +59,8 @@ AUTH_SCRIPT = AUTH_DIR / "login.py"
 WAVESPEED_DIR = BASE_DIR.parent / "wavespeed"
 WAVESPEED_SCRIPT = WAVESPEED_DIR / "register.py"
 GUMLOOP_SCRIPT = AUTH_DIR / "gumloop_login.py"
+CHATBAI_DIR = BASE_DIR.parent / "_tmp_chatbai"
+CHATBAI_SCRIPT = CHATBAI_DIR / "intercept_chatbai.py"
 # Windows uses Scripts/, Linux uses bin/
 _VENV_BIN = "Scripts" if os.name == "nt" else "bin"
 PYTHON_BIN = AUTH_DIR / ".venv" / _VENV_BIN / "python"
@@ -76,6 +80,7 @@ class Tier(str, Enum):
     MAX = "max"                 # CodeBuddy
     WAVESPEED = "wavespeed"     # WaveSpeed LLM
     MAX_GL = "max_gl"           # Gumloop
+    CHATBAI = "chatbai"         # ChatBAI (chat.b.ai)
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +158,31 @@ _WAVESPEED_ALIASES = [
     "new-qwen-max",
 ]
 
+# ChatBAI models (bchatai- prefix)
+_CHATBAI_MODELS = [
+    # Free (signup bonus credits)
+    "bchatai-gpt-5-mini",
+    "bchatai-gpt-5-nano",
+    "bchatai-gpt-5.4-mini",
+    "bchatai-gpt-5.4-nano",
+    "bchatai-gpt-5.2",
+    "bchatai-claude-haiku-4.5",
+    "bchatai-claude-sonnet-4.5",
+    "bchatai-claude-sonnet-4.6",
+    "bchatai-gemini-3.1-pro",
+    "bchatai-gemini-3-flash",
+    "bchatai-minimax-m2.5",
+    "bchatai-kimi-k2.5",
+    "bchatai-glm-5",
+    # Premium (requires topup)
+    "bchatai-gpt-5.5",
+    "bchatai-gpt-5.4",
+    "bchatai-gpt-5.4-pro",
+    "bchatai-claude-opus-4.7",
+    "bchatai-claude-opus-4.6",
+    "bchatai-claude-opus-4.5",
+]
+
 # Build lookup: model_name → Tier
 MODEL_TIER: dict[str, Tier] = {}
 
@@ -171,6 +201,9 @@ for m in _MAX_GL_MODELS:
 for alias in _MAX_GL_DOT_ALIASES:
     MODEL_TIER[alias] = Tier.MAX_GL
 
+for m in _CHATBAI_MODELS:
+    MODEL_TIER[m] = Tier.CHATBAI
+
 # Hidden from display lists (routing-only aliases + thinking variants)
 _HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys())
 # Hide -thinking variants from model list (they still work for routing)
@@ -184,6 +217,7 @@ STANDARD_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.STAN
 MAX_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX]
 WAVESPEED_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.WAVESPEED]
 MAX_GL_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX_GL and k not in _HIDDEN_ALIASES]
+CHATBAI_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.CHATBAI]
 ALL_MODELS: list[str] = [k for k in MODEL_TIER if k not in _HIDDEN_ALIASES]
 
 
@@ -205,6 +239,9 @@ def get_tier(model: str) -> Tier | None:
     # Any model with "new-" prefix → WaveSpeed
     if model.startswith("new-"):
         return Tier.WAVESPEED
+    # Any model with "bchatai-" prefix → ChatBAI
+    if model.startswith("bchatai-"):
+        return Tier.CHATBAI
     # Any model with "/" → WaveSpeed (provider/model format)
     if "/" in model:
         return Tier.WAVESPEED

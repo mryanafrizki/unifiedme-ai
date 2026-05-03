@@ -27,6 +27,7 @@ from .proxy_kiro import close_all_clients as close_kiro
 from .proxy_codebuddy import close_all_clients as close_codebuddy
 from .proxy_wavespeed import close_all_clients as close_wavespeed
 from .proxy_gumloop import close_all_clients as close_gumloop
+from .chatbai.proxy import close_all_clients as close_chatbai
 from . import license_client
 
 logging.basicConfig(
@@ -325,6 +326,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await close_gumloop()
+    except Exception:
+        pass
+    try:
+        await close_chatbai()
     except Exception:
         pass
     # NOTE: Do NOT stop tunnels or MCP servers here.

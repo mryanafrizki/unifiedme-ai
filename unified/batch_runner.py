@@ -20,10 +20,12 @@ from .config import (
     AUTH_SCRIPT,
     WAVESPEED_SCRIPT,
     GUMLOOP_SCRIPT,
+    CHATBAI_SCRIPT,
     PYTHON_BIN,
     KIRO_UPSTREAM,
     KIRO_ADMIN_PASSWORD,
     WS_DEFAULT_CREDITS,
+    CBAI_DEFAULT_CREDITS,
 )
 from .gumloop.auth import GumloopAuth
 
@@ -155,6 +157,8 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
                 needed_providers.remove("kiro")
             if "codebuddy" in needed_providers and existing.get("cb_status") == "ok":
                 needed_providers.remove("codebuddy")
+            if "chatbai" in needed_providers and existing.get("cbai_status") == "ok":
+                needed_providers.remove("chatbai")
             if "wavespeed" in needed_providers and existing.get("ws_status") == "ok":
                 needed_providers.remove("wavespeed")
             if "gumloop" in needed_providers and existing.get("gl_status") == "ok":
@@ -236,6 +240,10 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             gl_result, _ = await _run_gumloop_login(job, proxy_override=proxy_url_used or None)
             result.update(gl_result)
 
+        if "chatbai" in job.providers:
+            cbai_result, _ = await _run_chatbai_login(job, proxy_override=proxy_url_used or None)
+            result.update(cbai_result)
+
         job.result = result
         imported: list[str] = []
 
@@ -243,7 +251,8 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
         cb_ok = "codebuddy" in job.providers and result.get("codebuddy", {}).get("success")
         ws_ok = "wavespeed" in job.providers and result.get("wavespeed", {}).get("success")
         gl_ok = "gumloop" in job.providers and result.get("gumloop", {}).get("success")
-        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok
+        cbai_ok = "chatbai" in job.providers and result.get("chatbai", {}).get("success")
+        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok
 
         if any_login_success and not job.account_id:
             job.account_id = await db.create_account(job.email, job.password)
@@ -295,6 +304,15 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             batch_state.broadcast({
                 "type": "provider_done", "job_id": job.id, "email": job.email,
                 "provider": "gumloop", "success": ok,
+            })
+
+        if cbai_ok:
+            ok = await _import_chatbai(job)
+            if ok:
+                imported.append("chatbai")
+            batch_state.broadcast({
+                "type": "provider_done", "job_id": job.id, "email": job.email,
+                "provider": "chatbai", "success": ok,
             })
 
         any_success = bool(imported)
@@ -836,6 +854,121 @@ async def _import_wavespeed(job: AccountJob) -> bool:
         batch_state.broadcast({
             "type": "import_error",
             "provider": "wavespeed",
+            "email": job.email,
+            "error": str(exc),
+        })
+        return False
+
+
+async def _run_chatbai_login(job: AccountJob, proxy_override: str | None = None) -> tuple[dict, str]:
+    """Run chatbai signup script as subprocess — Camoufox Google OAuth signup + claim.
+
+    Returns (result_data, proxy_url_used).
+    """
+    env = {**os.environ, "BATCHER_CAMOUFOX_HEADLESS": "true" if batch_state.headless else "false"}
+    python_bin = str(PYTHON_BIN)
+    cbai_script = str(CHATBAI_SCRIPT)
+
+    if not os.path.exists(cbai_script):
+        log.error("ChatBAI script not found: %s", cbai_script)
+        return {"chatbai": {"success": False, "error": f"Script not found: {cbai_script}"}}, ""
+
+    proxy_url_used = ""
+    cmd_args = [
+        python_bin, cbai_script,
+        "--email", job.email,
+        "--password", job.password,
+    ]
+    if batch_state.headless:
+        cmd_args.append("--headless")
+    if proxy_override:
+        cmd_args.extend(["--proxy", proxy_override])
+        proxy_url_used = proxy_override
+    else:
+        proxy_info = await db.get_proxy_for_batch()
+        if proxy_info:
+            cmd_args.extend(["--proxy", proxy_info["url"]])
+            proxy_url_used = proxy_info["url"]
+
+    proc = await asyncio.create_subprocess_exec(
+        *cmd_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    batch_state._active_procs.append(proc)
+
+    result_data: dict = {}
+
+    async def read_stream(stream: asyncio.StreamReader, is_stderr: bool = False) -> None:
+        nonlocal result_data
+        while True:
+            line_bytes = await stream.readline()
+            if not line_bytes:
+                break
+            text = line_bytes.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            try:
+                parsed = json.loads(text)
+                if parsed.get("type") == "result":
+                    result_data = {"chatbai": parsed}
+                batch_state.broadcast({
+                    "type": "job_log", "job_id": job.id, "email": job.email,
+                    "log_type": parsed.get("type", "info"),
+                    "provider": "chatbai",
+                    "step": parsed.get("step", ""),
+                    "message": parsed.get("message", text[:200]),
+                })
+            except json.JSONDecodeError:
+                if is_stderr:
+                    log.debug("[chatbai stderr] %s", text[:200])
+
+    await asyncio.gather(
+        read_stream(proc.stdout, is_stderr=False),
+        read_stream(proc.stderr, is_stderr=True),
+    )
+    await proc.wait()
+
+    if proc in batch_state._active_procs:
+        batch_state._active_procs.remove(proc)
+
+    if not result_data:
+        result_data = {"chatbai": {"success": False, "error": "No result from chatbai script"}}
+
+    return result_data, proxy_url_used
+
+
+async def _import_chatbai(job: AccountJob) -> bool:
+    """Store ChatBAI API key in DB with default credits."""
+    cbai_data = job.result.get("chatbai", {})
+    api_key = cbai_data.get("api_key", "")
+    session_token = cbai_data.get("session_token", "")
+    if not api_key and not session_token:
+        return False
+
+    try:
+        if job.account_id:
+            await db.update_account(
+                job.account_id,
+                cbai_status="ok",
+                cbai_api_key=api_key,
+                cbai_session_token=session_token,
+                cbai_credits=CBAI_DEFAULT_CREDITS,
+                cbai_error="",
+                cbai_error_count=0,
+            )
+        batch_state.broadcast({
+            "type": "import_ok",
+            "provider": "chatbai",
+            "email": job.email,
+        })
+        return True
+    except Exception as exc:
+        log.exception("ChatBAI import error for %s: %s", job.email, exc)
+        batch_state.broadcast({
+            "type": "import_error",
+            "provider": "chatbai",
             "email": job.email,
             "error": str(exc),
         })

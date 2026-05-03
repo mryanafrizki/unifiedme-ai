@@ -81,12 +81,12 @@ class AccountInfo(BaseModel):
 
 class AccountCreate(BaseModel):
     accounts: list[str]  # ["email:password", ...]
-    providers: list[str] = ["kiro", "codebuddy"]
+    providers: list[str] = ["kiro", "codebuddy", "chatbai"]
 
 
 class BatchLoginRequest(BaseModel):
     accounts: list[str]  # ["email:password", ...]
-    providers: list[str] = ["kiro", "codebuddy"]
+    providers: list[str] = ["kiro", "codebuddy", "chatbai"]
     headless: bool = True
     concurrency: int = 1  # parallel browser instances
     mcp_urls: list[str] = []  # MCP server URLs to attach after Gumloop login

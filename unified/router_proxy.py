@@ -18,6 +18,7 @@ from .proxy_kiro import proxy_chat_completions as kiro_proxy, proxy_messages as 
 from .proxy_codebuddy import proxy_chat_completions as codebuddy_proxy, get_stream_data, get_stream_credit
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
+from .chatbai.proxy import proxy_chat_completions as chatbai_proxy
 from . import database as db
 from . import license_client
 
@@ -192,97 +193,133 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         )
 
     if tier == Tier.WAVESPEED:
-        # Route to WaveSpeed LLM — direct OpenAI-compatible proxy
-        account = await get_next_account(tier)
-        if account is None:
-            return JSONResponse(
-                {"error": {"message": "No available WaveSpeed accounts", "type": "server_error"}},
-                status_code=503,
-            )
-        ws_key = account.get("ws_api_key", "")
-        if not ws_key:
-            await mark_account_error(account["id"], tier, "Missing ws_api_key")
-            return JSONResponse(
-                {"error": {"message": "WaveSpeed account has no API key", "type": "server_error"}},
-                status_code=503,
-            )
+        # Route to WaveSpeed LLM — instant rotation on failure
+        max_retries = 5
+        tried_ws_ids: list[int] = []
+        last_ws_error = ""
 
-        response, cost = await wavespeed_proxy(body, ws_key, client_wants_stream, proxy_url=proxy_url)
-        latency = int((time.monotonic() - start) * 1000)
-        status = response.status_code if hasattr(response, "status_code") else 200
-        resp_headers_str = _capture_response_headers(response)
-        error_msg = ""
+        for attempt in range(max_retries):
+            account = await get_next_account(tier, exclude_ids=tried_ws_ids)
+            if account is None:
+                break
+            tried_ws_ids.append(account["id"])
 
-        if status in (401, 403):
-            error_msg = f"WaveSpeed HTTP {status} banned (account: {account['email']})"
-            await db.update_account(account["id"], ws_status="banned", ws_error=error_msg)
-            try:
-                updated = await db.get_account(account["id"])
-                if updated: await license_client.push_account_now(updated)
-            except Exception: pass
-        elif status == 402 or status == 429:
-            error_msg = f"WaveSpeed HTTP {status} exhausted (account: {account['email']})"
-            await db.update_account(account["id"], ws_status="exhausted", ws_error=error_msg)
-            try:
-                updated = await db.get_account(account["id"])
-                if updated: await license_client.push_account_now(updated)
-            except Exception: pass
-        elif status >= 400:
-            error_msg = f"WaveSpeed HTTP {status} (account: {account['email']})"
-        else:
-            await mark_account_success(account["id"], tier)
-            if cost > 0:
-                await db.deduct_ws_credit(account["id"], cost)
-
-        # Streaming: log after stream completes via BackgroundTask
-        ws_stream_state = getattr(response, '_ws_stream_state', None)
-        if ws_stream_state is not None:
-            from starlette.background import BackgroundTask
-
-            _acct_id = account["id"]
-            _key_id = key_info["id"]
-            _proxy_url = proxy_url or ""
-
-            async def _post_ws_stream_log():
-                import asyncio
-                for _ in range(30):
-                    if ws_stream_state["done"]:
-                        break
-                    await asyncio.sleep(0.5)
-
-                stream_cost = ws_stream_state["cost"]
-                if stream_cost > 0:
-                    await db.deduct_ws_credit(_acct_id, stream_cost)
-
-                log_body = json.dumps({
-                    "content": ws_stream_state["content"][:2000],
-                    "usage": {
-                        "prompt_tokens": ws_stream_state["prompt_tokens"],
-                        "completion_tokens": ws_stream_state["completion_tokens"],
-                        "total_tokens": ws_stream_state["total_tokens"],
-                        "cost": stream_cost,
-                    }
-                }, ensure_ascii=False)
+            ws_key = account.get("ws_api_key", "")
+            if not ws_key:
+                last_ws_error = f"Account {account['email']}: Missing ws_api_key"
+                await mark_account_error(account["id"], tier, "Missing ws_api_key")
                 await db.log_usage(
-                    _key_id, _acct_id, model, tier.value, status, latency,
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, response_body=log_body,
-                    error_message=error_msg,
-                    proxy_url=_proxy_url,
+                    error_message=last_ws_error, proxy_url=proxy_url or "",
                 )
+                continue
 
-            response.background = BackgroundTask(_post_ws_stream_log)
-        else:
-            # Non-streaming: log immediately
-            resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
-            await db.log_usage(
-                key_info["id"], account["id"], model, tier.value, status, latency,
-                request_headers=req_headers_str, request_body=req_body_str,
-                response_headers=resp_headers_str, response_body=resp_body_str,
-                error_message=error_msg,
-                proxy_url=proxy_url or "",
-            )
-        return response
+            response, cost = await wavespeed_proxy(body, ws_key, client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"WaveSpeed HTTP {status} banned (account: {account['email']})"
+                await db.update_account(account["id"], ws_status="banned", ws_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_ws_error = error_msg
+                log.warning("WaveSpeed %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 402 or status == 429:
+                error_msg = f"WaveSpeed HTTP {status} exhausted (account: {account['email']})"
+                await db.update_account(account["id"], ws_status="exhausted", ws_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_ws_error = error_msg
+                log.warning("WaveSpeed %s exhausted, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"WaveSpeed HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+                if cost > 0:
+                    await db.deduct_ws_credit(account["id"], cost)
+
+            # Streaming: log after stream completes via BackgroundTask
+            ws_stream_state = getattr(response, '_ws_stream_state', None)
+            if ws_stream_state is not None:
+                from starlette.background import BackgroundTask
+
+                _acct_id = account["id"]
+                _key_id = key_info["id"]
+                _proxy_url = proxy_url or ""
+
+                async def _post_ws_stream_log():
+                    import asyncio
+                    for _ in range(30):
+                        if ws_stream_state["done"]:
+                            break
+                        await asyncio.sleep(0.5)
+
+                    stream_cost = ws_stream_state["cost"]
+                    if stream_cost > 0:
+                        await db.deduct_ws_credit(_acct_id, stream_cost)
+
+                    log_body = json.dumps({
+                        "content": ws_stream_state["content"][:2000],
+                        "usage": {
+                            "prompt_tokens": ws_stream_state["prompt_tokens"],
+                            "completion_tokens": ws_stream_state["completion_tokens"],
+                            "total_tokens": ws_stream_state["total_tokens"],
+                            "cost": stream_cost,
+                        }
+                    }, ensure_ascii=False)
+                    await db.log_usage(
+                        _key_id, _acct_id, model, tier.value, status, latency,
+                        request_headers=req_headers_str, request_body=req_body_str,
+                        response_headers=resp_headers_str, response_body=log_body,
+                        error_message=error_msg,
+                        proxy_url=_proxy_url,
+                    )
+
+                response.background = BackgroundTask(_post_ws_stream_log)
+            else:
+                resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg,
+                    proxy_url=proxy_url or "",
+                )
+            return response
+
+        # All WaveSpeed retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_ws_ids)
+        final_error = f"All WaveSpeed accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_ws_error}"
+        await db.log_usage(
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+            request_headers=req_headers_str, request_body=req_body_str,
+            error_message=final_error, proxy_url=proxy_url or "",
+        )
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
+            status_code=503,
+        )
 
     if tier == Tier.MAX_GL:
         # Route to Gumloop — WebSocket chat with instant account rotation on failure
@@ -396,6 +433,135 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
 
         return JSONResponse(
             {"error": {"message": "All Gumloop accounts exhausted or errored", "type": "server_error"}},
+            status_code=503,
+        )
+
+    if tier == Tier.CHATBAI:
+        # Route to ChatBAI (api.b.ai) — instant rotation on failure
+        max_retries = 5
+        tried_cbai_ids: list[int] = []
+        last_cbai_error = ""
+
+        for attempt in range(max_retries):
+            account = await get_next_account(tier, exclude_ids=tried_cbai_ids)
+            if account is None:
+                break
+            tried_cbai_ids.append(account["id"])
+
+            cbai_key = account.get("cbai_api_key", "")
+            if not cbai_key:
+                last_cbai_error = f"Account {account['email']}: Missing cbai_api_key"
+                await mark_account_error(account["id"], tier, "Missing cbai_api_key")
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    error_message=last_cbai_error, proxy_url=proxy_url or "",
+                )
+                continue
+
+            response, cost = await chatbai_proxy(body, cbai_key, client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"ChatBAI HTTP {status} banned (account: {account['email']})"
+                await db.update_account(account["id"], cbai_status="banned", cbai_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_cbai_error = error_msg
+                log.warning("ChatBAI %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 402 or status == 429:
+                error_msg = f"ChatBAI HTTP {status} exhausted (account: {account['email']})"
+                await db.update_account(account["id"], cbai_status="exhausted", cbai_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_cbai_error = error_msg
+                log.warning("ChatBAI %s exhausted, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"ChatBAI HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+                if cost > 0:
+                    await db.deduct_cbai_credit(account["id"], cost)
+
+            # Streaming: log after stream completes via BackgroundTask
+            cbai_stream_state = getattr(response, '_ws_stream_state', None)
+            if cbai_stream_state is not None:
+                from starlette.background import BackgroundTask
+
+                _acct_id = account["id"]
+                _key_id = key_info["id"]
+                _proxy_url = proxy_url or ""
+
+                async def _post_cbai_stream_log():
+                    import asyncio
+                    for _ in range(30):
+                        if cbai_stream_state["done"]:
+                            break
+                        await asyncio.sleep(0.5)
+
+                    stream_cost = cbai_stream_state["cost"]
+                    if stream_cost > 0:
+                        await db.deduct_cbai_credit(_acct_id, stream_cost)
+
+                    log_body = json.dumps({
+                        "content": cbai_stream_state["content"][:2000],
+                        "usage": {
+                            "prompt_tokens": cbai_stream_state["prompt_tokens"],
+                            "completion_tokens": cbai_stream_state["completion_tokens"],
+                            "total_tokens": cbai_stream_state["total_tokens"],
+                            "cost": stream_cost,
+                        }
+                    }, ensure_ascii=False)
+                    await db.log_usage(
+                        _key_id, _acct_id, model, tier.value, status, latency,
+                        request_headers=req_headers_str, request_body=req_body_str,
+                        response_headers=resp_headers_str, response_body=log_body,
+                        error_message=error_msg,
+                        proxy_url=_proxy_url,
+                    )
+
+                response.background = BackgroundTask(_post_cbai_stream_log)
+            else:
+                resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg,
+                    proxy_url=proxy_url or "",
+                )
+            return response
+
+        # All ChatBAI retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_cbai_ids)
+        final_error = f"All ChatBAI accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_cbai_error}"
+        await db.log_usage(
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+            request_headers=req_headers_str, request_body=req_body_str,
+            error_message=final_error, proxy_url=proxy_url or "",
+        )
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
             status_code=503,
         )
 
@@ -615,8 +781,10 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
             "object": "model",
             "created": 1700000000,
             "owned_by": "kiro" if tier == Tier.STANDARD else (
-                "wavespeed" if tier == Tier.WAVESPEED else (
-                    "gumloop" if tier == Tier.MAX_GL else "codebuddy"
+"wavespeed" if tier == Tier.WAVESPEED else (
+                "gumloop" if tier == Tier.MAX_GL else (
+                    "chatbai" if tier == Tier.CHATBAI else "codebuddy"
+                )
                 )
             ),
             "permission": [],
