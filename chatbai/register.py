@@ -229,49 +229,32 @@ async def fill_google_password(page, password: str) -> bool:
     await asyncio.sleep(0.3)
     await locator.press("Control+a")
     await locator.press("Backspace")
-    # Type each char individually with random delay (more human-like)
-    import random as _rnd
-    for ch in password:
-        await locator.press(ch)
-        await asyncio.sleep(0.05 + 0.1 * _rnd.random())  # 50-150ms per char
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.2)
+
+    # Use Playwright's fill() — this uses internal input mechanism, not keyboard events
+    # More reliable than press_sequentially in popup windows
+    await locator.fill(password)
+    await asyncio.sleep(0.5)
 
     typed = await locator.input_value()
-    emit({"type": "debug", "step": "password", "message": f"Strategy 1 (press_sequentially): typed={len(typed)}, expected={len(password)}"})
+    emit({"type": "debug", "step": "password", "message": f"fill(): typed={len(typed)}, expected={len(password)}"})
 
     if len(typed) != len(password):
-        # Strategy 2: JS injection via React setter
-        emit({"type": "debug", "step": "password", "message": "Trying Strategy 2 (JS inject)..."})
-        ok = await _inject_input_value(page, 'input[name="Passwd"]', password)
-        typed = await locator.input_value()
-        emit({"type": "debug", "step": "password", "message": f"Strategy 2: injected={ok}, typed={len(typed)}"})
-
-    if len(typed) != len(password):
-        # Strategy 3: keyboard.type (low-level)
-        emit({"type": "debug", "step": "password", "message": "Trying Strategy 3 (keyboard.type)..."})
+        # Fallback: press_sequentially
+        emit({"type": "debug", "step": "password", "message": "Fallback to press_sequentially..."})
         await locator.click(force=True)
-        await asyncio.sleep(0.2)
         await locator.press("Control+a")
         await locator.press("Backspace")
-        await page.keyboard.type(password, delay=50)
+        await locator.press_sequentially(password, delay=70)
         await asyncio.sleep(0.3)
         typed = await locator.input_value()
-        emit({"type": "debug", "step": "password", "message": f"Strategy 3: typed={len(typed)}"})
+        emit({"type": "debug", "step": "password", "message": f"press_sequentially: typed={len(typed)}"})
 
     # Remember URL before clicking Next
     url_before = page.url
 
-    # Click Next — try ID first, then by text (Google GIS popup may use different DOM)
-    await page.evaluate("""() => {
-        // Strategy 1: standard Google login
-        const byId = document.querySelector('#passwordNext button');
-        if (byId && byId.offsetParent !== null) { byId.click(); return; }
-        // Strategy 2: find "Next" button by text (Google GIS popup)
-        for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-            const txt = (btn.textContent || '').trim();
-            if (txt === 'Next' && btn.offsetParent !== null) { btn.click(); return; }
-        }
-    }""")
+    # Click Next
+    await locator.press("Enter")
 
     # Wait for navigation away from password page
     for _ in range(15):
@@ -611,16 +594,17 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # ── Click "Continue with Google" ────────────────────────────────
     emit({"type": "progress", "step": "google_click", "message": "Clicking Continue with Google..."})
 
-    # Block popups — force Google OAuth to open in same page
-    # This avoids the GIS popup which has different DOM and breaks password typing
-    await page.evaluate("""() => {
-        window.open = function(url) {
-            if (url) window.location.href = url;
-            return window;
-        };
-    }""")
+    # Listen for popup (Google GIS opens OAuth in popup)
+    popup_page = None
+    popup_future = asyncio.get_event_loop().create_future()
 
-    popup_page = None  # No popup expected after blocking
+    def on_popup(p):
+        nonlocal popup_page
+        popup_page = p
+        if not popup_future.done():
+            popup_future.set_result(p)
+
+    page.context.on("page", on_popup)
 
     for _ in range(10):
         clicked = await page.evaluate("""() => {
@@ -636,13 +620,23 @@ async def _run_signup_flow(page, email: str, password: str, manager):
             break
         await asyncio.sleep(1)
 
-    # Wait for same-page navigation to Google
-    for _ in range(15):
-        if "accounts.google.com" in page.url:
-            break
-        await asyncio.sleep(1)
-    google_page = page
-    emit({"type": "debug", "step": "google_auth", "url": page.url[:80]})
+    # Wait for popup or same-page navigation
+    try:
+        await asyncio.wait_for(popup_future, timeout=8)
+    except asyncio.TimeoutError:
+        pass
+
+    if popup_page:
+        emit({"type": "debug", "step": "popup", "url": popup_page.url[:80]})
+        await popup_page.wait_for_load_state("domcontentloaded", timeout=10000)
+        google_page = popup_page
+    else:
+        for _ in range(10):
+            if "accounts.google.com" in page.url:
+                break
+            await asyncio.sleep(1)
+        google_page = page
+        emit({"type": "debug", "step": "same_page", "url": page.url[:80]})
 
     await asyncio.sleep(2)
 
@@ -664,7 +658,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
 
     # ── Handle consent + redirect ───────────────────────────────────
     emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
-    landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=None)
+    landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=popup_page)
     if not landed:
         emit({"type": "result", "success": False, "error": "Failed to redirect to chat.b.ai after consent", "email": email})
         return
