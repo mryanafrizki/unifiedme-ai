@@ -723,6 +723,24 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # ── Navigate to API key page and create key ─────────────────────
     emit({"type": "progress", "step": "api_key", "message": "Getting API key..."})
     api_key = ""
+
+    # Set up response interceptor to capture API key from tRPC response
+    _captured_api_key = {"key": ""}
+
+    async def _capture_api_key_response(response):
+        if "apiKey.createApiKey" in response.url or "apiKey.create" in response.url:
+            try:
+                body = await response.text()
+                import re
+                match = re.search(r'sk-[a-zA-Z0-9]{20,}', body)
+                if match:
+                    _captured_api_key["key"] = match.group(0)
+                    emit({"type": "debug", "step": "api_key", "message": f"Captured from response: {match.group(0)[:20]}..."})
+            except Exception:
+                pass
+
+    page.on("response", _capture_api_key_response)
+
     try:
         await page.goto("https://chat.b.ai/key", wait_until="domcontentloaded", timeout=20000)
         await asyncio.sleep(3)
@@ -756,7 +774,11 @@ async def _run_signup_flow(page, email: str, password: str, manager):
                 for (const inp of inputs) {
                     if (inp.offsetParent === null) continue;
                     inp.focus();
-                    inp.value = name;
+                    // Use React setter
+                    const proto = window.HTMLInputElement && window.HTMLInputElement.prototype;
+                    const setter = proto ? Object.getOwnPropertyDescriptor(proto, 'value')?.set : null;
+                    if (setter) setter.call(inp, name);
+                    else inp.value = name;
                     inp.dispatchEvent(new Event('input', { bubbles: true }));
                     inp.dispatchEvent(new Event('change', { bubbles: true }));
                     return 'filled:' + name;
@@ -772,35 +794,38 @@ async def _run_signup_flow(page, email: str, password: str, manager):
                     for (const btn of document.querySelectorAll('button')) {
                         const txt = (btn.textContent || '').trim().toLowerCase();
                         if (btn.offsetParent === null) continue;
-                        if (txt === 'create' || txt === 'create key' || txt === 'submit' || txt === 'confirm') {
+                        if (txt === 'create' || txt === 'create key' || txt === 'submit' || txt === 'confirm' || txt === 'add') {
                             btn.click(); return true;
                         }
                     }
                     return false;
                 }""")
-                await asyncio.sleep(3)
+                await asyncio.sleep(5)
         except Exception:
             pass
 
-        # Extract API key from page (sk-xxx pattern)
-        api_key = await page.evaluate("""() => {
-            const text = document.body.innerText || '';
-            const match = text.match(/sk-[a-zA-Z0-9]{20,}/);
-            if (match) return match[0];
-            // Check inputs and code elements
-            for (const el of document.querySelectorAll('input, code, pre, span, td')) {
-                const val = (el.value || el.textContent || '').trim();
-                if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80) return val;
-            }
-            return '';
-        }""") or ""
+        # Check captured key from response interceptor first
+        api_key = _captured_api_key["key"]
+
+        # Fallback: extract from page DOM
+        if not api_key:
+            api_key = await page.evaluate("""() => {
+                const text = document.body.innerText || '';
+                const match = text.match(/sk-[a-zA-Z0-9]{20,}/);
+                if (match) return match[0];
+                for (const el of document.querySelectorAll('input, code, pre, span, td, div, p')) {
+                    const val = (el.value || el.textContent || '').trim();
+                    if (val.startsWith('sk-') && val.length >= 20 && val.length <= 80 && !val.includes(' ')) return val;
+                }
+                return '';
+            }""") or ""
 
         if api_key:
             emit({"type": "progress", "step": "api_key", "message": f"API key: {api_key[:20]}..."})
         else:
-            emit({"type": "debug", "step": "api_key", "message": "Could not extract API key from /key page"})
+            emit({"type": "debug", "step": "api_key", "message": "Could not extract API key"})
     except Exception as e:
-        emit({"type": "debug", "step": "api_key", "message": f"API key extraction error: {e}"})
+        emit({"type": "debug", "step": "api_key", "message": f"API key error: {e}"})
 
     # ── Extract session token from cookies ──────────────────────────
     session_token = ""
