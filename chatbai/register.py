@@ -173,10 +173,14 @@ async def fill_google_email(page, email: str) -> bool:
         await locator.press_sequentially(email, delay=60)
         await asyncio.sleep(0.5)
 
-        # Click Next
+        # Click Next — try ID first, then by text
         await page.evaluate("""() => {
-            const btn = document.querySelector('#identifierNext button');
-            if (btn) btn.click();
+            const byId = document.querySelector('#identifierNext button');
+            if (byId && byId.offsetParent !== null) { byId.click(); return; }
+            for (const btn of document.querySelectorAll('button, div[role="button"]')) {
+                const txt = (btn.textContent || '').trim();
+                if (txt === 'Next' && btn.offsetParent !== null) { btn.click(); return; }
+            }
         }""")
         await asyncio.sleep(2)
         return True
@@ -253,10 +257,16 @@ async def fill_google_password(page, password: str) -> bool:
     # Remember URL before clicking Next
     url_before = page.url
 
-    # Click Next
+    # Click Next — try ID first, then by text (Google GIS popup may use different DOM)
     await page.evaluate("""() => {
-        const btn = document.querySelector('#passwordNext button');
-        if (btn) btn.click();
+        // Strategy 1: standard Google login
+        const byId = document.querySelector('#passwordNext button');
+        if (byId && byId.offsetParent !== null) { byId.click(); return; }
+        // Strategy 2: find "Next" button by text (Google GIS popup)
+        for (const btn of document.querySelectorAll('button, div[role="button"]')) {
+            const txt = (btn.textContent || '').trim();
+            if (txt === 'Next' && btn.offsetParent !== null) { btn.click(); return; }
+        }
     }""")
 
     # Wait for navigation away from password page
