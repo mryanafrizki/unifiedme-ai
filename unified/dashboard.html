@@ -827,6 +827,18 @@ a:hover{text-decoration:underline}
           <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
         </div>
       </div>
+      <div class="acct-col">
+        <h3><span class="badge badge-chatbai">ChatBAI</span> ChatBAI Accounts</h3>
+        <div class="acct-col-filters" data-provider="cbai">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-cbai">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
     </div>
 
     <!-- Trash Section -->
@@ -2809,7 +2821,7 @@ async function loadAccounts() {
     state.sticky = data.sticky || {};
     // Count provider-level statuses across all accounts
     var countActive = 0, countFailed = 0, countBanned = 0, countExhausted = 0;
-    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status'];
+    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status', 'cbai_status'];
     state.accounts.forEach(function(a) {
       var hasAnyOk = false;
       var hasAnyFailed = false;
@@ -2837,7 +2849,7 @@ async function loadAccounts() {
     renderAccounts();
     renderTrash();
   } catch (e) {
-    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl'].forEach(id => {
+    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl','acct-body-cbai'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<div class="acct-col-empty">Failed to load: ' + escHtml(e.message) + '</div>';
     });
@@ -2877,6 +2889,7 @@ function renderAccounts() {
   renderAccountColumn('cb');
   renderAccountColumn('ws');
   renderAccountColumn('gl');
+  renderAccountColumn('cbai');
 }
 
 function getProviderAccounts(provider) {
@@ -2893,6 +2906,9 @@ function getProviderAccounts(provider) {
     } else if (provider === 'gl') {
       const s = (a.gl_status || '').toLowerCase();
       return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'cbai') {
+      const s = (a.cbai_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
     }
     return false;
   });
@@ -2903,6 +2919,7 @@ function getProviderStatus(a, provider) {
   if (provider === 'cb') return (a.cb_status || 'none').toLowerCase();
   if (provider === 'ws') return (a.ws_status || 'none').toLowerCase();
   if (provider === 'gl') return (a.gl_status || 'none').toLowerCase();
+  if (provider === 'cbai') return (a.cbai_status || 'none').toLowerCase();
   return 'none';
 }
 
@@ -2973,7 +2990,7 @@ async function setStickyAccount(accountId, provider) {
 async function forceUseAccount(accountId, provider, providerApiName) {
   // Temporarily restore account status to 'ok' and set as sticky
   var tier = getTierForProvider(provider);
-  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : 'gl_status';
+  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : providerApiName === 'chatbai' ? 'cbai_status' : 'gl_status';
   var errorCol = providerApiName === 'kiro' ? 'kiro_error' : providerApiName === 'codebuddy' ? 'cb_error' : providerApiName === 'wavespeed' ? 'ws_error' : 'gl_error';
   var errorCountCol = providerApiName === 'kiro' ? 'kiro_error_count' : providerApiName === 'codebuddy' ? 'cb_error_count' : providerApiName === 'wavespeed' ? 'ws_error_count' : 'gl_error_count';
   try {
@@ -4354,6 +4371,7 @@ function handleBatchEvent(data) {
     else if (prov === 'codebuddy') job.codebuddy = data.success;
     else if (prov === 'wavespeed') job.wavespeed = data.success;
     else if (prov === 'gumloop') job.gumloop = data.success;
+    else if (prov === 'chatbai') job.chatbai = data.success;
     renderBatchJobs();
     renderBatchResults();
   }
@@ -4447,7 +4465,7 @@ function renderBatchResults() {
   var provs = getActiveProviders();
   // Show jobs with ANY provider result (not just completed jobs)
   var successJobs = jobs.filter(function(j) {
-    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop));
+    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop || j.chatbai));
   });
   var failedJobs = jobs.filter(function(j) { return j.status === 'failed'; });
   var resultsDiv = document.getElementById('batch-results');
@@ -4473,7 +4491,7 @@ function renderBatchResults() {
   if (successJobs.length > 0) {
     okDiv.innerHTML = successJobs.map(function(j) {
       var cols = provs.map(function(p) {
-        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : j.wavespeed;
+        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : (p === 'chatbai') ? j.chatbai : j.wavespeed;
         if (val === true) return '<span class="br-provider br-ok">\u2713</span>';
         if (val === false) return '<span class="br-provider br-fail">\u2717</span>';
         // undefined = still pending
