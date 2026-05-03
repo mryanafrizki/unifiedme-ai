@@ -611,17 +611,16 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     # ── Click "Continue with Google" ────────────────────────────────
     emit({"type": "progress", "step": "google_click", "message": "Clicking Continue with Google..."})
 
-    # Listen for popup (Google OAuth may open in popup)
-    popup_page = None
-    popup_future = asyncio.get_event_loop().create_future()
+    # Block popups — force Google OAuth to open in same page
+    # This avoids the GIS popup which has different DOM and breaks password typing
+    await page.evaluate("""() => {
+        window.open = function(url) {
+            if (url) window.location.href = url;
+            return window;
+        };
+    }""")
 
-    def on_popup(p):
-        nonlocal popup_page
-        popup_page = p
-        if not popup_future.done():
-            popup_future.set_result(p)
-
-    page.context.on("page", on_popup)
+    popup_page = None  # No popup expected after blocking
 
     for _ in range(10):
         clicked = await page.evaluate("""() => {
@@ -637,23 +636,13 @@ async def _run_signup_flow(page, email: str, password: str, manager):
             break
         await asyncio.sleep(1)
 
-    # Wait for popup or same-page navigation
-    try:
-        await asyncio.wait_for(popup_future, timeout=8)
-    except asyncio.TimeoutError:
-        pass
-
-    if popup_page:
-        emit({"type": "debug", "step": "popup", "url": popup_page.url[:80]})
-        await popup_page.wait_for_load_state("domcontentloaded", timeout=10000)
-        google_page = popup_page
-    else:
-        for _ in range(10):
-            if "accounts.google.com" in page.url:
-                break
-            await asyncio.sleep(1)
-        google_page = page
-        emit({"type": "debug", "step": "same_page", "url": page.url[:80]})
+    # Wait for same-page navigation to Google
+    for _ in range(15):
+        if "accounts.google.com" in page.url:
+            break
+        await asyncio.sleep(1)
+    google_page = page
+    emit({"type": "debug", "step": "google_auth", "url": page.url[:80]})
 
     await asyncio.sleep(2)
 
@@ -675,7 +664,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
 
     # ── Handle consent + redirect ───────────────────────────────────
     emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
-    landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=popup_page)
+    landed = await handle_consent_and_redirect(page, "chat.b.ai", popup_page=None)
     if not landed:
         emit({"type": "result", "success": False, "error": "Failed to redirect to chat.b.ai after consent", "email": email})
         return
