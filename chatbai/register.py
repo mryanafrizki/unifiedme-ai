@@ -431,7 +431,23 @@ async def main(email: str, password: str, headless: bool = False, proxy_url: str
     emit({"type": "debug", "step": "init", "message": f"headless={headless}, proxy={proxy_url or 'none'}, BATCHER_HEADLESS={os.getenv('BATCHER_CAMOUFOX_HEADLESS', 'unset')}"})
 
     # ── Launch Camoufox ─────────────────────────────────────────────
-    proxy_cfg = {"server": proxy_url} if proxy_url else None
+    # Firefox/Playwright doesn't support SOCKS5 with auth — convert to HTTP with separate auth fields
+    proxy_cfg = None
+    if proxy_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(proxy_url)
+        # Extract username:password if present
+        username = parsed.username or ""
+        password = parsed.password or ""
+        # Build server URL without credentials, force HTTP scheme for Firefox compat
+        scheme = "http" if parsed.scheme.startswith("socks") else parsed.scheme
+        server = f"{scheme}://{parsed.hostname}:{parsed.port}"
+        proxy_cfg = {"server": server}
+        if username:
+            proxy_cfg["username"] = username
+        if password:
+            proxy_cfg["password"] = password
+        emit({"type": "debug", "step": "init", "message": f"Proxy: {server} (auth={'yes' if username else 'no'})"})
 
     try:
         manager = AsyncCamoufox(
