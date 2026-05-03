@@ -97,6 +97,18 @@ def emit(data: dict):
             pass
 
 
+def safe_print(*args, **kwargs):
+    """Print that won't crash on Windows with unicode."""
+    try:
+        print(*args, **kwargs)
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        try:
+            text = " ".join(str(a) for a in args)
+            print(text.encode("ascii", errors="replace").decode(), **kwargs)
+        except Exception:
+            pass
+
+
 def should_capture(url: str, method: str) -> bool:
     url_lower = url.lower()
     if any(p in url_lower for p in SKIP_PATTERNS):
@@ -525,8 +537,8 @@ async def _run_signup_flow(page, email: str, password: str, manager):
             pass
 
         captured.append(entry)
-        print(format_entry(entry))
-        print()
+        safe_print(format_entry(entry))
+        safe_print()
 
     page.on("response", on_response)
 
@@ -541,7 +553,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
                 "direction": "sent", "url": ws_url,
                 "payload": str(payload)[:2000],
             })
-            print(f"  [WS->] {ws_url[:60]} : {str(payload)[:200]}")
+            safe_print(f"  [WS->] {ws_url[:60]} : {str(payload)[:200]}")
 
         def on_frame_received(payload):
             ws_frames.append({
@@ -549,7 +561,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
                 "direction": "received", "url": ws_url,
                 "payload": str(payload)[:2000],
             })
-            print(f"  [WS<-] {ws_url[:60]} : {str(payload)[:200]}")
+            safe_print(f"  [WS<-] {ws_url[:60]} : {str(payload)[:200]}")
 
         ws.on("framesent", on_frame_sent)
         ws.on("framereceived", on_frame_received)
@@ -631,7 +643,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
     ok = await fill_google_email(google_page, email)
     if not ok:
         emit({"type": "error", "step": "email", "message": "Failed to fill email"})
-        print("\n  ⚠ Email step failed. Complete login manually in the browser.")
+        emit({"type": "error", "step": "email", "message": "Failed to fill email"})
     else:
         await asyncio.sleep(1)
 
@@ -640,7 +652,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
         ok = await fill_google_password(google_page, password)
         if not ok:
             emit({"type": "error", "step": "password", "message": "Failed to fill password"})
-            print("\n  ⚠ Password step failed. Complete login manually in the browser.")
+            emit({"type": "error", "step": "password", "message": "Failed to fill password"})
         else:
             # ── Handle consent + redirect ───────────────────────────
             emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
@@ -649,7 +661,7 @@ async def _run_signup_flow(page, email: str, password: str, manager):
                 emit({"type": "progress", "step": "done", "message": "Logged in to chat.b.ai!"})
             else:
                 emit({"type": "debug", "step": "redirect_timeout", "url": page.url[:80]})
-                print("\n  ⚠ Redirect timeout. Check browser manually.")
+                emit({"type": "error", "step": "redirect", "message": "Redirect timeout"})
 
     # ── Claim signup bonus ─────────────────────────────────────────
     await asyncio.sleep(5)  # Wait for claim popup to appear
@@ -833,22 +845,22 @@ def save_logs():
     with open(LOG_FILE, "w", encoding="utf-8") as f:
         json.dump(output, f, indent=2, ensure_ascii=False)
 
-    print()
-    print(f"  Saved {len(captured)} HTTP + {len(ws_frames)} WS frames to {LOG_FILE}")
+    safe_print()
+    safe_print(f"  Saved {len(captured)} HTTP + {len(ws_frames)} WS frames to {LOG_FILE}")
 
-    print()
-    print("  === SUMMARY (non-GET requests) ===")
+    safe_print()
+    safe_print("  === SUMMARY (non-GET requests) ===")
     for entry in captured:
         if entry["method"] != "GET":
-            print(f"    {entry['method']} {entry['url'][:100]}")
+            safe_print(f"    {entry['method']} {entry['url'][:100]}")
 
     if ws_frames:
-        print()
+        safe_print()
         unique_ws = set(f["url"] for f in ws_frames)
         for ws_url in unique_ws:
             count = sum(1 for f in ws_frames if f["url"] == ws_url)
-            print(f"    WS {ws_url[:80]} ({count} frames)")
-    print()
+            safe_print(f"    WS {ws_url[:80]} ({count} frames)")
+    safe_print()
 
 
 if __name__ == "__main__":
