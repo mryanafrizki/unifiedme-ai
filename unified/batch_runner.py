@@ -163,6 +163,8 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
                 needed_providers.remove("wavespeed")
             if "gumloop" in needed_providers and existing.get("gl_status") == "ok":
                 needed_providers.remove("gumloop")
+            if "skillboss" in needed_providers and existing.get("skboss_status") == "ok":
+                needed_providers.remove("skillboss")
 
         # Filter out providers already used globally (D1 cross-license check)
         if email in global_duplicates:
@@ -251,6 +253,10 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             cbai_result, _ = await _run_chatbai_login(job, proxy_override=cbai_proxy)
             result.update(cbai_result)
 
+        if "skillboss" in job.providers:
+            skboss_result = await _run_skillboss_login(job)
+            result.update(skboss_result)
+
         job.result = result
         imported: list[str] = []
 
@@ -259,7 +265,8 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
         ws_ok = "wavespeed" in job.providers and result.get("wavespeed", {}).get("success")
         gl_ok = "gumloop" in job.providers and result.get("gumloop", {}).get("success")
         cbai_ok = "chatbai" in job.providers and result.get("chatbai", {}).get("success")
-        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok
+        skboss_ok = "skillboss" in job.providers and result.get("skillboss", {}).get("success")
+        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok or skboss_ok
 
         if any_login_success and not job.account_id:
             job.account_id = await db.create_account(job.email, job.password)
@@ -320,6 +327,22 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             batch_state.broadcast({
                 "type": "provider_done", "job_id": job.id, "email": job.email,
                 "provider": "chatbai", "success": ok,
+            })
+
+        if skboss_ok:
+            api_key = result.get("skillboss", {}).get("api_key", "")
+            if api_key and job.account_id:
+                from .config import SKBOSS_DEFAULT_CREDITS
+                await db.update_account(job.account_id, skboss_status="ok", skboss_api_key=api_key, skboss_credits=SKBOSS_DEFAULT_CREDITS, skboss_error="")
+                imported.append("skillboss")
+                ok = True
+            else:
+                if job.account_id:
+                    await db.update_account(job.account_id, skboss_status="failed", skboss_error="No API key")
+                ok = False
+            batch_state.broadcast({
+                "type": "provider_done", "job_id": job.id, "email": job.email,
+                "provider": "skillboss", "success": ok,
             })
 
         any_success = bool(imported)
@@ -1146,6 +1169,95 @@ async def _run_gumloop_login(
     return result_data, proxy_url_used
 
 
+async def _run_skillboss_login(job: AccountJob) -> dict:
+    """Run skillboss/register.py for Google OAuth signup."""
+    from pathlib import Path
+    from .config import PYTHON_BIN, AUTH_DIR
+
+    script = Path(__file__).parent.parent / "skillboss" / "register.py"
+    if not script.exists():
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "skillboss", "step": "error",
+            "message": "skillboss/register.py not found",
+        })
+        return {"skillboss": {"success": False, "error": "skillboss/register.py not found"}}
+
+    # Use the same python binary as other providers (from .venv)
+    _py = PYTHON_BIN
+    if not _py.exists():
+        _py = PYTHON_BIN.with_suffix(".exe")
+    python_bin = str(_py) if _py.exists() else "python"
+
+    headless = "true" if batch_state.headless else "false"
+    cmd = [python_bin, str(script), "--email", job.email, "--secret", job.password]
+
+    batch_state.broadcast({
+        "type": "job_log", "job_id": job.id, "email": job.email,
+        "provider": "skillboss", "step": "start",
+        "message": f"Launching SkillBoss signup (headless={headless})...",
+    })
+
+    env = {**os.environ, "BATCHER_CAMOUFOX_HEADLESS": headless, "BATCHER_ENABLE_CAMOUFOX": "true"}
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+            cwd=str(AUTH_DIR),
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    except asyncio.TimeoutError:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "skillboss", "step": "timeout",
+            "message": "Signup timed out (180s)",
+        })
+        return {"skillboss": {"success": False, "error": "Signup timed out (180s)"}}
+    except Exception as exc:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "skillboss", "step": "error",
+            "message": f"Process error: {exc}",
+        })
+        return {"skillboss": {"success": False, "error": str(exc)}}
+
+    # Parse JSON lines from stdout — broadcast progress
+    result_data: dict = {"skillboss": {"success": False, "error": "No result"}}
+    for line in stdout.decode(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if data.get("type") == "progress":
+                batch_state.broadcast({
+                    "type": "job_log", "job_id": job.id, "email": job.email,
+                    "provider": "skillboss", "step": data.get("step", ""),
+                    "message": data.get("message", ""),
+                })
+            elif data.get("type") == "result":
+                result_data = {"skillboss": data}
+                break
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    # Log stderr if failed
+    if not result_data.get("skillboss", {}).get("success") and stderr:
+        err_text = stderr.decode(errors="replace")[:300]
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "skillboss", "step": "stderr",
+            "message": err_text,
+        })
+        if result_data["skillboss"].get("error") == "No result":
+            result_data["skillboss"]["error"] = f"Process failed: {err_text[:200]}"
+
+    return result_data
+
+
 async def _import_gumloop(job: AccountJob) -> bool:
     """Store Gumloop tokens in DB (from browser signup or token refresh)."""
     gl_data = job.result.get("gumloop", {})
@@ -1423,6 +1535,8 @@ async def retry_account(account_id: int, providers: Optional[list[str]] = None) 
             providers.append("wavespeed")
         if account.get("gl_status") in ("none", "pending", "failed"):
             providers.append("gumloop")
+        if account.get("skboss_status") in ("none", "pending", "failed"):
+            providers.append("skillboss")
         if not providers:
             providers = ["kiro", "codebuddy"]
 
@@ -1453,6 +1567,11 @@ async def retry_account(account_id: int, providers: Optional[list[str]] = None) 
     if "gumloop" in providers:
         gl_result, _gl_proxy = await _run_gumloop_login(job)
         result.update(gl_result)
+
+    # Run SkillBoss login (direct Python)
+    if "skillboss" in providers:
+        skboss_result = await _run_skillboss_login(job)
+        result.update(skboss_result)
 
     job.result = result
 
@@ -1497,6 +1616,18 @@ async def retry_account(account_id: int, providers: Optional[list[str]] = None) 
         error = result.get("gumloop", {}).get("error", "Login failed")
         await db.update_account(account_id, gl_status="failed", gl_error=error)
 
+    if "skillboss" in providers and result.get("skillboss", {}).get("success"):
+        api_key = result["skillboss"].get("api_key", "")
+        if api_key:
+            from .config import SKBOSS_DEFAULT_CREDITS
+            await db.update_account(account_id, skboss_status="ok", skboss_api_key=api_key, skboss_credits=SKBOSS_DEFAULT_CREDITS, skboss_error="")
+            imported.append("skillboss")
+        else:
+            await db.update_account(account_id, skboss_status="failed", skboss_error="No API key returned")
+    elif "skillboss" in providers:
+        error = result.get("skillboss", {}).get("error", "Login failed")
+        await db.update_account(account_id, skboss_status="failed", skboss_error=error)
+
     # Only mark account failed if no provider works at all
     if not imported:
         refreshed = await db.get_account(account_id)
@@ -1505,6 +1636,7 @@ async def retry_account(account_id: int, providers: Optional[list[str]] = None) 
             or refreshed.get("cb_status") == "ok"
             or refreshed.get("ws_status") == "ok"
             or refreshed.get("gl_status") == "ok"
+            or refreshed.get("skboss_status") == "ok"
         )
         if not has_any_ok:
             await db.update_account(account_id, status="failed")

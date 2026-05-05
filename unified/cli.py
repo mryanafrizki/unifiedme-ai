@@ -206,8 +206,9 @@ def _get_account_stats() -> dict:
         ws = db.execute("SELECT COUNT(*) FROM accounts WHERE ws_status='ok'").fetchone()[0]
         gl = db.execute("SELECT COUNT(*) FROM accounts WHERE gl_status='ok'").fetchone()[0]
         cbai = db.execute("SELECT COUNT(*) FROM accounts WHERE cbai_status='ok'").fetchone()[0]
+        skboss = db.execute("SELECT COUNT(*) FROM accounts WHERE skboss_status='ok'").fetchone()[0]
         db.close()
-        return {"total": total, "kr": kr, "cb": cb, "ws": ws, "gl": gl, "cbai": cbai}
+        return {"total": total, "kr": kr, "cb": cb, "ws": ws, "gl": gl, "cbai": cbai, "skboss": skboss}
     except Exception:
         return {}
 
@@ -234,7 +235,7 @@ def _print_d1_box(title: str, push_ok: bool = True):
     print()
     print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
     print(f"    {status}")
-    print(f"    {WHITE}KR:{NC} {stats['kr']}  {WHITE}CB:{NC} {stats['cb']}  {WHITE}WS:{NC} {stats['ws']}  {WHITE}GL:{NC} {stats['gl']}  {WHITE}CBAI:{NC} {stats.get('cbai', 0)}  {DIM}Total: {stats['total']}{NC}")
+    print(f"    {WHITE}KR:{NC} {stats['kr']}  {WHITE}CB:{NC} {stats['cb']}  {WHITE}WS:{NC} {stats['ws']}  {WHITE}GL:{NC} {stats['gl']}  {WHITE}CBAI:{NC} {stats.get('cbai', 0)}  {WHITE}SKB:{NC} {stats.get('skboss', 0)}  {DIM}Total: {stats['total']}{NC}")
     print(f"    {DIM}{_now} · {_device} ({_os_info}){NC}")
     print(f"    {DIM}D1 = pusat · Heartbeat: 2min · Push: instant per-account{NC}")
     print(f"  {CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{NC}")
@@ -1078,7 +1079,7 @@ def cmd_addaccounts_add():
     # ── Show current account stats ──
     stats = _get_account_stats()
     if stats:
-        print(f"\n  {_DIM}Current accounts:{_NC} KR:{stats['kr']}  CB:{stats['cb']}  WS:{stats['ws']}  GL:{stats['gl']}  CBAI:{stats.get('cbai', 0)}  Total:{stats['total']}")
+        print(f"\n  {_DIM}Current accounts:{_NC} KR:{stats['kr']}  CB:{stats['cb']}  WS:{stats['ws']}  GL:{stats['gl']}  CBAI:{stats.get('cbai', 0)}  SKB:{stats.get('skboss', 0)}  Total:{stats['total']}")
 
     # ── Step 1: Proxy ──
     print(f"\n  {_CYAN}--- Step 1: Proxy ---{_NC}")

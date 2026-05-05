@@ -183,6 +183,11 @@ code,pre,.mono{font-family:'JetBrains Mono',monospace}
 .badge-max{background:var(--purple-dim);color:var(--purple)}
 .badge-max_gl{background:rgba(34,211,238,.12);color:var(--cyan)}
 .badge-chatbai{background:rgba(251,191,36,.12);color:#fbbf24}
+.badge-skillboss{background:rgba(168,85,247,.12);color:#a855f7}
+.acct-col-actions{margin-left:auto;display:inline-flex;gap:3px;flex-shrink:0}
+.btn-xs{font-size:9px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer;transition:all .15s;white-space:nowrap;line-height:1.4}
+.btn-xs:hover{background:var(--bg-card);color:var(--text)}
+.acct-col-header h4{font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .badge-success{background:var(--green-dim);color:var(--green)}
 .badge-error{background:var(--red-dim);color:var(--red)}
 .badge-queued{background:var(--gray-dim);color:var(--gray)}
@@ -755,8 +760,6 @@ a:hover{text-decoration:underline}
       <div class="section-title" style="margin-bottom:0">Accounts by Provider</div>
       <div class="acct-toolbar">
         <button class="btn btn-sm" id="test-batch-btn" onclick="testBatchAccounts()">&#x1f9ea; Test Batch</button>
-        <button class="btn btn-sm" id="approve-all-btn" onclick="approveAllAccounts()">&#x2705; Approve All</button>
-        <button class="btn btn-sm btn-danger" id="delete-fix-btn" onclick="deleteFixAccounts()">&#x1f5d1; Delete Fix</button>
         <button class="btn btn-sm" id="refresh-accounts-btn">&#x21bb; Refresh</button>
         <button class="btn btn-sm" id="sync-d1-btn" onclick="syncFromD1()" style="background:#6c8aff;color:#fff">&#x2601; Sync D1</button>
       </div>
@@ -771,6 +774,7 @@ a:hover{text-decoration:underline}
       <div class="acct-col" id="acct-col-kiro">
         <div class="acct-col-header">
           <h4>&#x1f680; KIRO <span class="acct-count" id="acct-count-kiro">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('kiro')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('kiro')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('kiro')">Del</button></span>
         </div>
         <div class="acct-col-filters" data-provider="kiro">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -785,6 +789,7 @@ a:hover{text-decoration:underline}
       <div class="acct-col" id="acct-col-cb">
         <div class="acct-col-header">
           <h4>&#x1f4bb; CODEBUDDY <span class="acct-count" id="acct-count-cb">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('codebuddy')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('codebuddy')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('codebuddy')">Del</button></span>
         </div>
         <div class="acct-col-filters" data-provider="cb">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -799,6 +804,7 @@ a:hover{text-decoration:underline}
       <div class="acct-col" id="acct-col-ws">
         <div class="acct-col-header">
           <h4>&#x26a1; WAVESPEED <span class="acct-count" id="acct-count-ws">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('wavespeed')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('wavespeed')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('wavespeed')">Del</button></span>
         </div>
         <div class="acct-col-filters" data-provider="ws">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -811,11 +817,9 @@ a:hover{text-decoration:underline}
         </div>
       </div>
       <div class="acct-col" id="acct-col-gl">
-        <div class="acct-col-header" style="display:flex;align-items:center;justify-content:space-between">
+        <div class="acct-col-header">
           <h4>&#x1f30a; GUMLOOP <span class="acct-count" id="acct-count-gl">0</span></h4>
-          <button class="btn btn-sm" onclick="showMcpListModal()" style="font-size:11px;padding:2px 8px">MCP List</button>
-          <button class="btn btn-sm" onclick="showBindMcpModal()" style="font-size:11px;padding:2px 8px">Bind MCP</button>
-          <button class="btn btn-sm btn-danger" onclick="showDeleteMcpModal()" style="font-size:11px;padding:2px 8px">Delete MCP</button>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('gumloop')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('gumloop')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('gumloop')">Del</button><button class="btn-xs" onclick="showMcpListModal()">MCP</button></span>
         </div>
         <div class="acct-col-filters" data-provider="gl">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -827,8 +831,11 @@ a:hover{text-decoration:underline}
           <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
         </div>
       </div>
-      <div class="acct-col">
-        <h3><span class="badge badge-chatbai">ChatBAI</span> ChatBAI Accounts</h3>
+      <div class="acct-col" id="acct-col-cbai">
+        <div class="acct-col-header">
+          <h4><span class="badge badge-chatbai">BAI</span> CHATBAI <span class="acct-count" id="acct-count-cbai">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('chatbai')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('cbai')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('cbai')">Del</button></span>
+        </div>
         <div class="acct-col-filters" data-provider="cbai">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
           <button class="acct-col-filter" data-pfilter="active">Active</button>
@@ -836,6 +843,21 @@ a:hover{text-decoration:underline}
           <button class="acct-col-filter" data-pfilter="fix">Fix</button>
         </div>
         <div class="acct-col-body" id="acct-body-cbai">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
+      <div class="acct-col">
+        <div class="acct-col-header">
+          <h4><span class="badge badge-skillboss">SKB</span> SKILLBOSS <span class="acct-count" id="acct-count-skboss">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('skillboss')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('skillboss')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('skillboss')">Del</button></span>
+        </div>
+        <div class="acct-col-filters" data-provider="skboss">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-skboss">
           <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
         </div>
       </div>
@@ -889,6 +911,10 @@ a:hover{text-decoration:underline}
       <div class="models-col">
         <h3><span class="badge" style="background:rgba(251,191,36,.2);color:#fbbf24">ChatBAI</span> ChatBAI Models</h3>
         <div id="chatbai-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+      <div class="models-col">
+        <h3><span class="badge badge-skillboss">SkillBoss</span> SkillBoss Models</h3>
+        <div id="skillboss-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
       </div>
     </div>
   </div>
@@ -1034,6 +1060,7 @@ a:hover{text-decoration:underline}
 <label><input type="checkbox" id="chk-wavespeed"> WaveSpeed</label>
 <label><input type="checkbox" id="chk-gumloop"> Gumloop</label>
 <label><input type="checkbox" id="chk-chatbai"> ChatBAI</label>
+<label><input type="checkbox" id="chk-skillboss"> SkillBoss</label>
           <span style="border-left:1px solid var(--border);padding-left:10px"><label><input type="checkbox" id="chk-headless" checked> Headless</label></span>
           <span style="display:inline-flex;align-items:center;gap:3px">Parallel: <input type="number" id="batch-concurrency" value="1" min="1" max="10" style="width:40px;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:1px 4px;font-size:12px;text-align:center"></span>
         </div>
@@ -2821,7 +2848,7 @@ async function loadAccounts() {
     state.sticky = data.sticky || {};
     // Count provider-level statuses across all accounts
     var countActive = 0, countFailed = 0, countBanned = 0, countExhausted = 0;
-    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status', 'cbai_status'];
+    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status', 'cbai_status', 'skboss_status'];
     state.accounts.forEach(function(a) {
       var hasAnyOk = false;
       var hasAnyFailed = false;
@@ -2849,7 +2876,7 @@ async function loadAccounts() {
     renderAccounts();
     renderTrash();
   } catch (e) {
-    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl','acct-body-cbai'].forEach(id => {
+    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl','acct-body-cbai','acct-body-skboss'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<div class="acct-col-empty">Failed to load: ' + escHtml(e.message) + '</div>';
     });
@@ -2890,6 +2917,7 @@ function renderAccounts() {
   renderAccountColumn('ws');
   renderAccountColumn('gl');
   renderAccountColumn('cbai');
+  renderAccountColumn('skboss');
 }
 
 function getProviderAccounts(provider) {
@@ -2909,6 +2937,9 @@ function getProviderAccounts(provider) {
     } else if (provider === 'cbai') {
       const s = (a.cbai_status || '').toLowerCase();
       return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'skboss') {
+      const s = (a.skboss_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
     }
     return false;
   });
@@ -2920,6 +2951,7 @@ function getProviderStatus(a, provider) {
   if (provider === 'ws') return (a.ws_status || 'none').toLowerCase();
   if (provider === 'gl') return (a.gl_status || 'none').toLowerCase();
   if (provider === 'cbai') return (a.cbai_status || 'none').toLowerCase();
+  if (provider === 'skboss') return (a.skboss_status || 'none').toLowerCase();
   return 'none';
 }
 
@@ -2973,6 +3005,8 @@ function getTierForProvider(provider) {
   if (provider === 'cb') return 'max';
   if (provider === 'ws') return 'wavespeed';
   if (provider === 'gl') return 'max_gl';
+  if (provider === 'cbai') return 'chatbai';
+  if (provider === 'skboss') return 'skillboss';
   return provider;
 }
 
@@ -2990,7 +3024,7 @@ async function setStickyAccount(accountId, provider) {
 async function forceUseAccount(accountId, provider, providerApiName) {
   // Temporarily restore account status to 'ok' and set as sticky
   var tier = getTierForProvider(provider);
-  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : providerApiName === 'chatbai' ? 'cbai_status' : 'gl_status';
+  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : providerApiName === 'chatbai' ? 'cbai_status' : providerApiName === 'skillboss' ? 'skboss_status' : 'gl_status';
   var errorCol = providerApiName === 'kiro' ? 'kiro_error' : providerApiName === 'codebuddy' ? 'cb_error' : providerApiName === 'wavespeed' ? 'ws_error' : 'gl_error';
   var errorCountCol = providerApiName === 'kiro' ? 'kiro_error_count' : providerApiName === 'codebuddy' ? 'cb_error_count' : providerApiName === 'wavespeed' ? 'ws_error_count' : 'gl_error_count';
   try {
@@ -3473,16 +3507,19 @@ async function deleteAccount(id) {
 async function testBatchAccounts() {
   const btn = document.getElementById('test-batch-btn');
   btn.disabled = true;
+  const startTime = Date.now();
   btn.innerHTML = '<span class="loading-spinner"></span> Testing...';
+  toast('Test batch started (2s delay per account)...', 'info');
   try {
     const data = await apiFetch('/api/accounts/test-batch', {
       method: 'POST',
       body: JSON.stringify({})
     });
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const results = data.results || [];
     const okCount = results.filter(r => r.test_ok).length;
     const failCount = results.length - okCount;
-    toast('Test complete: ' + okCount + ' OK, ' + failCount + ' failed (' + results.length + ' total)', okCount > 0 ? 'success' : 'error');
+    toast('Test done: ' + okCount + ' restored, ' + failCount + ' still dead (' + (data.tested || results.length) + ' tested, ' + elapsed + 's)', okCount > 0 ? 'success' : 'info');
     await loadAccounts();
   } catch (e) {
     toast('Test batch failed: ' + e.message, 'error');
@@ -3517,6 +3554,66 @@ async function approveAllAccounts() {
     toast('Approve all failed: ' + e.message, 'error');
   }
   btn.disabled = false;
+}
+
+async function warmupAccounts(provider) {
+  const provName = provider || 'all';
+  if (!confirm('Warmup ' + provName + ': re-test banned/exhausted accounts? (2s per account)')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  const origText = btn.textContent;
+  const startTime = Date.now();
+  // Show elapsed timer on button
+  const timer = setInterval(() => {
+    const s = ((Date.now() - startTime) / 1000).toFixed(0);
+    btn.textContent = s + 's...';
+  }, 500);
+  toast(provName + ' warmup started...', 'info');
+  try {
+    const body = provider ? {provider: provider} : {};
+    const data = await apiFetch('/api/accounts/warmup', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    clearInterval(timer);
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const msg = provName + ': ' + (data.restored || 0) + '/' + (data.total_targets || data.tested || 0) + ' restored (' + elapsed + 's)';
+    toast(msg, data.restored > 0 ? 'success' : 'info');
+    await loadAccounts();
+  } catch (e) {
+    clearInterval(timer);
+    toast('Warmup failed: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = origText;
+}
+
+async function approveAllForProvider(provider) {
+  if (!confirm('Approve all temporary ' + provider + ' accounts as fix?')) return;
+  try {
+    const data = await apiFetch('/api/accounts/approve-all', {
+      method: 'POST',
+      body: JSON.stringify({provider: provider})
+    });
+    toast('Approved ' + (data.approved || 0) + ' ' + provider + ' account(s)', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Failed: ' + e.message, 'error');
+  }
+}
+
+async function deleteFixForProvider(provider) {
+  if (!confirm('Delete ALL verified-fix ' + provider + ' accounts? This is permanent!')) return;
+  try {
+    const data = await apiFetch('/api/accounts/delete-fix', {
+      method: 'DELETE',
+      body: JSON.stringify({provider: provider})
+    });
+    toast('Deleted ' + (data.deleted || 0) + ' ' + provider + ' fix account(s)', 'success');
+    await loadAccounts();
+  } catch (e) {
+    toast('Delete failed: ' + e.message, 'error');
+  }
 }
 
 async function deleteFixAccounts() {
@@ -3703,13 +3800,16 @@ async function loadModels() {
     const wavespeed = [];
     const gumloop = [];
     const chatbai = [];
+    const skillboss = [];
     for (let i = 0; i < models.length; i++) {
       const m = models[i];
       const id = m.id || m.name || '';
       const tier = (m.tier || '').toLowerCase();
       const owner = m.owned_by || m.provider || '';
       const entry = { name: id, provider: owner, tier: tier };
-      if (tier === 'chatbai' || owner.toLowerCase() === 'chatbai') {
+      if (tier === 'skillboss' || owner.toLowerCase() === 'skillboss') {
+        skillboss.push(entry);
+      } else if (tier === 'chatbai' || owner.toLowerCase() === 'chatbai') {
         chatbai.push(entry);
       } else if (tier === 'max_gl' || owner.toLowerCase() === 'gumloop') {
         gumloop.push(entry);
@@ -3726,11 +3826,13 @@ async function loadModels() {
     loadedModels.wavespeed = wavespeed;
     loadedModels.gumloop = gumloop;
     loadedModels.chatbai = chatbai;
+    loadedModels.skillboss = skillboss;
     renderModelColumn('standard-models', standard, 'standard');
     renderModelColumn('max-models', max, 'max');
     renderModelColumn('wavespeed-models', wavespeed, 'wavespeed');
     renderModelColumn('gumloop-models', gumloop, 'max_gl');
     renderModelColumn('chatbai-models', chatbai, 'chatbai');
+    renderModelColumn('skillboss-models', skillboss, 'skillboss');
   } catch (e) {
     if (stdEl) stdEl.innerHTML = '<div class="empty-state">Failed to load models: ' + (e.message || e) + '</div>';
     if (maxEl) maxEl.innerHTML = '<div class="empty-state">Failed to load models</div>';
@@ -3749,7 +3851,7 @@ function renderModelColumn(containerId, models, tier) {
     const isThinking = m.name.endsWith('-thinking');
     const isPremium = tier === 'chatbai' && chatbaiPremium.includes(m.name);
     const modelId = escHtml(m.name);
-    const tierLabel = tier === 'standard' ? 'STD' : tier === 'max_gl' ? 'GL' : tier === 'chatbai' ? 'BAI' : 'MAX';
+    const tierLabel = tier === 'standard' ? 'STD' : tier === 'max_gl' ? 'GL' : tier === 'chatbai' ? 'BAI' : tier === 'skillboss' ? 'SKB' : 'MAX';
     return '<div class="model-card" id="model-card-' + modelId + '">' +
       '<div class="model-name">' + modelId + (isThinking ? ' <span style="color:var(--orange);font-size:.7rem">&#x1f4ad;</span>' : '') + (isPremium ? ' <span style="background:rgba(251,191,36,.2);color:#fbbf24;font-size:.65rem;padding:.1rem .35rem;border-radius:3px;font-weight:600">Premium</span>' : '') + '</div>' +
       '<span class="badge badge-' + tier + '">' + tierLabel + '</span>' +
@@ -4239,6 +4341,7 @@ async function startBatch() {
 if (document.getElementById('chk-wavespeed').checked) providers.push('wavespeed');
 if (document.getElementById('chk-gumloop').checked) providers.push('gumloop');
 if (document.getElementById('chk-chatbai').checked) providers.push('chatbai');
+if (document.getElementById('chk-skillboss').checked) providers.push('skillboss');
   if (providers.length === 0) {
     toast('Select at least one provider', 'error');
     return;
@@ -4372,6 +4475,7 @@ function handleBatchEvent(data) {
     else if (prov === 'wavespeed') job.wavespeed = data.success;
     else if (prov === 'gumloop') job.gumloop = data.success;
     else if (prov === 'chatbai') job.chatbai = data.success;
+    else if (prov === 'skillboss') job.skillboss = data.success;
     renderBatchJobs();
     renderBatchResults();
   }
@@ -4457,6 +4561,7 @@ function getActiveProviders() {
 if (document.getElementById('chk-wavespeed').checked) provs.push('wavespeed');
 if (document.getElementById('chk-gumloop').checked) provs.push('gumloop');
 if (document.getElementById('chk-chatbai').checked) provs.push('chatbai');
+if (document.getElementById('chk-skillboss').checked) provs.push('skillboss');
   return provs;
 }
 
@@ -4465,7 +4570,7 @@ function renderBatchResults() {
   var provs = getActiveProviders();
   // Show jobs with ANY provider result (not just completed jobs)
   var successJobs = jobs.filter(function(j) {
-    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop || j.chatbai));
+    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop || j.chatbai || j.skillboss));
   });
   var failedJobs = jobs.filter(function(j) { return j.status === 'failed'; });
   var resultsDiv = document.getElementById('batch-results');
@@ -4478,7 +4583,7 @@ function renderBatchResults() {
 
   // Headers
   var headerHtml = provs.map(function(p) {
-    var name = p === 'codebuddy' ? 'CodeBuddy' : p === 'wavespeed' ? 'WaveSpeed' : p === 'gumloop' ? 'Gumloop' : p === 'chatbai' ? 'ChatBAI' : 'Kiro';
+    var name = p === 'codebuddy' ? 'CodeBuddy' : p === 'wavespeed' ? 'WaveSpeed' : p === 'gumloop' ? 'Gumloop' : p === 'chatbai' ? 'ChatBAI' : p === 'skillboss' ? 'SkillBoss' : 'Kiro';
     return '<span class="br-header">' + name + '</span>';
   }).join('');
   document.getElementById('batch-res-ok-headers').innerHTML = '<span class="br-header" style="min-width:180px">Email</span>' + headerHtml;
@@ -4491,7 +4596,7 @@ function renderBatchResults() {
   if (successJobs.length > 0) {
     okDiv.innerHTML = successJobs.map(function(j) {
       var cols = provs.map(function(p) {
-        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : (p === 'chatbai') ? j.chatbai : j.wavespeed;
+        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : (p === 'chatbai') ? j.chatbai : (p === 'skillboss') ? j.skillboss : j.wavespeed;
         if (val === true) return '<span class="br-provider br-ok">\u2713</span>';
         if (val === false) return '<span class="br-provider br-fail">\u2717</span>';
         // undefined = still pending

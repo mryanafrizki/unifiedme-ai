@@ -16,6 +16,7 @@ from .account_manager import get_next_account, mark_account_error, mark_account_
 from .message_filter import filter_messages
 from .proxy_kiro import proxy_chat_completions as kiro_proxy, proxy_messages as kiro_messages
 from .proxy_codebuddy import proxy_chat_completions as codebuddy_proxy, get_stream_data, get_stream_credit
+from .proxy_skillboss import proxy_chat_completions as skillboss_proxy
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
 from .chatbai.proxy import proxy_chat_completions as chatbai_proxy
@@ -466,7 +467,19 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             error_msg = ""
 
             if status in (401, 403):
-                error_msg = f"ChatBAI HTTP {status} banned (account: {account['email']})"
+                # Retry same account once after 4s — might be transient
+                if not hasattr(chat_completions, '_cbai_auth_retries'):
+                    chat_completions._cbai_auth_retries = {}
+                rkey = f"{account['id']}_{model}"
+                chat_completions._cbai_auth_retries.setdefault(rkey, 0)
+                chat_completions._cbai_auth_retries[rkey] += 1
+                if chat_completions._cbai_auth_retries[rkey] <= 3:
+                    log.warning("ChatBAI %s HTTP %d, retry %d/3 in 4s", account["email"], status, chat_completions._cbai_auth_retries[rkey])
+                    await asyncio.sleep(4)
+                    tried_cbai_ids.pop()
+                    continue
+                chat_completions._cbai_auth_retries[rkey] = 0
+                error_msg = f"ChatBAI HTTP {status} (account: {account['email']})"
                 await db.update_account(account["id"], cbai_status="banned", cbai_error=error_msg)
                 try:
                     updated = await db.get_account(account["id"])
@@ -478,7 +491,7 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                     response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_cbai_error = error_msg
-                log.warning("ChatBAI %s HTTP %d, trying next account", account["email"], status)
+                log.warning("ChatBAI %s HTTP %d after retries, marked banned", account["email"], status)
                 continue
             elif status == 402 or status == 429:
                 error_msg = f"ChatBAI HTTP {status} exhausted (account: {account['email']})"
@@ -555,6 +568,107 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         # All ChatBAI retries exhausted
         all_tried = ", ".join(str(i) for i in tried_cbai_ids)
         final_error = f"All ChatBAI accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_cbai_error}"
+        await db.log_usage(
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+            request_headers=req_headers_str, request_body=req_body_str,
+            error_message=final_error, proxy_url=proxy_url or "",
+        )
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
+            status_code=503,
+        )
+
+    if tier == Tier.SKILLBOSS:
+        # Route to SkillBoss — rotate accounts on 429 with 3s cooldown
+        max_retries = 10
+        tried_skboss_ids: list[int] = []
+        last_skboss_error = ""
+
+        for attempt in range(max_retries):
+            account = await get_next_account(tier, exclude_ids=tried_skboss_ids)
+            if account is None:
+                break
+            tried_skboss_ids.append(account["id"])
+
+            skboss_key = account.get("skboss_api_key", "")
+            if not skboss_key:
+                last_skboss_error = f"Account {account['email']}: Missing skboss_api_key"
+                await mark_account_error(account["id"], tier, "Missing skboss_api_key")
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    error_message=last_skboss_error, proxy_url=proxy_url or "",
+                )
+                continue
+
+            response, cost = await skillboss_proxy(body, skboss_key, client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"SkillBoss HTTP {status} banned (account: {account['email']})"
+                await db.update_account(account["id"], skboss_status="banned", skboss_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_skboss_error = error_msg
+                log.warning("SkillBoss %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 429:
+                error_msg = f"SkillBoss HTTP 429 rate limited (account: {account['email']})"
+                # Don't mark exhausted on 429 — just rotate with cooldown
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_skboss_error = error_msg
+                log.warning("SkillBoss %s rate limited, cooldown 3s then next account", account["email"])
+                await asyncio.sleep(3)
+                continue
+            elif status == 402:
+                error_msg = f"SkillBoss HTTP 402 exhausted (account: {account['email']})"
+                await db.update_account(account["id"], skboss_status="exhausted", skboss_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_skboss_error = error_msg
+                log.warning("SkillBoss %s exhausted, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"SkillBoss HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+                if cost > 0:
+                    await db.deduct_skboss_credit(account["id"], cost)
+
+            resp_body_str = _extract_response_body(response)
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
+            )
+            return response
+
+        # All SkillBoss retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_skboss_ids)
+        final_error = f"All SkillBoss accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_skboss_error}"
         await db.log_usage(
             key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
             request_headers=req_headers_str, request_body=req_body_str,
@@ -648,6 +762,26 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 pass
             continue
         elif status == 400:
+            # CB sometimes returns 400 transiently (code 11133 "invalid request parameters")
+            # Retry with same account up to 10 times with 4s delay
+            resp_body_str = _extract_response_body(response)
+            is_transient_400 = "11133" in resp_body_str or "11101" in resp_body_str
+            if is_transient_400:
+                _cb_400_retries = getattr(response, '_cb_400_retries', 0)
+                if not hasattr(chat_completions, '_cb_400_count'):
+                    chat_completions._cb_400_count = {}
+                retry_key = f"{account['id']}_{model}"
+                chat_completions._cb_400_count.setdefault(retry_key, 0)
+                chat_completions._cb_400_count[retry_key] += 1
+                if chat_completions._cb_400_count[retry_key] <= 10:
+                    log.warning("CB %s transient 400 (attempt %d/10), retry in 4s",
+                                account["email"], chat_completions._cb_400_count[retry_key])
+                    await asyncio.sleep(4)
+                    # Don't increment tried_account_ids — retry same account
+                    tried_account_ids.pop()
+                    continue
+                else:
+                    chat_completions._cb_400_count[retry_key] = 0
             error_msg = f"CodeBuddy HTTP 400 bad request (not account error)"
         elif status >= 500:
             error_msg = f"CodeBuddy HTTP {status} server error (account: {account['email']})"
@@ -785,6 +919,7 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
                 "wavespeed" if tier == Tier.WAVESPEED else
                 "gumloop" if tier == Tier.MAX_GL else
                 "chatbai" if tier == Tier.CHATBAI else
+                "skillboss" if tier == Tier.SKILLBOSS else
                 "codebuddy"
             ),
             "permission": [],

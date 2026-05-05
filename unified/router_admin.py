@@ -117,6 +117,14 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
             "last_used_cbai": acc.get("last_used_cbai", ""),
             "cbai_verified": acc.get("cbai_verified", 0),
             "cbai_test_error": acc.get("cbai_test_error", ""),
+            "skboss_status": acc.get("skboss_status", "none"),
+            "skboss_api_key": acc.get("skboss_api_key", ""),
+            "skboss_credits": acc.get("skboss_credits", 0),
+            "skboss_error": acc.get("skboss_error", ""),
+            "skboss_error_count": acc.get("skboss_error_count", 0),
+            "last_used_skboss": acc.get("last_used_skboss", ""),
+            "skboss_verified": acc.get("skboss_verified", 0),
+            "skboss_test_error": acc.get("skboss_test_error", ""),
         }
         bucket = acc["status"] if acc["status"] in grouped else "active"
         grouped[bucket].append(info)
@@ -126,6 +134,8 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
         "max": await db.get_sticky_account_id("max"),
         "wavespeed": await db.get_sticky_account_id("wavespeed"),
         "max_gl": await db.get_sticky_account_id("max_gl"),
+        "chatbai": await db.get_sticky_account_id("chatbai"),
+        "skillboss": await db.get_sticky_account_id("skillboss"),
     }
 
     return {
@@ -242,7 +252,7 @@ async def set_sticky_account_endpoint(account_id: int, tier: str, _: bool = Depe
     Pinned accounts won't be auto-cleared on errors — they stay selected
     until manually cleared by the user.
     """
-    valid_tiers = {"standard", "max", "wavespeed", "max_gl"}
+    valid_tiers = {"standard", "max", "wavespeed", "max_gl", "chatbai", "skillboss"}
     if tier not in valid_tiers:
         return JSONResponse({"error": f"Invalid tier: {tier}"}, status_code=400)
     account = await db.get_account(account_id)
@@ -847,6 +857,7 @@ async def update_account_fields(account_id: int, request: Request, _: bool = Dep
         "cb_status", "cb_error", "cb_error_count",
         "ws_status", "ws_error", "ws_error_count",
         "gl_status", "gl_error", "gl_error_count",
+        "skboss_status", "skboss_error", "skboss_error_count",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     if not fields:
@@ -954,6 +965,8 @@ async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
     l_cb = sum(1 for a in local_accounts if a.get("cb_status") == "ok")
     l_ws = sum(1 for a in local_accounts if a.get("ws_status") == "ok")
     l_gl = sum(1 for a in local_accounts if a.get("gl_status") == "ok")
+    l_cbai = sum(1 for a in local_accounts if a.get("cbai_status") == "ok")
+    l_skb = sum(1 for a in local_accounts if a.get("skboss_status") == "ok")
 
     # Get D1 counts
     d1_result = await license_client._api_get("/api/sync/pull", {
@@ -968,6 +981,8 @@ async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
     d_cb = sum(1 for a in d1_accounts if a.get("cb_status") == "ok")
     d_ws = sum(1 for a in d1_accounts if a.get("ws_status") == "ok")
     d_gl = sum(1 for a in d1_accounts if a.get("gl_status") == "ok")
+    d_cbai = sum(1 for a in d1_accounts if a.get("cbai_status") == "ok")
+    d_skb = sum(1 for a in d1_accounts if a.get("skboss_status") == "ok")
 
     # Count new accounts (in D1 but not local)
     new_from_d1 = sum(1 for a in d1_accounts
@@ -976,8 +991,8 @@ async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
 
     return {
         "ok": True,
-        "local": {"kr": l_kr, "cb": l_cb, "ws": l_ws, "gl": l_gl, "total": len(local_accounts)},
-        "d1": {"kr": d_kr, "cb": d_cb, "ws": d_ws, "gl": d_gl, "total": len(d1_accounts)},
+        "local": {"kr": l_kr, "cb": l_cb, "ws": l_ws, "gl": l_gl, "cbai": l_cbai, "skb": l_skb, "total": len(local_accounts)},
+        "d1": {"kr": d_kr, "cb": d_cb, "ws": d_ws, "gl": d_gl, "cbai": d_cbai, "skb": d_skb, "total": len(d1_accounts)},
         "new_from_d1": new_from_d1,
     }
 
@@ -1230,7 +1245,7 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
     if not accounts:
         return JSONResponse({"error": "No valid accounts"}, status_code=400)
 
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai")]
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss")]
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
 
@@ -1740,15 +1755,16 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
     """Test all temporary exhausted/banned accounts with a small request.
 
     Sends a tiny prompt to each provider. If error → show error log for review.
-    Uses smart proxy rotation if enabled.
+    Uses smart proxy rotation if enabled. 2s delay between each test.
     """
     import time as _time
 
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    providers_filter = body.get("providers", ["kiro", "codebuddy", "wavespeed"])
+    providers_filter = body.get("providers", ["kiro", "codebuddy", "wavespeed", "chatbai", "skillboss"])
 
     accounts = await db.get_accounts()
     results = []
+    tested_count = 0
 
     for acc in accounts:
         acct_id = acc["id"]
@@ -1760,6 +1776,8 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
             ("codebuddy", "cb_status", "cb_verified", "cb_test_error"),
             ("wavespeed", "ws_status", "ws_verified", "ws_test_error"),
             ("gumloop", "gl_status", "gl_verified", "gl_test_error"),
+            ("chatbai", "cbai_status", "cbai_verified", "cbai_test_error"),
+            ("skillboss", "skboss_status", "skboss_verified", "skboss_test_error"),
         ]:
             if provider not in providers_filter:
                 continue
@@ -1768,12 +1786,21 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
             if status not in ("exhausted", "banned", "failed", "rate_limited") or verified == 1:
                 continue
 
+            # Delay between tests (2s base, skip first)
+            tested_count += 1
+            if tested_count > 1:
+                await asyncio.sleep(2)
+
             # Get proxy for this test (smart rotate)
             proxy_url = await db.get_next_proxy_url()
 
             # Send test request
             test_result = await _test_account_provider(acc, provider, proxy_url)
             error_msg = test_result.get("error", "")
+
+            # If 400/rate limit, back off extra 5s before next test
+            if "400" in str(test_result.get("latency_ms", "")) or "HTTP 400" in error_msg or "rate" in error_msg.lower() or "limit" in error_msg.lower():
+                await asyncio.sleep(5)
 
             # Store test error for review
             await db.update_account(acct_id, **{test_err_col: error_msg})
@@ -1790,7 +1817,16 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
                     restore_fields.update(ws_error="", ws_error_count=0)
                 elif provider == "gumloop":
                     restore_fields.update(gl_error="", gl_error_count=0)
+                elif provider in ("chatbai", "cbai"):
+                    restore_fields.update(cbai_error="", cbai_error_count=0)
+                elif provider in ("skillboss", "skboss"):
+                    restore_fields.update(skboss_error="", skboss_error_count=0)
                 await db.update_account(acct_id, **restore_fields)
+                # Push to D1 so it doesn't get overwritten
+                try:
+                    await license_client.push_account_now(await db.get_account(acct_id))
+                except Exception:
+                    pass
             else:
                 # Auto-approve (mark as verified fix) if response clearly indicates exhausted/banned
                 exhaust_signals = [
@@ -1816,7 +1852,8 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
                 "latency_ms": test_result.get("latency_ms", 0),
             })
 
-    return {"results": results, "total": len(results)}
+    restored = sum(1 for r in results if r.get("restored"))
+    return {"results": results, "total": len(results), "tested": tested_count, "restored": restored}
 
 
 async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None) -> dict:
@@ -1953,6 +1990,34 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             latency = int((_time.monotonic() - t0) * 1000)
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
+    elif provider == "skillboss" or provider == "skboss":
+        skboss_key = acc.get("skboss_api_key", "")
+        if not skboss_key:
+            return {"ok": False, "error": "No SkillBoss API key"}
+        from .proxy_skillboss import proxy_chat_completions as skboss_proxy
+        body = {"model": "skboss-claude-haiku-4.5", "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 50, "stream": False}
+        proxy_info = await db.get_proxy_for_api_call()
+        px = proxy_info["url"] if proxy_info else None
+        t0 = _time.monotonic()
+        try:
+            response, cost = await skboss_proxy(body, skboss_key, False, proxy_url=px)
+            latency = int((_time.monotonic() - t0) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_body = ""
+            if hasattr(response, "body"):
+                try:
+                    resp_body = response.body.decode("utf-8", errors="replace")[:2000]
+                except Exception:
+                    pass
+            await db.log_usage(None, acct_id, "skboss-claude-haiku-4.5", "skillboss", status, latency,
+                               request_body='{"test":"warmup"}', response_body=resp_body, proxy_url=px or "")
+            if status == 200:
+                return {"ok": True, "latency_ms": latency}
+            return {"ok": False, "error": f"HTTP {status}", "latency_ms": latency}
+        except Exception as e:
+            latency = int((_time.monotonic() - t0) * 1000)
+            return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
+
     return {"ok": False, "error": f"Unknown provider: {provider}"}
 
 
@@ -1972,6 +2037,82 @@ async def approve_account(account_id: int, provider: str, _: bool = Depends(veri
         return JSONResponse({"error": f"Unknown provider: {provider}"}, status_code=400)
     await db.update_account(account_id, **{col: 1})
     return {"ok": True}
+
+
+@router.post("/accounts/warmup")
+async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
+    """Warmup: re-test all banned/exhausted/failed accounts to check if they're alive again.
+
+    Tests each account with a minimal request. If OK, restores status.
+    2s delay between each test to avoid rate limits.
+    Results logged to usage_logs.
+    """
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    provider_filter = body.get("provider")  # optional: "codebuddy", "chatbai", "skillboss", etc.
+
+    accounts = await db.get_accounts()
+
+    # Build list of (account, provider, status_col) to test
+    targets = []
+    provider_configs = [
+        ("codebuddy", "cb_status", "cb_api_key", "cb_error"),
+        ("chatbai", "cbai_status", "cbai_api_key", "cbai_error"),
+        ("skillboss", "skboss_status", "skboss_api_key", "skboss_error"),
+        ("kiro", "kiro_status", "kiro_access_token", "kiro_error"),
+        ("wavespeed", "ws_status", "ws_api_key", "ws_error"),
+        ("gumloop", "gl_status", "gl_refresh_token", "gl_error"),
+    ]
+
+    for acc in accounts:
+        if acc.get("status") == "trash":
+            continue
+        for prov, status_col, key_col, error_col in provider_configs:
+            if provider_filter and prov != provider_filter:
+                continue
+            status = acc.get(status_col, "none")
+            has_key = bool(acc.get(key_col, ""))
+            if status in ("banned", "exhausted", "failed", "rate_limited") and has_key:
+                targets.append((acc, prov, status_col, error_col))
+
+    if not targets:
+        return {"ok": True, "tested": 0, "restored": 0, "total_targets": 0, "message": "No accounts to warmup"}
+
+    restored = 0
+    tested = 0
+    results = []
+    total_targets = len(targets)
+
+    for acc, prov, status_col, error_col in targets:
+        tested += 1
+
+        # 2s delay between tests (skip first)
+        if tested > 1:
+            await asyncio.sleep(2)
+
+        proxy_info = await db.get_proxy_for_api_call()
+        proxy_url = proxy_info["url"] if proxy_info else None
+
+        test_result = await _test_account_provider(acc, prov, proxy_url)
+
+        if test_result.get("ok"):
+            # Restore account — clear status, error, and error count
+            error_count_col = status_col.replace("_status", "_error_count")
+            await db.update_account(acc["id"], **{status_col: "ok", error_col: "", error_count_col: 0})
+            # Push to D1 so it doesn't get overwritten on next sync
+            try:
+                await license_client.push_account_now(await db.get_account(acc["id"]))
+            except Exception:
+                pass
+            restored += 1
+            results.append({"email": acc["email"], "provider": prov, "status": "restored"})
+        else:
+            results.append({"email": acc["email"], "provider": prov, "status": "still_dead", "error": test_result.get("error", "")[:100]})
+
+        # 2s delay between tests
+        if tested < len(targets):
+            await asyncio.sleep(2)
+
+    return {"ok": True, "tested": tested, "restored": restored, "total_targets": total_targets, "results": results}
 
 
 @router.post("/accounts/approve-all")

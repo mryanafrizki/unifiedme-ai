@@ -350,6 +350,8 @@ async def pull_and_merge() -> dict:
                 "gl_credits", "gl_error", "gl_error_count",
                 "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
                 "cbai_error", "cbai_error_count",
+                "skboss_status", "skboss_api_key", "skboss_credits",
+                "skboss_error", "skboss_error_count",
             ]:
                 if key in acc and acc[key] is not None:
                     fields[key] = acc[key]
@@ -432,6 +434,8 @@ async def pull_new_accounts_only() -> dict:
         "gl_credits", "gl_error", "gl_error_count",
         "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
         "cbai_error", "cbai_error_count",
+        "skboss_status", "skboss_api_key", "skboss_credits",
+        "skboss_error", "skboss_error_count",
     ]
 
     for acc in d1_accounts:
@@ -548,6 +552,8 @@ async def _write_to_local_db(data: dict) -> None:
         "gl_credits", "gl_error", "gl_error_count",
         "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
         "cbai_error", "cbai_error_count",
+        "skboss_status", "skboss_api_key", "skboss_credits",
+        "skboss_error", "skboss_error_count",
     ]
 
     # Upsert accounts — D1 overwrites local
@@ -559,8 +565,17 @@ async def _write_to_local_db(data: dict) -> None:
         existing = await db.get_account_by_email(email)
         if existing:
             fields = {}
+            # Status fields where local "ok" should NOT be overwritten by D1 "banned/exhausted"
+            _STATUS_COLS = {"kiro_status", "cb_status", "ws_status", "gl_status", "cbai_status", "skboss_status"}
+            _BAD_STATUSES = {"banned", "exhausted", "failed", "rate_limited"}
             for key in _SYNC_FIELDS:
                 if key in acc and acc[key] is not None:
+                    # Protect: if local status is "ok" and D1 wants to set it to bad, skip
+                    if key in _STATUS_COLS:
+                        local_val = existing.get(key, "")
+                        d1_val = acc[key]
+                        if local_val == "ok" and d1_val in _BAD_STATUSES:
+                            continue  # local wins — don't revert healthy account
                     fields[key] = acc[key]
             if fields:
                 # Direct DB update — skip the auto-push hook to avoid push loop
@@ -803,6 +818,8 @@ async def full_pull_replace_local() -> dict:
         "gl_credits", "gl_error", "gl_error_count",
         "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
         "cbai_error", "cbai_error_count",
+        "skboss_status", "skboss_api_key", "skboss_credits",
+        "skboss_error", "skboss_error_count",
     ]
 
     # Upsert D1 accounts to local
@@ -820,10 +837,17 @@ async def full_pull_replace_local() -> dict:
 
         existing = local_by_email.get(email)
         if existing:
-            # Update local with D1 data
+            # Update local with D1 data — but protect healthy local statuses
+            _STATUS_COLS = {"kiro_status", "cb_status", "ws_status", "gl_status", "cbai_status", "skboss_status"}
+            _BAD_STATUSES = {"banned", "exhausted", "failed", "rate_limited"}
             fields = {}
             for key in _SYNC_FIELDS:
                 if key in acc and acc[key] is not None:
+                    # Don't overwrite local "ok" with D1 "banned/exhausted"
+                    if key in _STATUS_COLS:
+                        local_val = existing.get(key, "")
+                        if local_val == "ok" and acc[key] in _BAD_STATUSES:
+                            continue
                     fields[key] = acc[key]
             if fields:
                 await db.update_account(existing["id"], **fields)

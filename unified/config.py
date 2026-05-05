@@ -33,6 +33,7 @@ KIRO_ADMIN_PASSWORD = os.getenv("KIRO_ADMIN_PASSWORD", "kUcingku0")
 # ---------------------------------------------------------------------------
 KIRO_DEFAULT_CREDITS = 550.0
 CB_DEFAULT_CREDITS = 250.0
+SKBOSS_DEFAULT_CREDITS = 2.0  # $2 free signup credit
 WS_DEFAULT_CREDITS = 1.0  # $1 trial credit
 CBAI_DEFAULT_CREDITS = 1.0  # ChatBAI signup bonus credits (estimated $1 worth)
 
@@ -81,6 +82,7 @@ class Tier(str, Enum):
     WAVESPEED = "wavespeed"     # WaveSpeed LLM
     MAX_GL = "max_gl"           # Gumloop
     CHATBAI = "chatbai"         # ChatBAI (chat.b.ai)
+    SKILLBOSS = "skillboss"     # SkillBoss
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +188,21 @@ _CHATBAI_MODELS = [
     "bchatai-claude-sonnet-4.5",
 ]
 
+# SkillBoss models (skboss- prefix)
+_SKILLBOSS_MODELS = [
+    "skboss-claude-opus-4.7",
+    "skboss-claude-opus-4.6",
+    "skboss-claude-sonnet-4.6",
+    "skboss-claude-haiku-4.5",
+    "skboss-gpt-5.4",
+    "skboss-gpt-5.2",
+    "skboss-gpt-5.1",
+    "skboss-gpt-5.4-mini",
+    "skboss-gpt-5-nano",
+    "skboss-gemini-2.5-flash",
+    "skboss-gemini-3.1-pro",
+]
+
 # Build lookup: model_name → Tier
 MODEL_TIER: dict[str, Tier] = {}
 
@@ -207,6 +224,9 @@ for alias in _MAX_GL_DOT_ALIASES:
 for m in _CHATBAI_MODELS:
     MODEL_TIER[m] = Tier.CHATBAI
 
+for m in _SKILLBOSS_MODELS:
+    MODEL_TIER[m] = Tier.SKILLBOSS
+
 # Hidden from display lists (routing-only aliases + thinking variants)
 _HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys())
 # Hide -thinking variants from model list (they still work for routing)
@@ -221,6 +241,7 @@ MAX_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX]
 WAVESPEED_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.WAVESPEED]
 MAX_GL_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX_GL and k not in _HIDDEN_ALIASES]
 CHATBAI_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.CHATBAI]
+SKILLBOSS_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.SKILLBOSS]
 ALL_MODELS: list[str] = [k for k in MODEL_TIER if k not in _HIDDEN_ALIASES]
 
 
@@ -245,6 +266,9 @@ def get_tier(model: str) -> Tier | None:
     # Any model with "bchatai-" prefix → ChatBAI
     if model.startswith("bchatai-"):
         return Tier.CHATBAI
+    # Any model with "skboss-" prefix → SkillBoss
+    if model.startswith("skboss-"):
+        return Tier.SKILLBOSS
     # Any model with "/" → WaveSpeed (provider/model format)
     if "/" in model:
         return Tier.WAVESPEED

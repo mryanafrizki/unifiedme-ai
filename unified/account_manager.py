@@ -45,6 +45,7 @@ async def mark_account_error(account_id: int, tier: Tier, error: str) -> None:
         Tier.WAVESPEED: ("ws_error", "ws_error_count", "ws_status"),
         Tier.MAX_GL: ("gl_error", "gl_error_count", "gl_status"),
         Tier.CHATBAI: ("cbai_error", "cbai_error_count", "cbai_status"),
+        Tier.SKILLBOSS: ("skboss_error", "skboss_error_count", "skboss_status"),
     }
     err_col, cnt_col, status_col = tier_config.get(tier, ("kiro_error", "kiro_error_count", "kiro_status"))
 
@@ -78,6 +79,7 @@ async def mark_account_success(account_id: int, tier: Tier) -> None:
         Tier.WAVESPEED: {"ws_error_count": 0, "ws_error": ""},
         Tier.MAX_GL: {"gl_error_count": 0, "gl_error": ""},
         Tier.CHATBAI: {"cbai_error_count": 0, "cbai_error": ""},
+        Tier.SKILLBOSS: {"skboss_error_count": 0, "skboss_error": ""},
     }
     updates = tier_config.get(tier, {})
     if updates:
@@ -349,7 +351,8 @@ async def check_account_health(account_id: int) -> dict:
         ws_dead = refreshed.get("ws_status", "none") in ("none", "failed", "exhausted", "banned")
         gl_dead = refreshed.get("gl_status", "none") in ("none", "failed", "exhausted", "banned")
         cbai_dead = refreshed.get("cbai_status", "none") in ("none", "failed", "exhausted", "banned")
-        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead:
+        skboss_dead = refreshed.get("skboss_status", "none") in ("none", "failed", "exhausted", "banned")
+        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead:
             await db.update_account(account_id, status="failed")
             updates["status"] = "failed"
 
@@ -366,7 +369,8 @@ async def auto_trash() -> int:
         ws_dead = acc.get("ws_status", "none") in ("none", "failed", "exhausted")
         gl_dead = acc.get("gl_status", "none") in ("none", "failed", "exhausted")
         cbai_dead = acc.get("cbai_status", "none") in ("none", "failed", "exhausted")
-        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead:
+        skboss_dead = acc.get("skboss_status", "none") in ("none", "failed", "exhausted")
+        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead:
             await db.move_to_trash(acc["id"])
             moved += 1
             log.info("Auto-trashed account %s (both tiers dead)", acc["email"])

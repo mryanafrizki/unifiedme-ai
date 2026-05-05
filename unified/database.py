@@ -103,6 +103,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     cbai_error_count    INTEGER DEFAULT 0,
     last_used_cbai      TEXT DEFAULT '',
 
+    -- SkillBoss fields
+    skboss_status       TEXT DEFAULT 'none',  -- none, pending, ok, failed, exhausted, banned
+    skboss_api_key      TEXT DEFAULT '',
+    skboss_credits      REAL DEFAULT 0,
+    skboss_error        TEXT DEFAULT '',
+    skboss_error_count  INTEGER DEFAULT 0,
+    last_used_skboss    TEXT DEFAULT '',
+
     created_at      TEXT DEFAULT (datetime('now')),
     updated_at      TEXT DEFAULT (datetime('now'))
 );
@@ -266,6 +274,15 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN last_used_cbai TEXT DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN cbai_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN cbai_test_error TEXT DEFAULT ''",
+        # SkillBoss fields
+        "ALTER TABLE accounts ADD COLUMN skboss_status TEXT DEFAULT 'none'",
+        "ALTER TABLE accounts ADD COLUMN skboss_api_key TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN skboss_credits REAL DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN skboss_error TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN skboss_error_count INTEGER DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN last_used_skboss TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN skboss_verified INTEGER DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN skboss_test_error TEXT DEFAULT ''",
         # Proxy pool separation + selection
         "ALTER TABLE proxies ADD COLUMN purpose TEXT DEFAULT 'api'",
         "ALTER TABLE proxies ADD COLUMN checked INTEGER DEFAULT 0",
@@ -291,6 +308,7 @@ async def _seed_settings(conn: aiosqlite.Connection) -> None:
         "sticky_account_wavespeed": "",
         "sticky_account_max_gl": "",
         "sticky_account_chatbai": "",
+        "sticky_account_skillboss": "",
     }
     for key, value in defaults.items():
         await conn.execute(
@@ -765,6 +783,18 @@ async def deduct_cbai_credit(account_id: int, cost: float) -> None:
     await db.commit()
 
 
+async def deduct_skboss_credit(account_id: int, cost: float) -> None:
+    """Deduct cost from SkillBoss account."""
+    if cost <= 0:
+        return
+    db = await get_db()
+    await db.execute(
+        "UPDATE accounts SET skboss_credits = MAX(0, skboss_credits - ?) WHERE id = ?",
+        (cost, account_id),
+    )
+    await db.commit()
+
+
 async def delete_account(account_id: int) -> bool:
     """Delete account from local DB only. Caller handles D1 sync."""
     db = await get_db()
@@ -798,6 +828,7 @@ async def get_next_account_for_tier(tier: str, exclude_ids: list[int] | None = N
         "wavespeed": ("ws_status", "last_used_ws"),
         "max_gl": ("gl_status", "last_used_gl"),
         "chatbai": ("cbai_status", "last_used_cbai"),
+        "skillboss": ("skboss_status", "last_used_skboss"),
     }
     status_col, last_used_col = tier_config.get(tier, ("kiro_status", "last_used_kiro"))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
