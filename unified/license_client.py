@@ -348,6 +348,8 @@ async def pull_and_merge() -> dict:
                 "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
                 "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
                 "gl_credits", "gl_error", "gl_error_count",
+                "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+                "cbai_error", "cbai_error_count",
             ]:
                 if key in acc and acc[key] is not None:
                     fields[key] = acc[key]
@@ -428,6 +430,8 @@ async def pull_new_accounts_only() -> dict:
         "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
         "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
         "gl_credits", "gl_error", "gl_error_count",
+        "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+        "cbai_error", "cbai_error_count",
     ]
 
     for acc in d1_accounts:
@@ -542,6 +546,8 @@ async def _write_to_local_db(data: dict) -> None:
         "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
         "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
         "gl_credits", "gl_error", "gl_error_count",
+        "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+        "cbai_error", "cbai_error_count",
     ]
 
     # Upsert accounts — D1 overwrites local
@@ -795,6 +801,8 @@ async def full_pull_replace_local() -> dict:
         "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
         "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
         "gl_credits", "gl_error", "gl_error_count",
+        "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+        "cbai_error", "cbai_error_count",
     ]
 
     # Upsert D1 accounts to local

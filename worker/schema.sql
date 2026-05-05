@@ -66,6 +66,13 @@ CREATE TABLE IF NOT EXISTS accounts (
     gl_error TEXT NOT NULL DEFAULT '',
     gl_error_count INTEGER NOT NULL DEFAULT 0,
 
+    cbai_status TEXT NOT NULL DEFAULT 'none',
+    cbai_api_key TEXT NOT NULL DEFAULT '',
+    cbai_session_token TEXT NOT NULL DEFAULT '',
+    cbai_credits REAL NOT NULL DEFAULT 0,
+    cbai_error TEXT NOT NULL DEFAULT '',
+    cbai_error_count INTEGER NOT NULL DEFAULT 0,
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(license_id, email)
