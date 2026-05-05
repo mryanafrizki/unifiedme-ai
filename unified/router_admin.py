@@ -1973,7 +1973,14 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
         if not cbai_key:
             return {"ok": False, "error": "No ChatBAI API key"}
         from .chatbai.proxy import proxy_chat_completions as cbai_proxy
-        body = {"model": "glm-5", "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
+        # Rotate models — use counter to pick different model each 5 accounts
+        _cbai_models = ["glm-5", "bchatai-kimi-k2.5", "bchatai-gemini-3-flash", "bchatai-gpt-5-mini", "bchatai-minimax-m2.5", "bchatai-gpt-5-nano", "bchatai-gpt-5.2"]
+        if not hasattr(_test_account_provider, '_cbai_counter'):
+            _test_account_provider._cbai_counter = 0
+        _test_account_provider._cbai_counter += 1
+        model_idx = (_test_account_provider._cbai_counter // 5) % len(_cbai_models)
+        test_model = _cbai_models[model_idx]
+        body = {"model": test_model, "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
         proxy_info = await db.get_proxy_for_api_call()
         px = proxy_info["url"] if proxy_info else None
         t0 = _time.monotonic()
@@ -1981,7 +1988,7 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             response, cost = await cbai_proxy(body, cbai_key, False, proxy_url=px)
             latency = int((_time.monotonic() - t0) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
-            await db.log_usage(None, acct_id, "glm-5", "chatbai", status, latency,
+            await db.log_usage(None, acct_id, test_model, "chatbai", status, latency,
                                request_body='{"test":"batch"}', proxy_url=px or "")
             if status == 200:
                 return {"ok": True, "latency_ms": latency}
@@ -2039,20 +2046,30 @@ async def approve_account(account_id: int, provider: str, _: bool = Depends(veri
     return {"ok": True}
 
 
+_warmup_cancel = False
+
+@router.post("/accounts/warmup/cancel")
+async def cancel_warmup(_: bool = Depends(verify_admin)):
+    """Cancel running warmup."""
+    global _warmup_cancel
+    _warmup_cancel = True
+    return {"ok": True, "message": "Warmup cancel requested"}
+
+
 @router.post("/accounts/warmup")
 async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
-    """Warmup: re-test all banned/exhausted/failed accounts to check if they're alive again.
+    """Warmup: re-test banned/exhausted accounts in batches of 8, 30s pause between batches.
 
-    Tests each account with a minimal request. If OK, restores status.
-    2s delay between each test to avoid rate limits.
-    Results logged to usage_logs.
+    Supports cancellation via POST /accounts/warmup/cancel.
     """
+    global _warmup_cancel
+    _warmup_cancel = False
+
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    provider_filter = body.get("provider")  # optional: "codebuddy", "chatbai", "skillboss", etc.
+    provider_filter = body.get("provider")
 
     accounts = await db.get_accounts()
 
-    # Build list of (account, provider, status_col) to test
     targets = []
     provider_configs = [
         ("codebuddy", "cb_status", "cb_api_key", "cb_error"),
@@ -2081,13 +2098,27 @@ async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
     tested = 0
     results = []
     total_targets = len(targets)
+    batch_size = 8
+    cancelled = False
 
     for acc, prov, status_col, error_col in targets:
+        # Check cancel
+        if _warmup_cancel:
+            cancelled = True
+            break
+
         tested += 1
 
-        # 2s delay between tests (skip first)
-        if tested > 1:
+        # After every 8 accounts, pause 10s; otherwise 2s between each
+        if tested > 1 and (tested - 1) % batch_size == 0:
+            await asyncio.sleep(10)
+        elif tested > 1:
             await asyncio.sleep(2)
+
+        # Check cancel again after sleep
+        if _warmup_cancel:
+            cancelled = True
+            break
 
         proxy_info = await db.get_proxy_for_api_call()
         proxy_url = proxy_info["url"] if proxy_info else None
@@ -2112,7 +2143,7 @@ async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
         if tested < len(targets):
             await asyncio.sleep(2)
 
-    return {"ok": True, "tested": tested, "restored": restored, "total_targets": total_targets, "results": results}
+    return {"ok": True, "tested": tested, "restored": restored, "total_targets": total_targets, "cancelled": cancelled, "results": results}
 
 
 @router.post("/accounts/approve-all")

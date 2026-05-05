@@ -3556,19 +3556,30 @@ async function approveAllAccounts() {
   btn.disabled = false;
 }
 
+var _warmupRunning = false;
+
 async function warmupAccounts(provider) {
   const provName = provider || 'all';
-  if (!confirm('Warmup ' + provName + ': re-test banned/exhausted accounts? (2s per account)')) return;
+  if (_warmupRunning) {
+    // Cancel
+    try { await apiFetch('/api/accounts/warmup/cancel', { method: 'POST' }); } catch(e) {}
+    toast('Warmup cancel requested', 'info');
+    return;
+  }
+  if (!confirm('Warmup ' + provName + ': test 8 accounts, then 30s pause, repeat. Continue?')) return;
   const btn = event.target;
-  btn.disabled = true;
+  _warmupRunning = true;
   const origText = btn.textContent;
+  btn.textContent = 'Stop';
+  btn.style.color = 'var(--red)';
   const startTime = Date.now();
-  // Show elapsed timer on button
+  const timerEl = document.createElement('span');
+  timerEl.style.cssText = 'font-size:9px;color:var(--text-muted);margin-left:4px';
+  btn.parentElement.appendChild(timerEl);
   const timer = setInterval(() => {
     const s = ((Date.now() - startTime) / 1000).toFixed(0);
-    btn.textContent = s + 's...';
+    timerEl.textContent = s + 's';
   }, 500);
-  toast(provName + ' warmup started...', 'info');
   try {
     const body = provider ? {provider: provider} : {};
     const data = await apiFetch('/api/accounts/warmup', {
@@ -3577,15 +3588,19 @@ async function warmupAccounts(provider) {
     });
     clearInterval(timer);
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-    const msg = provName + ': ' + (data.restored || 0) + '/' + (data.total_targets || data.tested || 0) + ' restored (' + elapsed + 's)';
+    const cancelled = data.cancelled ? ' (cancelled)' : '';
+    const msg = provName + ': ' + (data.restored || 0) + '/' + (data.total_targets || 0) + ' restored, ' + (data.tested || 0) + ' tested (' + elapsed + 's)' + cancelled;
     toast(msg, data.restored > 0 ? 'success' : 'info');
     await loadAccounts();
   } catch (e) {
     clearInterval(timer);
     toast('Warmup failed: ' + e.message, 'error');
   }
+  _warmupRunning = false;
   btn.disabled = false;
   btn.textContent = origText;
+  btn.style.color = '';
+  timerEl.remove();
 }
 
 async function approveAllForProvider(provider) {
