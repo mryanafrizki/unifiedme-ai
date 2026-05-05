@@ -408,22 +408,15 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
 
 
 async def run_login(email: str, password: str) -> dict:
-    from browserforge.fingerprints import Screen
-    from camoufox.async_api import AsyncCamoufox
+    from app.browser import create_stealth_browser
 
     emit({"type": "progress", "provider": "gumloop", "step": "init", "message": "Launching browser..."})
 
-    manager = AsyncCamoufox(
+    manager, browser, page = await create_stealth_browser(
         headless=os.getenv("BATCHER_CAMOUFOX_HEADLESS", "true").lower() == "true",
-        os="windows",
-        block_webrtc=True,
-        humanize=False,
-        screen=Screen(max_width=1920, max_height=1080),
+        timeout=20000,
+        humanize=True,
     )
-
-    browser = await manager.__aenter__()
-    page = await browser.new_page()
-    page.set_default_timeout(20000)
 
     try:
         # Step 1: Go to Gumloop login

@@ -625,8 +625,7 @@ class KiroProviderAdapter(ProviderAdapter):
             return {"stub": True}
 
         try:
-            from browserforge.fingerprints import Screen
-            from camoufox.async_api import AsyncCamoufox
+            from app.browser import create_stealth_browser
 
             code_verifier, code_challenge = _generate_pkce_pair()
             state: dict[str, Any] = {
@@ -635,16 +634,11 @@ class KiroProviderAdapter(ProviderAdapter):
                 "stub": False,
             }
 
-            manager = AsyncCamoufox(
+            manager, browser, page = await create_stealth_browser(
                 headless=os.getenv("BATCHER_CAMOUFOX_HEADLESS", "true").lower() == "true",
-                os="windows",
-                block_webrtc=True,
-                humanize=False,
-                screen=Screen(max_width=1920, max_height=1080),
+                timeout=15000,
+                humanize=True,
             )
-            browser = await manager.__aenter__()
-            page = await browser.new_page()
-            page.set_default_timeout(15000)
 
             def on_response(response: Any) -> None:
                 if state.get("auth_code"):

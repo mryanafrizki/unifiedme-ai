@@ -218,14 +218,13 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
 
 
 async def run_login(email: str, password: str, proxy_url: str = "") -> dict:
-    from browserforge.fingerprints import Screen
-    from camoufox.async_api import AsyncCamoufox
+    from app.browser import create_stealth_browser
 
     headless = os.getenv("BATCHER_CAMOUFOX_HEADLESS", "false").lower() == "true"
 
     emit({"type": "progress", "step": "init", "message": f"Starting ChatBAI signup for {email}..."})
 
-    # Parse proxy — Firefox doesn't support socks5 auth, convert to HTTP
+    # Parse proxy
     proxy_cfg = None
     if proxy_url:
         from urllib.parse import urlparse
@@ -240,18 +239,12 @@ async def run_login(email: str, password: str, proxy_url: str = "") -> dict:
         if proxy_pass:
             proxy_cfg["password"] = proxy_pass
 
-    manager = AsyncCamoufox(
-        headless=headless,
-        os="windows",
-        block_webrtc=True,
-        humanize=False,
-        screen=Screen(max_width=1920, max_height=1080),
+    manager, browser, page = await create_stealth_browser(
         proxy=proxy_cfg,
+        headless=headless,
+        timeout=30000,
+        humanize=True,
     )
-
-    browser = await manager.__aenter__()
-    page = await browser.new_page()
-    page.set_default_timeout(30000)
 
     try:
         # Step 1: Navigate to chat.b.ai — wait for full load

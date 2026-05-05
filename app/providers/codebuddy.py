@@ -2130,21 +2130,14 @@ class CodeBuddyProviderAdapter(ProviderAdapter):
                     "codebuddy auth/state missing state or authUrl",
                 )
 
-            from browserforge.fingerprints import Screen
-            from camoufox.async_api import AsyncCamoufox
+            from app.browser import create_stealth_browser
 
-            manager = AsyncCamoufox(
-                headless=os.getenv("BATCHER_CAMOUFOX_HEADLESS", "true").lower()
-                == "true",
-                os="windows",
-                block_webrtc=True,
+            manager, browser, page = await create_stealth_browser(
+                headless=os.getenv("BATCHER_CAMOUFOX_HEADLESS", "true").lower() == "true",
+                timeout=15000,
                 disable_coop=True,
-                humanize=False,
-                screen=Screen(max_width=1920, max_height=1080),
+                humanize=True,
             )
-            browser = await manager.__aenter__()
-            page = await browser.new_page()
-            page.set_default_timeout(15000)
             await page.goto(auth_url, wait_until="domcontentloaded", timeout=20000)
 
             return {

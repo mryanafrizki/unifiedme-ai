@@ -43,6 +43,8 @@ async def close_all_clients() -> None:
 # Model name mapping: our alias → CodeBuddy's actual model name
 _CB_MODEL_MAP = {
     "deepseek-v3-2-volc": "deepseek-v3.2",
+    "o3-2025-04-16": "o3",
+    "o4-mini-2025-04-16": "o4-mini",
 }
 
 

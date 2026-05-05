@@ -289,29 +289,22 @@ async def extract_account_info(page) -> dict:
 
 
 async def run(email: str, password: str, headless: bool = False, proxy_url: str = ""):
-    from browserforge.fingerprints import Screen
-    from camoufox.async_api import AsyncCamoufox
+    from app.browser import create_stealth_browser
 
     proxy_msg = f" via proxy {proxy_url}" if proxy_url else ""
     emit({"type": "progress", "step": "init", "message": f"Launching Camoufox ({'headless' if headless else 'visible'}){proxy_msg}..."})
 
-    # Build proxy config for Camoufox (Playwright format)
+    # Build proxy config
     proxy_cfg = None
     if proxy_url:
         proxy_cfg = {"server": proxy_url}
 
-    manager = AsyncCamoufox(
-        headless=headless,
-        os="windows",
-        block_webrtc=True,
-        humanize=False,
-        screen=Screen(max_width=1920, max_height=1080),
+    manager, browser, page = await create_stealth_browser(
         proxy=proxy_cfg,
+        headless=headless,
+        timeout=20000,
+        humanize=True,
     )
-
-    browser = await manager.__aenter__()
-    page = await browser.new_page()
-    page.set_default_timeout(20000)
 
     try:
         # Step 1: Navigate to WaveSpeed sign-in
