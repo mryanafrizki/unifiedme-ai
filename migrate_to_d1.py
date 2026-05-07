@@ -91,6 +91,17 @@ async def push_accounts(license_key: str, accounts: list[dict], device_fp: str, 
                 "gl_credits": acc.get("gl_credits", 0),
                 "gl_error": acc.get("gl_error", ""),
                 "gl_error_count": acc.get("gl_error_count", 0),
+                "cbai_status": acc.get("cbai_status", "none"),
+                "cbai_api_key": acc.get("cbai_api_key", ""),
+                "cbai_session_token": acc.get("cbai_session_token", ""),
+                "cbai_credits": acc.get("cbai_credits", 0),
+                "cbai_error": acc.get("cbai_error", ""),
+                "cbai_error_count": acc.get("cbai_error_count", 0),
+                "skboss_status": acc.get("skboss_status", "none"),
+                "skboss_api_key": acc.get("skboss_api_key", ""),
+                "skboss_credits": acc.get("skboss_credits", 0),
+                "skboss_error": acc.get("skboss_error", ""),
+                "skboss_error_count": acc.get("skboss_error_count", 0),
             })
 
         async with httpx.AsyncClient(timeout=30) as client:
