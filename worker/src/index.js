@@ -361,6 +361,8 @@ async function syncPush(db, request) {
           gl_credits = ?, gl_error = ?, gl_error_count = ?,
           cbai_status = ?, cbai_api_key = ?, cbai_session_token = ?,
           cbai_credits = ?, cbai_error = ?, cbai_error_count = ?,
+          skboss_status = ?, skboss_api_key = ?, skboss_credits = ?,
+          skboss_error = ?, skboss_error_count = ?,
           updated_at = datetime('now')
           WHERE id = ?`).bind(
           acc.password || '', acc.status || 'active',
@@ -373,6 +375,8 @@ async function syncPush(db, request) {
           acc.gl_credits || 0, acc.gl_error || '', acc.gl_error_count || 0,
           acc.cbai_status || 'none', acc.cbai_api_key || '', acc.cbai_session_token || '',
           acc.cbai_credits || 0, acc.cbai_error || '', acc.cbai_error_count || 0,
+          acc.skboss_status || 'none', acc.skboss_api_key || '', acc.skboss_credits || 0,
+          acc.skboss_error || '', acc.skboss_error_count || 0,
           existing.id
         ).run();
       } else {
@@ -386,8 +390,10 @@ async function syncPush(db, request) {
           gl_status, gl_refresh_token, gl_user_id, gl_gummie_id, gl_id_token,
           gl_credits, gl_error, gl_error_count,
           cbai_status, cbai_api_key, cbai_session_token,
-          cbai_credits, cbai_error, cbai_error_count
-        ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?, ?,?,?)`).bind(
+          cbai_credits, cbai_error, cbai_error_count,
+          skboss_status, skboss_api_key, skboss_credits,
+          skboss_error, skboss_error_count
+        ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?)`).bind(
           license.id, acc.email, acc.password || '', acc.status || 'active',
           acc.kiro_status || 'pending', acc.kiro_access_token || '', acc.kiro_refresh_token || '', acc.kiro_profile_arn || '',
           acc.kiro_credits || 0, acc.kiro_credits_total || 0, acc.kiro_credits_used || 0,
@@ -397,7 +403,9 @@ async function syncPush(db, request) {
           acc.gl_status || 'none', acc.gl_refresh_token || '', acc.gl_user_id || '', acc.gl_gummie_id || '', acc.gl_id_token || '',
           acc.gl_credits || 0, acc.gl_error || '', acc.gl_error_count || 0,
           acc.cbai_status || 'none', acc.cbai_api_key || '', acc.cbai_session_token || '',
-          acc.cbai_credits || 0, acc.cbai_error || '', acc.cbai_error_count || 0
+          acc.cbai_credits || 0, acc.cbai_error || '', acc.cbai_error_count || 0,
+          acc.skboss_status || 'none', acc.skboss_api_key || '', acc.skboss_credits || 0,
+          acc.skboss_error || '', acc.skboss_error_count || 0
         ).run();
       }
       accountsUpserted++;

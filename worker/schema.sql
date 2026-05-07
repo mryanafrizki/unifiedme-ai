@@ -73,6 +73,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     cbai_error TEXT NOT NULL DEFAULT '',
     cbai_error_count INTEGER NOT NULL DEFAULT 0,
 
+    skboss_status TEXT NOT NULL DEFAULT 'none',
+    skboss_api_key TEXT NOT NULL DEFAULT '',
+    skboss_credits REAL NOT NULL DEFAULT 0,
+    skboss_error TEXT NOT NULL DEFAULT '',
+    skboss_error_count INTEGER NOT NULL DEFAULT 0,
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(license_id, email)
