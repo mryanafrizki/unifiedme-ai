@@ -481,30 +481,26 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                     continue
                 chat_completions._cbai_auth_retries[rkey] = 0
                 error_msg = f"ChatBAI HTTP {status} (account: {account['email']})"
+                resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
                 await db.update_account(account["id"], cbai_status="banned", cbai_error=error_msg)
-                try:
-                    updated = await db.get_account(account["id"])
-                    if updated: await license_client.push_account_now(updated)
-                except Exception: pass
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_cbai_error = error_msg
                 log.warning("ChatBAI %s HTTP %d after retries, marked banned", account["email"], status)
                 continue
             elif status == 402 or status == 429:
                 error_msg = f"ChatBAI HTTP {status} exhausted (account: {account['email']})"
+                resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
                 await db.update_account(account["id"], cbai_status="exhausted", cbai_error=error_msg)
-                try:
-                    updated = await db.get_account(account["id"])
-                    if updated: await license_client.push_account_now(updated)
-                except Exception: pass
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_cbai_error = error_msg
                 log.warning("ChatBAI %s exhausted, trying next account", account["email"])
