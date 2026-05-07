@@ -46,6 +46,7 @@ async def mark_account_error(account_id: int, tier: Tier, error: str) -> None:
         Tier.MAX_GL: ("gl_error", "gl_error_count", "gl_status"),
         Tier.CHATBAI: ("cbai_error", "cbai_error_count", "cbai_status"),
         Tier.SKILLBOSS: ("skboss_error", "skboss_error_count", "skboss_status"),
+        Tier.WINDSURF: ("windsurf_error", "windsurf_error_count", "windsurf_status"),
     }
     err_col, cnt_col, status_col = tier_config.get(tier, ("kiro_error", "kiro_error_count", "kiro_status"))
 
@@ -80,6 +81,7 @@ async def mark_account_success(account_id: int, tier: Tier) -> None:
         Tier.MAX_GL: {"gl_error_count": 0, "gl_error": ""},
         Tier.CHATBAI: {"cbai_error_count": 0, "cbai_error": ""},
         Tier.SKILLBOSS: {"skboss_error_count": 0, "skboss_error": ""},
+        Tier.WINDSURF: {"windsurf_error_count": 0, "windsurf_error": ""},
     }
     updates = tier_config.get(tier, {})
     if updates:
@@ -352,7 +354,8 @@ async def check_account_health(account_id: int) -> dict:
         gl_dead = refreshed.get("gl_status", "none") in ("none", "failed", "exhausted", "banned")
         cbai_dead = refreshed.get("cbai_status", "none") in ("none", "failed", "exhausted", "banned")
         skboss_dead = refreshed.get("skboss_status", "none") in ("none", "failed", "exhausted", "banned")
-        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead:
+        windsurf_dead = refreshed.get("windsurf_status", "none") in ("none", "failed", "exhausted", "banned")
+        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead and windsurf_dead:
             await db.update_account(account_id, status="failed")
             updates["status"] = "failed"
 
@@ -370,7 +373,8 @@ async def auto_trash() -> int:
         gl_dead = acc.get("gl_status", "none") in ("none", "failed", "exhausted")
         cbai_dead = acc.get("cbai_status", "none") in ("none", "failed", "exhausted")
         skboss_dead = acc.get("skboss_status", "none") in ("none", "failed", "exhausted")
-        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead:
+        windsurf_dead = acc.get("windsurf_status", "none") in ("none", "failed", "exhausted")
+        if kiro_dead and cb_dead and ws_dead and gl_dead and cbai_dead and skboss_dead and windsurf_dead:
             await db.move_to_trash(acc["id"])
             moved += 1
             log.info("Auto-trashed account %s (both tiers dead)", acc["email"])

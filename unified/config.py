@@ -17,6 +17,11 @@ CODEBUDDY_UPSTREAM = os.getenv("CODEBUDDY_UPSTREAM", "https://www.codebuddy.ai")
 WAVESPEED_UPSTREAM = os.getenv("WAVESPEED_UPSTREAM", "https://llm.wavespeed.ai")
 CHATBAI_UPSTREAM = os.getenv("CHATBAI_UPSTREAM", "https://api.b.ai")
 
+# Windsurf (sidecar Node.js proxy)
+WINDSURF_SIDECAR_PORT = int(os.getenv("WINDSURF_PORT", "3003"))
+WINDSURF_UPSTREAM = os.getenv("WINDSURF_UPSTREAM", f"http://127.0.0.1:{WINDSURF_SIDECAR_PORT}")
+WINDSURF_INTERNAL_KEY = os.getenv("WINDSURF_INTERNAL_KEY", "wf-internal-secret")
+
 # Gumloop
 GUMLOOP_API_BASE = os.getenv("GUMLOOP_API_BASE", "https://api.gumloop.com")
 GUMLOOP_WS_URL = os.getenv("GUMLOOP_WS_URL", "wss://ws.gumloop.com/ws/gummies")
@@ -83,6 +88,7 @@ class Tier(str, Enum):
     MAX_GL = "max_gl"           # Gumloop
     CHATBAI = "chatbai"         # ChatBAI (chat.b.ai)
     SKILLBOSS = "skillboss"     # SkillBoss
+    WINDSURF = "windsurf"       # Windsurf IDE (sidecar)
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +209,25 @@ _SKILLBOSS_MODELS = [
     "skboss-gemini-3.1-pro",
 ]
 
+# Windsurf models (windsurf- prefix)
+_WINDSURF_MODELS = [
+    "windsurf-claude-opus-4.7",
+    "windsurf-claude-opus-4.6",
+    "windsurf-claude-sonnet-4.6",
+    "windsurf-claude-sonnet-4.5",
+    "windsurf-claude-haiku-4.5",
+    "windsurf-gpt-5.5",
+    "windsurf-gpt-5.4",
+    "windsurf-gpt-5.2",
+    "windsurf-gpt-5.1",
+    "windsurf-gemini-3.1-pro",
+    "windsurf-gemini-2.5-pro",
+    "windsurf-gemini-2.5-flash",
+    "windsurf-grok-3",
+    "windsurf-deepseek-r1",
+    "windsurf-kimi-k2.5",
+]
+
 # Build lookup: model_name → Tier
 MODEL_TIER: dict[str, Tier] = {}
 
@@ -227,6 +252,9 @@ for m in _CHATBAI_MODELS:
 for m in _SKILLBOSS_MODELS:
     MODEL_TIER[m] = Tier.SKILLBOSS
 
+for m in _WINDSURF_MODELS:
+    MODEL_TIER[m] = Tier.WINDSURF
+
 # Hidden from display lists (routing-only aliases + thinking variants)
 _HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys())
 # Hide -thinking variants from model list (they still work for routing)
@@ -242,6 +270,7 @@ WAVESPEED_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.WAV
 MAX_GL_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX_GL and k not in _HIDDEN_ALIASES]
 CHATBAI_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.CHATBAI]
 SKILLBOSS_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.SKILLBOSS]
+WINDSURF_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.WINDSURF]
 ALL_MODELS: list[str] = [k for k in MODEL_TIER if k not in _HIDDEN_ALIASES]
 
 
@@ -269,6 +298,9 @@ def get_tier(model: str) -> Tier | None:
     # Any model with "skboss-" prefix → SkillBoss
     if model.startswith("skboss-"):
         return Tier.SKILLBOSS
+    # Any model with "windsurf-" prefix → Windsurf
+    if model.startswith("windsurf-"):
+        return Tier.WINDSURF
     # Any model with "/" → WaveSpeed (provider/model format)
     if "/" in model:
         return Tier.WAVESPEED

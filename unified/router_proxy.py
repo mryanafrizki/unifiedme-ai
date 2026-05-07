@@ -19,6 +19,7 @@ from .proxy_codebuddy import proxy_chat_completions as codebuddy_proxy, get_stre
 from .proxy_skillboss import proxy_chat_completions as skillboss_proxy
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
+from .proxy_windsurf import proxy_chat_completions as windsurf_proxy
 from .chatbai.proxy import proxy_chat_completions as chatbai_proxy
 from . import database as db
 from . import license_client
@@ -679,6 +680,165 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             status_code=503,
         )
 
+    if tier == Tier.WINDSURF:
+        # Route to Windsurf sidecar — instant rotation on failure
+        from .windsurf_manager import windsurf_sidecar
+
+        max_retries = 5
+        tried_windsurf_ids: list[int] = []
+        last_windsurf_error = ""
+
+        # Ensure sidecar is running (health check first, start if needed)
+        try:
+            sidecar_ok = await windsurf_sidecar.ensure_running()
+        except Exception as e:
+            log.warning("Windsurf sidecar manager error: %s — trying health check directly", e)
+            sidecar_ok = await windsurf_sidecar.health()
+        if not sidecar_ok:
+            await db.log_usage(
+                key_info["id"], None, model, tier.value, 503, 0,
+                request_headers=req_headers_str, request_body=req_body_str,
+                error_message="Windsurf sidecar not available", proxy_url=proxy_url or "",
+            )
+            return JSONResponse(
+                {"error": {"message": "Windsurf sidecar not available", "type": "server_error"}},
+                status_code=503,
+            )
+
+        for attempt in range(max_retries):
+            account = await get_next_account(tier, exclude_ids=tried_windsurf_ids)
+            if account is None:
+                break
+            tried_windsurf_ids.append(account["id"])
+
+            windsurf_key = account.get("windsurf_api_key", "")
+            if not windsurf_key:
+                last_windsurf_error = f"Account {account['email']}: Missing windsurf_api_key"
+                await mark_account_error(account["id"], tier, "Missing windsurf_api_key")
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    error_message=last_windsurf_error, proxy_url=proxy_url or "",
+                )
+                continue
+
+            response, cost = await windsurf_proxy(body, windsurf_key, client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"Windsurf HTTP {status} banned (account: {account['email']})"
+                await db.update_account(account["id"], windsurf_status="banned", windsurf_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_windsurf_error = error_msg
+                log.warning("Windsurf %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 429:
+                error_msg = f"Windsurf HTTP 429 rate limited (account: {account['email']})"
+                await db.update_account(account["id"], windsurf_status="rate_limited", windsurf_error=error_msg)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_windsurf_error = error_msg
+                log.warning("Windsurf %s rate limited, trying next account", account["email"])
+                continue
+            elif status == 402:
+                error_msg = f"Windsurf HTTP 402 exhausted (account: {account['email']})"
+                await db.update_account(account["id"], windsurf_status="exhausted", windsurf_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_windsurf_error = error_msg
+                log.warning("Windsurf %s exhausted, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"Windsurf HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+                if cost > 0:
+                    await db.deduct_windsurf_credit(account["id"], cost)
+
+            # Streaming: log after stream completes via BackgroundTask
+            windsurf_stream_state = getattr(response, '_ws_stream_state', None)
+            if windsurf_stream_state is not None:
+                from starlette.background import BackgroundTask
+
+                _acct_id = account["id"]
+                _key_id = key_info["id"]
+                _proxy_url = proxy_url or ""
+
+                async def _post_windsurf_stream_log():
+                    import asyncio
+                    for _ in range(60):
+                        if windsurf_stream_state["done"]:
+                            break
+                        await asyncio.sleep(0.5)
+
+                    stream_cost = windsurf_stream_state["cost"]
+                    if stream_cost > 0:
+                        await db.deduct_windsurf_credit(_acct_id, stream_cost)
+
+                    log_body = json.dumps({
+                        "content": windsurf_stream_state["content"][:2000],
+                        "usage": {
+                            "prompt_tokens": windsurf_stream_state["prompt_tokens"],
+                            "completion_tokens": windsurf_stream_state["completion_tokens"],
+                            "total_tokens": windsurf_stream_state["total_tokens"],
+                            "cost": stream_cost,
+                        }
+                    }, ensure_ascii=False)
+                    await db.log_usage(
+                        _key_id, _acct_id, model, tier.value, status, latency,
+                        request_headers=req_headers_str, request_body=req_body_str,
+                        response_headers=resp_headers_str, response_body=log_body,
+                        error_message=error_msg,
+                        proxy_url=_proxy_url,
+                    )
+
+                response.background = BackgroundTask(_post_windsurf_stream_log)
+            else:
+                resp_body_str = _extract_response_body(response)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg,
+                    proxy_url=proxy_url or "",
+                )
+            return response
+
+        # All Windsurf retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_windsurf_ids)
+        final_error = f"All Windsurf accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_windsurf_error}"
+        await db.log_usage(
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+            request_headers=req_headers_str, request_body=req_body_str,
+            error_message=final_error, proxy_url=proxy_url or "",
+        )
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
+            status_code=503,
+        )
+
     # MAX tier → CodeBuddy — instant rotation on failure
     max_retries = 5
     tried_account_ids: list[int] = []
@@ -920,6 +1080,7 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
                 "gumloop" if tier == Tier.MAX_GL else
                 "chatbai" if tier == Tier.CHATBAI else
                 "skillboss" if tier == Tier.SKILLBOSS else
+                "windsurf" if tier == Tier.WINDSURF else
                 "codebuddy"
             ),
             "permission": [],

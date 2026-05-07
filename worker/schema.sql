@@ -79,6 +79,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     skboss_error TEXT NOT NULL DEFAULT '',
     skboss_error_count INTEGER NOT NULL DEFAULT 0,
 
+    windsurf_status TEXT NOT NULL DEFAULT 'none',
+    windsurf_api_key TEXT NOT NULL DEFAULT '',
+    windsurf_credits REAL NOT NULL DEFAULT 0,
+    windsurf_error TEXT NOT NULL DEFAULT '',
+    windsurf_error_count INTEGER NOT NULL DEFAULT 0,
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(license_id, email)
