@@ -69,6 +69,14 @@ async def _fill_google_pass(pg, secret: str) -> bool:
 
 async def _handle_google_consent(pg) -> bool:
     try:
+        # First scroll to bottom (Workspace TOS requires scroll before button enables)
+        await pg.evaluate("""() => {
+            window.scrollTo(0, document.body.scrollHeight);
+            const containers = document.querySelectorAll('[class*="scroll"], [style*="overflow"]');
+            containers.forEach(c => { c.scrollTop = c.scrollHeight; });
+        }""")
+        await asyncio.sleep(1)
+
         clicked = await pg.evaluate("""() => {
             const keywords = ['continue', 'allow', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
             for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
@@ -167,36 +175,56 @@ async def run_signup(email: str, secret: str) -> dict:
         if not await _fill_google_pass(auth_page, secret):
             return {"success": False, "error": "Failed to fill Google credentials"}
 
-        # Step 6+7: Handle consent/welcome pages and wait for redirect
+        # Step 6+7: Handle consent/welcome/speedbump and wait for redirect
         emit({"type": "progress", "step": "consent", "message": "Handling consent/welcome..."})
         target_page = page
-        for _ in range(45):
-            # Check if we landed on SkillBoss
+        for tick in range(60):
+            # Check main page
             try:
-                if "console" in page.url or "login/success" in page.url:
+                main_url = page.url
+                if "console" in main_url or "login/success" in main_url:
+                    target_page = page
+                    break
+                if "skillboss" in main_url and "login" not in main_url:
                     target_page = page
                     break
             except Exception:
-                pass
+                main_url = ""
+
+            # Check popup
+            popup_closed = False
             if popup:
                 try:
-                    popup_url = popup.url
-                    if "console" in popup_url or "login/success" in popup_url:
-                        target_page = popup
-                        break
-                    if "skillboss" in popup_url and "login" not in popup_url:
-                        target_page = popup
-                        break
+                    popup_closed = popup.is_closed()
+                    if not popup_closed:
+                        pu = popup.url
+                        if "console" in pu or "login/success" in pu:
+                            target_page = popup
+                            break
+                        if "skillboss" in pu and "login" not in pu:
+                            target_page = popup
+                            break
                 except Exception:
-                    target_page = page
-                    break
+                    popup_closed = True
 
-            # Try clicking consent/welcome buttons on auth page
-            try:
-                if "accounts.google.com" in auth_page.url or "google.com" in auth_page.url:
-                    await _handle_google_consent(auth_page)
-            except Exception:
-                pass
+            # Popup closed = session transferred to main
+            if popup and popup_closed:
+                target_page = page
+                await asyncio.sleep(2)
+                break
+
+            # Click consent/welcome/speedbump on all available pages
+            for pg_try in [auth_page, popup, page]:
+                if pg_try is None:
+                    continue
+                try:
+                    if pg_try.is_closed():
+                        continue
+                    pg_url = pg_try.url
+                    if "google.com" in pg_url:
+                        await _handle_google_consent(pg_try)
+                except Exception:
+                    continue
 
             await asyncio.sleep(1)
 
