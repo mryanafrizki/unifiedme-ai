@@ -1342,15 +1342,19 @@ async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None
       - "windsurf"           → Auth1 first, fallback Google OAuth
       - "windsurf-emailpass"  → Auth1 only (no browser)
       - "windsurf-google"     → Google OAuth only (Camoufox)
+
+    Google OAuth runs as SUBPROCESS (like skillboss) to avoid proxy env leak.
+    Email+Pass runs in-process (pure HTTP, no browser).
     """
-    from .windsurf_login import windsurf_login_password, windsurf_login_google
+    from .windsurf_login import windsurf_login_password
+    from .config import PYTHON_BIN, AUTH_DIR
 
     use_emailpass = method in ("windsurf", "windsurf-emailpass")
     use_google = method in ("windsurf", "windsurf-google")
 
     result = None
 
-    # Try email+password (Auth1 HTTP)
+    # Try email+password (Auth1 HTTP) — in-process, no browser
     if use_emailpass:
         batch_state.broadcast({
             "type": "job_log", "job_id": job.id, "email": job.email,
@@ -1362,7 +1366,7 @@ async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None
             batch_state.broadcast({
                 "type": "job_log", "job_id": job.id, "email": job.email,
                 "provider": "windsurf", "step": "done",
-                "message": f"Email+Pass login OK",
+                "message": "Email+Pass login OK",
             })
             return {"windsurf": result}
         auth1_error = result.get("error", "")
@@ -1379,7 +1383,7 @@ async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None
             "message": f"Email+Pass failed: {auth1_error} — trying Google OAuth...",
         })
 
-    # Try Google OAuth (Camoufox)
+    # Try Google OAuth — run as SUBPROCESS (like skillboss) to avoid proxy env leak
     if use_google:
         if not use_emailpass:
             batch_state.broadcast({
@@ -1387,8 +1391,102 @@ async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None
                 "provider": "windsurf", "step": "start",
                 "message": "Windsurf login (Google OAuth)...",
             })
-        headless = batch_state.headless
-        result = await windsurf_login_google(job.email, job.password, proxy=proxy_override, headless=headless)
+
+        _py = PYTHON_BIN
+        if not _py.exists():
+            _py = PYTHON_BIN.with_suffix(".exe")
+        python_bin = str(_py) if _py.exists() else "python"
+
+        headless_flag = "--headless" if batch_state.headless else ""
+        cmd = [python_bin, "-u", "-m", "unified.windsurf_login",
+               "--email", job.email, "--password", job.password, "--google"]
+        if headless_flag:
+            cmd.append(headless_flag)
+        if proxy_override:
+            cmd.extend(["--proxy", proxy_override])
+
+        # Clean env — remove proxy vars that leak into Camoufox
+        clean_env = {k: v for k, v in os.environ.items()
+                     if k.upper() not in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")}
+        clean_env["BATCHER_CAMOUFOX_HEADLESS"] = "true" if batch_state.headless else "false"
+        clean_env["BATCHER_ENABLE_CAMOUFOX"] = "true"
+        clean_env["PYTHONUNBUFFERED"] = "1"
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=clean_env,
+                cwd=str(AUTH_DIR),
+            )
+            batch_state._active_procs.append(proc)
+        except Exception as exc:
+            batch_state.broadcast({
+                "type": "job_log", "job_id": job.id, "email": job.email,
+                "provider": "windsurf", "step": "error",
+                "message": f"Process launch error: {exc}",
+            })
+            return {"windsurf": {"success": False, "error": str(exc)}}
+
+        # Stream stdout for real-time progress
+        result = {"success": False, "error": "No result"}
+        try:
+            async def _read_lines():
+                while True:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=180)
+                    if not line:
+                        break
+                    yield line.decode(errors="replace").strip()
+
+            async for line in _read_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("type") == "progress":
+                        batch_state.broadcast({
+                            "type": "job_log", "job_id": job.id, "email": job.email,
+                            "provider": "windsurf", "step": data.get("step", ""),
+                            "message": data.get("message", ""),
+                        })
+                    elif data.get("success") is not None:
+                        result = data
+                        break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            batch_state.broadcast({
+                "type": "job_log", "job_id": job.id, "email": job.email,
+                "provider": "windsurf", "step": "timeout",
+                "message": "Google OAuth timed out (180s)",
+            })
+            result = {"success": False, "error": "Google OAuth timed out (180s)"}
+        finally:
+            if proc in batch_state._active_procs:
+                batch_state._active_procs.remove(proc)
+
+        # Log stderr if failed
+        if not result.get("success"):
+            try:
+                stderr = await asyncio.wait_for(proc.stderr.read(), timeout=5)
+                err_text = stderr.decode(errors="replace")[:300]
+                if err_text.strip():
+                    batch_state.broadcast({
+                        "type": "job_log", "job_id": job.id, "email": job.email,
+                        "provider": "windsurf", "step": "stderr",
+                        "message": err_text,
+                    })
+                    if result.get("error") == "No result":
+                        result["error"] = f"Process failed: {err_text[:200]}"
+            except Exception:
+                pass
+
         if result.get("success"):
             batch_state.broadcast({
                 "type": "job_log", "job_id": job.id, "email": job.email,
@@ -1401,6 +1499,9 @@ async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None
                 "provider": "windsurf", "step": "failed",
                 "message": f"Failed: {result.get('error', '?')}",
             })
+
+        # Wait for camoufox cleanup
+        await asyncio.sleep(3)
 
     return {"windsurf": result or {"success": False, "error": "No method selected"}}
 
