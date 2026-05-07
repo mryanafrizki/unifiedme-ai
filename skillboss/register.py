@@ -185,62 +185,58 @@ async def run_signup(email: str, secret: str) -> dict:
         # Step 6+7: Handle consent/welcome/speedbump and wait for redirect
         emit({"type": "progress", "step": "consent", "message": "Handling consent/welcome..."})
         target_page = page
+
+        # Collect all page references to check
+        pages_to_check = [p for p in [auth_page, popup, page] if p is not None]
+        # Remove duplicates (auth_page and popup might be same object)
+        seen_ids = set()
+        unique_pages = []
+        for p in pages_to_check:
+            pid = id(p)
+            if pid not in seen_ids:
+                seen_ids.add(pid)
+                unique_pages.append(p)
+
         for tick in range(60):
-            # Check main page
-            try:
-                main_url = page.url
-                if "console" in main_url or "login/success" in main_url:
-                    target_page = page
-                    break
-                if "skillboss" in main_url and "login" not in main_url:
-                    target_page = page
-                    break
-            except Exception:
-                main_url = ""
+            found_target = False
 
-            # Check popup
-            popup_closed = False
-            if popup:
+            # Check ALL pages for SkillBoss redirect
+            for pg in unique_pages:
                 try:
-                    popup_closed = popup.is_closed()
-                    if not popup_closed:
-                        pu = popup.url
-                        if "console" in pu or "login/success" in pu:
-                            target_page = popup
-                            break
-                        if "skillboss" in pu and "login" not in pu:
-                            target_page = popup
-                            break
+                    u = pg.url
+                    if "console" in u or "login/success" in u:
+                        target_page = pg
+                        found_target = True
+                        break
+                    if "skillboss" in u and "login" not in u:
+                        target_page = pg
+                        found_target = True
+                        break
                 except Exception:
-                    popup_closed = True
+                    continue
 
-            # Popup closed = session transferred to main
-            if popup and popup_closed:
-                target_page = page
-                await asyncio.sleep(2)
+            if found_target:
                 break
 
-            # Click consent/welcome/speedbump on all available pages
-            for pg_try in [auth_page, popup, page]:
-                if pg_try is None:
-                    continue
+            # Try clicking consent/welcome on ALL pages that are on Google
+            clicked_any = False
+            for pg in unique_pages:
                 try:
-                    if pg_try.is_closed():
-                        continue
-                    pg_url = pg_try.url
-                    if "google.com" in pg_url:
+                    u = pg.url
+                    if "google.com" in u:
                         if tick % 5 == 0:
-                            emit({"type": "progress", "step": "consent_try", "message": f"tick={tick} url={pg_url[:60]}"})
-                        result = await _handle_google_consent(pg_try)
+                            emit({"type": "progress", "step": "consent_try", "message": f"tick={tick} url={u[:70]}"})
+                        result = await _handle_google_consent(pg)
                         if result:
-                            emit({"type": "progress", "step": "consent_clicked", "message": f"Clicked on {pg_url[:60]}"})
-                            await asyncio.sleep(3)
-                except Exception as exc:
-                    if tick % 10 == 0:
-                        emit({"type": "progress", "step": "consent_error", "message": f"Error: {exc}"})
+                            emit({"type": "progress", "step": "consent_clicked", "message": f"Clicked! url={u[:50]}"})
+                            clicked_any = True
+                            await asyncio.sleep(5)
+                            break
+                except Exception:
                     continue
 
-            await asyncio.sleep(1)
+            if not clicked_any:
+                await asyncio.sleep(1)
 
         # Step 8: Go to /console
         current = target_page.url
