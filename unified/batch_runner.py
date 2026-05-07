@@ -165,6 +165,8 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
                 needed_providers.remove("gumloop")
             if "skillboss" in needed_providers and existing.get("skboss_status") == "ok":
                 needed_providers.remove("skillboss")
+            if "windsurf" in needed_providers and existing.get("windsurf_status") == "ok":
+                needed_providers.remove("windsurf")
 
         # Filter out providers already used globally (D1 cross-license check)
         if email in global_duplicates:
@@ -257,6 +259,10 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             skboss_result = await _run_skillboss_login(job)
             result.update(skboss_result)
 
+        if "windsurf" in job.providers:
+            windsurf_result = await _run_windsurf_login(job, proxy_override=proxy_url_used or None)
+            result.update(windsurf_result)
+
         job.result = result
         imported: list[str] = []
 
@@ -266,7 +272,8 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
         gl_ok = "gumloop" in job.providers and result.get("gumloop", {}).get("success")
         cbai_ok = "chatbai" in job.providers and result.get("chatbai", {}).get("success")
         skboss_ok = "skillboss" in job.providers and result.get("skillboss", {}).get("success")
-        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok or skboss_ok
+        windsurf_ok = "windsurf" in job.providers and result.get("windsurf", {}).get("success")
+        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok or skboss_ok or windsurf_ok
 
         if any_login_success and not job.account_id:
             job.account_id = await db.create_account(job.email, job.password)
@@ -330,19 +337,39 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             })
 
         if skboss_ok:
-            api_key = result.get("skillboss", {}).get("api_key", "")
+            skboss_data = result.get("skillboss", {})
+            api_key = skboss_data.get("api_key", "")
+            log.info("SkillBoss import: email=%s account_id=%s api_key=%s data_keys=%s",
+                     job.email, job.account_id, api_key[:20] if api_key else "EMPTY", list(skboss_data.keys()))
             if api_key and job.account_id:
                 from .config import SKBOSS_DEFAULT_CREDITS
                 await db.update_account(job.account_id, skboss_status="ok", skboss_api_key=api_key, skboss_credits=SKBOSS_DEFAULT_CREDITS, skboss_error="")
                 imported.append("skillboss")
                 ok = True
+                log.info("SkillBoss saved: id=%s key=%s", job.account_id, api_key[:20])
             else:
                 if job.account_id:
-                    await db.update_account(job.account_id, skboss_status="failed", skboss_error="No API key")
+                    await db.update_account(job.account_id, skboss_status="failed", skboss_error=f"No API key (got: {list(skboss_data.keys())})")
                 ok = False
+                log.warning("SkillBoss NOT saved: account_id=%s api_key_len=%d", job.account_id, len(api_key))
             batch_state.broadcast({
                 "type": "provider_done", "job_id": job.id, "email": job.email,
                 "provider": "skillboss", "success": ok,
+            })
+
+        if windsurf_ok:
+            api_key = result.get("windsurf", {}).get("api_key", "")
+            if api_key and job.account_id:
+                await db.update_account(job.account_id, windsurf_status="ok", windsurf_api_key=api_key, windsurf_error="")
+                imported.append("windsurf")
+                ok = True
+            else:
+                if job.account_id:
+                    await db.update_account(job.account_id, windsurf_status="failed", windsurf_error="No API key")
+                ok = False
+            batch_state.broadcast({
+                "type": "provider_done", "job_id": job.id, "email": job.email,
+                "provider": "windsurf", "success": ok,
             })
 
         any_success = bool(imported)
@@ -1270,6 +1297,57 @@ async def _run_skillboss_login(job: AccountJob) -> dict:
     await asyncio.sleep(3)
 
     return result_data
+
+
+async def _run_windsurf_login(job: AccountJob, proxy_override: str | None = None) -> dict:
+    """Run Windsurf login via email+password (Auth1 HTTP path).
+
+    Falls back to Google OAuth (Camoufox) if Auth1 fails with no-password error.
+    """
+    from .windsurf_login import windsurf_login_password, windsurf_login_google
+
+    batch_state.broadcast({
+        "type": "job_log", "job_id": job.id, "email": job.email,
+        "provider": "windsurf", "step": "start",
+        "message": "Starting Windsurf login (Auth1 path)...",
+    })
+
+    # Try email+password first (pure HTTP, fast)
+    result = await windsurf_login_password(job.email, job.password, proxy=proxy_override)
+
+    if result.get("success"):
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "windsurf", "step": "done",
+            "message": f"Auth1 login OK (method: {result.get('auth_method', 'auth1')})",
+        })
+        return {"windsurf": result}
+
+    # If Auth1 failed, try Google OAuth (Camoufox)
+    auth1_error = result.get("error", "")
+    batch_state.broadcast({
+        "type": "job_log", "job_id": job.id, "email": job.email,
+        "provider": "windsurf", "step": "auth1_failed",
+        "message": f"Auth1 failed: {auth1_error} — trying Google OAuth...",
+    })
+
+    headless = batch_state.headless
+    result = await windsurf_login_google(job.email, job.password, proxy=proxy_override, headless=headless)
+
+    if result.get("success"):
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "windsurf", "step": "done",
+            "message": "Google OAuth login OK",
+        })
+    else:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "windsurf", "step": "failed",
+            "message": f"Both Auth1 and Google OAuth failed: {result.get('error', '?')}",
+        })
+
+    return {"windsurf": result}
 
 
 async def _import_gumloop(job: AccountJob) -> bool:
