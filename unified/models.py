@@ -85,14 +85,12 @@ class AccountCreate(BaseModel):
 
 
 class BatchLoginRequest(BaseModel):
-    accounts: list[str] = []  # ["email:password", ...] — optional for TheRouter (auto-gen)
+    accounts: list[str]  # ["email:password", ...]
     providers: list[str] = ["kiro", "codebuddy", "chatbai"]
     headless: bool = True
     concurrency: int = 1  # parallel browser instances
     mcp_urls: list[str] = []  # MCP server URLs to attach after Gumloop login
-    tr_domain: str = "@gmail.com"  # TheRouter email domain
-    tr_count: int = 1  # TheRouter auto-registration count
-    # Valid providers: kiro, codebuddy, wavespeed, gumloop, chatbai, skillboss, windsurf, therouter
+    # Valid providers: kiro, codebuddy, wavespeed, gumloop
 
 
 # ---------------------------------------------------------------------------

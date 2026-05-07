@@ -880,7 +880,7 @@ a:hover{text-decoration:underline}
       </div>
       <div class="acct-col">
         <div class="acct-col-header">
-          <h4><span class="badge badge-therouter">TR</span> THEROUTER <span class="acct-count" id="acct-count-tr">0</span></h4>
+          <h4><span class="badge badge-therouter">TR</span> THEROUTER <span class="acct-count" id="acct-count-therouter">0</span></h4>
           <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('therouter')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('therouter')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('therouter')">Del</button></span>
         </div>
         <div class="acct-col-filters" data-provider="therouter">
@@ -3031,6 +3031,7 @@ function getProviderVerified(a, provider) {
   if (provider === 'cbai') return parseInt(a.cbai_verified) || 0;
   if (provider === 'skboss') return parseInt(a.skboss_verified) || 0;
   if (provider === 'windsurf') return parseInt(a.windsurf_verified) || 0;
+  if (provider === 'therouter') return parseInt(a.tr_verified) || 0;
   return 0;
 }
 
@@ -3042,6 +3043,7 @@ function getProviderTestError(a, provider) {
   if (provider === 'cbai') return a.cbai_test_error || '';
   if (provider === 'skboss') return a.skboss_test_error || '';
   if (provider === 'windsurf') return a.windsurf_test_error || '';
+  if (provider === 'therouter') return a.tr_test_error || '';
   return '';
 }
 
@@ -3070,6 +3072,7 @@ function getStickyIdForProvider(provider) {
   if (provider === 'cbai') return sticky.chatbai || '';
   if (provider === 'skboss') return sticky.skillboss || '';
   if (provider === 'windsurf') return sticky.windsurf || '';
+  if (provider === 'therouter') return sticky.therouter || '';
   return '';
 }
 
@@ -3436,6 +3439,14 @@ function renderAccountColumn(provider) {
       if (pStatus === 'ok') {
         creditText = a.gl_gummie_id ? 'Active' : 'No gummie';
         barPct = a.gl_gummie_id ? 100 : 0;
+      } else {
+        creditText = pStatus;
+        barPct = 0;
+      }
+    } else if (provider === 'therouter') {
+      if (pStatus === 'ok') {
+        creditText = 'Active';
+        barPct = 100;
       } else {
         creditText = pStatus;
         barPct = 0;
@@ -4429,7 +4440,11 @@ function stopLogsAutoRefresh() {
 // ── Batch Login ──
 async function startBatch() {
   const textarea = document.getElementById('batch-textarea');
-  var lines = textarea.value.trim().split('\n').filter(l => l.includes(':'));
+  const lines = textarea.value.trim().split('\n').filter(l => l.includes(':'));
+  if (lines.length === 0) {
+    toast('Enter at least one email:password pair', 'error');
+    return;
+  }
 
   const providers = [];
     if (document.getElementById('chk-kiro').checked) providers.push('kiro');
@@ -4453,36 +4468,6 @@ if (document.getElementById('chk-therouter').checked) providers.push('therouter'
     return;
   }
 
-  // TheRouter-only mode: auto-generate accounts if textarea is empty
-  var trOnly = providers.length === 1 && providers[0] === 'therouter';
-  var trIncluded = providers.includes('therouter');
-  var trCount = parseInt(document.getElementById('tr-count').value) || 1;
-  var trDomain = (document.getElementById('tr-domain').value || '@gmail.com').trim();
-
-  if (lines.length === 0 && trIncluded) {
-    // Auto-generate placeholder accounts for TheRouter
-    var count = trOnly ? trCount : 1;
-    for (var gi = 0; gi < count; gi++) {
-      var rnd = Math.random().toString(36).substring(2, 8);
-      var rnd2 = Math.random().toString(36).substring(2, 8);
-      var digits = Math.floor(1000 + Math.random() * 9000);
-      var pw = Array.from({length:14}, function(){var c='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*';return c[Math.floor(Math.random()*c.length)]}).join('');
-      lines.push(rnd + '.' + rnd2 + '.' + digits + trDomain + ':' + pw);
-    }
-  }
-
-  if (lines.length === 0) {
-    toast('Enter at least one email:password pair', 'error');
-    return;
-  }
-
-  // Pass TheRouter config to backend
-  var extraPayload = {};
-  if (trIncluded) {
-    extraPayload.tr_domain = trDomain;
-    extraPayload.tr_count = trCount;
-  }
-
   state.batchRunning = true;
   document.getElementById('batch-start-btn').disabled = true;
   document.getElementById('batch-cancel-btn').disabled = false;
@@ -4502,7 +4487,7 @@ if (document.getElementById('chk-therouter').checked) providers.push('therouter'
   try {
     await apiFetch('/api/batch/start', {
       method: 'POST',
-      body: JSON.stringify(Object.assign({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1, mcp_urls: (document.getElementById('mcp-urls').value || '').trim().split('\n').filter(function(l){return l.trim();}) }, extraPayload))
+      body: JSON.stringify({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1, mcp_urls: (document.getElementById('mcp-urls').value || '').trim().split('\n').filter(function(l){return l.trim();}) })
     });
   } catch (e) {
     toast('Batch start failed: ' + e.message, 'error');

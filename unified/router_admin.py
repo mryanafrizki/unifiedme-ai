@@ -136,6 +136,14 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
             "windsurf_error": acc.get("windsurf_error", ""),
             "windsurf_error_count": acc.get("windsurf_error_count", 0),
             "last_used_windsurf": acc.get("last_used_windsurf", ""),
+            "tr_status": acc.get("tr_status", "none"),
+            "tr_api_key": acc.get("tr_api_key", ""),
+            "tr_credits": acc.get("tr_credits", 0),
+            "tr_error": acc.get("tr_error", ""),
+            "tr_error_count": acc.get("tr_error_count", 0),
+            "last_used_tr": acc.get("last_used_tr", ""),
+            "tr_verified": acc.get("tr_verified", 0),
+            "tr_test_error": acc.get("tr_test_error", ""),
         }
         bucket = acc["status"] if acc["status"] in grouped else "active"
         grouped[bucket].append(info)
@@ -1306,21 +1314,12 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
         parts = line.split(":", 1)
         accounts.append((parts[0].strip(), parts[1].strip()))
 
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google", "therouter")]
+    if not accounts:
+        return JSONResponse({"error": "No valid accounts"}, status_code=400)
+
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google")]
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
-
-    # TheRouter auto-gen: if no accounts provided but therouter is selected, generate placeholders
-    tr_only = len(providers) == 1 and providers[0] == "therouter"
-    if not accounts and "therouter" in providers:
-        import random, string
-        tr_count = max(1, min(100, req.tr_count))
-        for _ in range(tr_count):
-            placeholder_email = f"tr-auto-{random.randint(10000,99999)}@placeholder"
-            placeholder_pass = "".join(random.choices(string.ascii_letters + string.digits, k=14))
-            accounts.append((placeholder_email, placeholder_pass))
-    elif not accounts:
-        return JSONResponse({"error": "No valid accounts"}, status_code=400)
 
     mcp_urls = [u.strip() for u in (req.mcp_urls or []) if u.strip()]
 
@@ -2275,10 +2274,9 @@ async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
         test_result = await _test_account_provider(acc, prov, proxy_url)
 
         if test_result.get("ok"):
-            # Restore account — clear status, error, error count, and verified flag
+            # Restore account — clear status, error, and error count
             error_count_col = status_col.replace("_status", "_error_count")
-            verified_col = status_col.replace("_status", "_verified")
-            await db.update_account(acc["id"], **{status_col: "ok", error_col: "", error_count_col: 0, verified_col: 0})
+            await db.update_account(acc["id"], **{status_col: "ok", error_col: "", error_count_col: 0})
             # Push to D1 so it doesn't get overwritten on next sync
             try:
                 await license_client.push_account_now(await db.get_account(acc["id"]))
