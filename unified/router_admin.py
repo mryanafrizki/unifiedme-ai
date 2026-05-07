@@ -57,6 +57,7 @@ async def admin_list_models(_: bool = Depends(verify_admin)):
                 "chatbai" if tier == Tier.CHATBAI else
                 "skillboss" if tier == Tier.SKILLBOSS else
                 "windsurf" if tier == Tier.WINDSURF else
+                "therouter" if tier == Tier.THEROUTER else
                 "codebuddy"
             ),
             "tier": tier.value,
@@ -2265,9 +2266,10 @@ async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
         test_result = await _test_account_provider(acc, prov, proxy_url)
 
         if test_result.get("ok"):
-            # Restore account — clear status, error, and error count
+            # Restore account — clear status, error, error count, and verified flag
             error_count_col = status_col.replace("_status", "_error_count")
-            await db.update_account(acc["id"], **{status_col: "ok", error_col: "", error_count_col: 0})
+            verified_col = status_col.replace("_status", "_verified")
+            await db.update_account(acc["id"], **{status_col: "ok", error_col: "", error_count_col: 0, verified_col: 0})
             # Push to D1 so it doesn't get overwritten on next sync
             try:
                 await license_client.push_account_now(await db.get_account(acc["id"]))
