@@ -775,6 +775,32 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 continue
             elif status >= 500:
                 error_msg = f"Windsurf HTTP {status} (account: {account['email']})"
+                # Check if error is retryable (upstream timeout / deadline exceeded)
+                is_retryable = False
+                try:
+                    err_text = resp_body_str or ""
+                    is_retryable = any(kw in err_text.lower() for kw in [
+                        "retryable", "deadline exceeded", "context deadline",
+                        "timeout", "temporarily unavailable", "try again",
+                    ])
+                except Exception:
+                    pass
+
+                if is_retryable:
+                    log.warning("Windsurf %s HTTP %d retryable error, retrying same account in 3s: %s",
+                                account["email"], status, err_text[:200])
+                    await db.log_usage(
+                        key_info["id"], account["id"], model, tier.value, status, latency,
+                        request_headers=req_headers_str, request_body=req_body_str,
+                        response_headers=resp_headers_str, response_body=resp_body_str,
+                        error_message=f"[RETRYING] {error_msg}", proxy_url=proxy_url or "",
+                    )
+                    last_windsurf_error = error_msg
+                    # Retry same account — pop it from tried list so it gets picked again
+                    tried_windsurf_ids.pop()
+                    await asyncio.sleep(3)
+                    continue
+
                 await mark_account_error(account["id"], tier, error_msg)
             elif status < 400:
                 await mark_account_success(account["id"], tier)
