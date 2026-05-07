@@ -125,6 +125,12 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
             "last_used_skboss": acc.get("last_used_skboss", ""),
             "skboss_verified": acc.get("skboss_verified", 0),
             "skboss_test_error": acc.get("skboss_test_error", ""),
+            "windsurf_status": acc.get("windsurf_status", "none"),
+            "windsurf_api_key": acc.get("windsurf_api_key", ""),
+            "windsurf_credits": acc.get("windsurf_credits", 0),
+            "windsurf_error": acc.get("windsurf_error", ""),
+            "windsurf_error_count": acc.get("windsurf_error_count", 0),
+            "last_used_windsurf": acc.get("last_used_windsurf", ""),
         }
         bucket = acc["status"] if acc["status"] in grouped else "active"
         grouped[bucket].append(info)
@@ -136,6 +142,7 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
         "max_gl": await db.get_sticky_account_id("max_gl"),
         "chatbai": await db.get_sticky_account_id("chatbai"),
         "skillboss": await db.get_sticky_account_id("skillboss"),
+        "windsurf": await db.get_sticky_account_id("windsurf"),
     }
 
     return {
@@ -150,10 +157,11 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
 
 @router.post("/accounts/add")
 async def add_accounts(req: AccountCreate, request: Request, _: bool = Depends(verify_admin)):
-    """Add accounts from email:password lines."""
+    """Add accounts from email:password lines. Pushes to D1 immediately for cross-device sync."""
     added = 0
     skipped = 0
     errors: list[str] = []
+    new_account_ids: list[int] = []
 
     for line in req.accounts:
         line = line.strip()
@@ -171,10 +179,20 @@ async def add_accounts(req: AccountCreate, request: Request, _: bool = Depends(v
             continue
 
         try:
-            await db.create_account(email, password)
+            account_id = await db.create_account(email, password)
+            new_account_ids.append(account_id)
             added += 1
         except Exception as e:
             errors.append(f"{email}: {e}")
+
+    # Push new accounts to D1 immediately so other devices can see them
+    if new_account_ids:
+        try:
+            from . import license_client
+            for account_id in new_account_ids:
+                await license_client.d1_sync_account(account_id)
+        except Exception:
+            pass  # Will sync on next heartbeat
 
     return {"added": added, "skipped": skipped, "errors": errors}
 
@@ -252,7 +270,7 @@ async def set_sticky_account_endpoint(account_id: int, tier: str, _: bool = Depe
     Pinned accounts won't be auto-cleared on errors — they stay selected
     until manually cleared by the user.
     """
-    valid_tiers = {"standard", "max", "wavespeed", "max_gl", "chatbai", "skillboss"}
+    valid_tiers = {"standard", "max", "wavespeed", "max_gl", "chatbai", "skillboss", "windsurf"}
     if tier not in valid_tiers:
         return JSONResponse({"error": f"Invalid tier: {tier}"}, status_code=400)
     account = await db.get_account(account_id)
@@ -858,6 +876,7 @@ async def update_account_fields(account_id: int, request: Request, _: bool = Dep
         "ws_status", "ws_error", "ws_error_count",
         "gl_status", "gl_error", "gl_error_count",
         "skboss_status", "skboss_error", "skboss_error_count",
+        "windsurf_status", "windsurf_error", "windsurf_error_count",
     }
     fields = {k: v for k, v in body.items() if k in allowed}
     if not fields:
@@ -967,6 +986,7 @@ async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
     l_gl = sum(1 for a in local_accounts if a.get("gl_status") == "ok")
     l_cbai = sum(1 for a in local_accounts if a.get("cbai_status") == "ok")
     l_skb = sum(1 for a in local_accounts if a.get("skboss_status") == "ok")
+    l_wf = sum(1 for a in local_accounts if a.get("windsurf_status") == "ok")
 
     # Get D1 counts
     d1_result = await license_client._api_get("/api/sync/pull", {
@@ -983,6 +1003,7 @@ async def sync_d1_preview(request: Request, _: bool = Depends(verify_admin)):
     d_gl = sum(1 for a in d1_accounts if a.get("gl_status") == "ok")
     d_cbai = sum(1 for a in d1_accounts if a.get("cbai_status") == "ok")
     d_skb = sum(1 for a in d1_accounts if a.get("skboss_status") == "ok")
+    d_wf = sum(1 for a in d1_accounts if a.get("windsurf_status") == "ok")
 
     # Count new accounts (in D1 but not local)
     new_from_d1 = sum(1 for a in d1_accounts
@@ -1245,7 +1266,7 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
     if not accounts:
         return JSONResponse({"error": "No valid accounts"}, status_code=400)
 
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss")]
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google")]
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
 
@@ -1760,7 +1781,7 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
     import time as _time
 
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    providers_filter = body.get("providers", ["kiro", "codebuddy", "wavespeed", "chatbai", "skillboss"])
+    providers_filter = body.get("providers", ["kiro", "codebuddy", "wavespeed", "chatbai", "skillboss", "windsurf"])
 
     accounts = await db.get_accounts()
     results = []
@@ -1778,6 +1799,7 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
             ("gumloop", "gl_status", "gl_verified", "gl_test_error"),
             ("chatbai", "cbai_status", "cbai_verified", "cbai_test_error"),
             ("skillboss", "skboss_status", "skboss_verified", "skboss_test_error"),
+            ("windsurf", "windsurf_status", "windsurf_verified", "windsurf_test_error"),
         ]:
             if provider not in providers_filter:
                 continue
@@ -2049,6 +2071,41 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
                                request_body=json.dumps(body), error_message=str(e)[:200], proxy_url=px or "")
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
+    elif provider == "windsurf":
+        windsurf_key = acc.get("windsurf_api_key", "")
+        if not windsurf_key:
+            return {"ok": False, "error": "No Windsurf API key"}
+        from .proxy_windsurf import proxy_chat_completions as wf_proxy
+        test_model = "windsurf-claude-sonnet-4.6"
+        body = {"model": test_model, "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 50, "stream": False}
+        t0 = _time.monotonic()
+        try:
+            response, cost = await wf_proxy(body, windsurf_key, False)
+            latency = int((_time.monotonic() - t0) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_body = ""
+            if hasattr(response, "body"):
+                try:
+                    resp_body = response.body.decode("utf-8", errors="replace")[:2000]
+                except Exception:
+                    pass
+            await db.log_usage(None, acct_id, test_model, "windsurf", status, latency,
+                               request_body=json.dumps(body), response_body=resp_body, proxy_url="")
+            if status == 200:
+                return {"ok": True, "latency_ms": latency}
+            error = f"HTTP {status}"
+            try:
+                err_data = json.loads(resp_body)
+                error = err_data.get("error", {}).get("message", error) if isinstance(err_data, dict) else error
+            except Exception:
+                pass
+            return {"ok": False, "error": error[:300], "latency_ms": latency}
+        except Exception as e:
+            latency = int((_time.monotonic() - t0) * 1000)
+            await db.log_usage(None, acct_id, test_model, "windsurf", 502, latency,
+                               request_body=json.dumps(body), error_message=str(e)[:200], proxy_url="")
+            return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
+
     return {"ok": False, "error": f"Unknown provider: {provider}"}
 
 
@@ -2062,6 +2119,7 @@ async def approve_account(account_id: int, provider: str, _: bool = Depends(veri
         "gumloop": "gl_verified",
         "chatbai": "cbai_verified",
         "cbai": "cbai_verified",
+        "windsurf": "windsurf_verified",
     }
     col = col_map.get(provider)
     if not col:
