@@ -228,7 +228,23 @@ async def activate() -> bool:
              _license_info.get("max_accounts", 0), _device_id,
              result.get("is_new", False))
 
+    # Register D1 auto-push hooks in database.py
+    # Every create/update/delete on accounts will auto-push to D1
+    from . import database as db
+    db.register_d1_hooks(
+        push_hook=_auto_push_account,
+        delete_hook=d1_delete_account,
+    )
+
     return True
+
+
+async def _auto_push_account(account_id: int) -> None:
+    """Auto-push hook: read account from local DB and push to D1."""
+    from . import database as db
+    account = await db.get_account(account_id)
+    if account:
+        await push_account_now(account)
 
 
 def is_licensed() -> bool:
@@ -332,50 +348,48 @@ async def pull_and_merge() -> dict:
 
     from . import database as db
 
-    # Merge accounts — only ADD new ones from D1
-    new_accounts = 0
-    d1_accounts = result.get("accounts", [])
-    for acc in d1_accounts:
-        email = acc.get("email", "")
-        if not email:
-            continue
-        # Skip tombstoned accounts — deleted locally, should not be re-created
-        if email.lower() in _deleted_tombstones:
-            continue
-        existing = await db.get_account_by_email(email)
-        if not existing:
-            # New account from D1 (added on another device) → add to local
-            account_id = await db.create_account(email, acc.get("password", ""))
-            fields = {}
-            for key in [
-                "status",
-                "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
-                "kiro_credits", "kiro_credits_total", "kiro_credits_used",
-                "kiro_error", "kiro_error_count", "kiro_expires_at",
-                "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
-                "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
-                "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-                "gl_credits", "gl_error", "gl_error_count",
-                "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
-                "cbai_error", "cbai_error_count",
-                "skboss_status", "skboss_api_key", "skboss_credits",
-                "skboss_error", "skboss_error_count",
-                "windsurf_status", "windsurf_api_key", "windsurf_credits",
-                "windsurf_error", "windsurf_error_count",
-            ]:
-                if key in acc and acc[key] is not None:
-                    fields[key] = acc[key]
-            if fields:
-                # Direct DB update to skip auto-push (we'll push everything after)
-                _db = await db.get_db()
-                sets = [f"{k} = ?" for k in fields]
-                vals = list(fields.values()) + [account_id]
-                await _db.execute(
-                    f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
-                )
-                await _db.commit()
-            new_accounts += 1
-        # If exists locally → skip (local is master)
+    # Suppress auto-push — we're writing D1 data to local
+    db._suppress_auto_push = True
+    try:
+        # Merge accounts — only ADD new ones from D1
+        new_accounts = 0
+        d1_accounts = result.get("accounts", [])
+        for acc in d1_accounts:
+            email = acc.get("email", "")
+            if not email:
+                continue
+            # Skip tombstoned accounts — deleted locally, should not be re-created
+            if email.lower() in _deleted_tombstones:
+                continue
+            existing = await db.get_account_by_email(email)
+            if not existing:
+                # New account from D1 (added on another device) → add to local
+                account_id = await db.create_account(email, acc.get("password", ""))
+                fields = {}
+                for key in [
+                    "status",
+                    "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+                    "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+                    "kiro_error", "kiro_error_count", "kiro_expires_at",
+                    "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+                    "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+                    "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+                    "gl_credits", "gl_error", "gl_error_count",
+                    "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+                    "cbai_error", "cbai_error_count",
+                    "skboss_status", "skboss_api_key", "skboss_credits",
+                    "skboss_error", "skboss_error_count",
+                    "windsurf_status", "windsurf_api_key", "windsurf_credits",
+                    "windsurf_error", "windsurf_error_count",
+                ]:
+                    if key in acc and acc[key] is not None:
+                        fields[key] = acc[key]
+                if fields:
+                    await db.update_account(account_id, **fields)
+                new_accounts += 1
+            # If exists locally → skip (local is master)
+    finally:
+        db._suppress_auto_push = False
 
     # Pull settings, filters (always from D1)
     settings = result.get("settings", {})
@@ -450,22 +464,27 @@ async def pull_new_accounts_only() -> dict:
         "windsurf_error", "windsurf_error_count",
     ]
 
-    for acc in d1_accounts:
-        email = acc.get("email", "")
-        if not email or acc.get("status") == "deleted":
-            continue
-        # Skip tombstoned accounts — deleted locally, should not be re-created
-        if email.lower() in _deleted_tombstones:
-            continue
-        existing = await db.get_account_by_email(email)
-        if not existing:
-            # New account from other device — add to local
-            account_id = await db.create_account(email, acc.get("password", ""))
-            fields = {k: acc[k] for k in _SYNC_FIELDS if k in acc and acc[k] is not None}
-            if fields:
-                await db.update_account(account_id, **fields)
-            new_accounts += 1
-        # If exists locally → SKIP. Local is master.
+    # Suppress auto-push — we're writing D1 data to local
+    db._suppress_auto_push = True
+    try:
+        for acc in d1_accounts:
+            email = acc.get("email", "")
+            if not email or acc.get("status") == "deleted":
+                continue
+            # Skip tombstoned accounts — deleted locally, should not be re-created
+            if email.lower() in _deleted_tombstones:
+                continue
+            existing = await db.get_account_by_email(email)
+            if not existing:
+                # New account from other device — add to local
+                account_id = await db.create_account(email, acc.get("password", ""))
+                fields = {k: acc[k] for k in _SYNC_FIELDS if k in acc and acc[k] is not None}
+                if fields:
+                    await db.update_account(account_id, **fields)
+                new_accounts += 1
+            # If exists locally → SKIP. Local is master.
+    finally:
+        db._suppress_auto_push = False
 
     # Settings/filters always from D1
     settings = result.get("settings", {})
@@ -551,10 +570,20 @@ async def _write_to_local_db(data: dict) -> None:
     """Write pulled D1 data to local SQLite database.
 
     D1 is the source of truth. On pull, D1 data overwrites local.
-    Every local change is pushed to D1 immediately (via update_account hook),
-    so D1 should always have the latest data.
+    Auto-push is suppressed during this operation to avoid push loops.
     """
     from . import database as db
+
+    # Suppress auto-push while writing D1 data to local
+    db._suppress_auto_push = True
+    try:
+        await _write_to_local_db_inner(data, db)
+    finally:
+        db._suppress_auto_push = False
+
+
+async def _write_to_local_db_inner(data: dict, db) -> None:
+    """Inner implementation of _write_to_local_db (with auto-push suppressed)."""
 
     _SYNC_FIELDS = [
         "password", "status",
@@ -804,7 +833,8 @@ def register_tombstone(email: str) -> None:
 async def full_pull_replace_local() -> dict:
     """FULL PULL from D1 → completely replace local accounts.
 
-    D1 = source of truth. Local DB is wiped and rebuilt from D1 data.
+    D1 = source of truth. Local follows D1.
+    Auto-push is suppressed during this operation to avoid push loops.
     Also pulls settings, filters, watchwords.
     """
     global _watchwords, _watchword_cache_ts, _global_filters
@@ -828,132 +858,127 @@ async def full_pull_replace_local() -> dict:
 
     from . import database as db
 
-    d1_accounts = result.get("accounts", [])
-    d1_emails = {acc.get("email", "") for acc in d1_accounts if acc.get("email")}
+    # Suppress auto-push while writing D1 data to local (avoid push loops)
+    db._suppress_auto_push = True
+    try:
+        d1_accounts = result.get("accounts", [])
+        d1_emails = {acc.get("email", "") for acc in d1_accounts if acc.get("email")}
 
-    # Get local accounts
-    local_accounts = await db.get_accounts()
-    local_by_email = {acc["email"]: acc for acc in local_accounts}
+        # Get local accounts
+        local_accounts = await db.get_accounts()
+        local_by_email = {acc["email"]: acc for acc in local_accounts}
 
-    added = 0
-    updated = 0
-    deleted = 0
+        added = 0
+        updated = 0
+        deleted = 0
 
-    _SYNC_FIELDS = [
-        "password", "status",
-        "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
-        "kiro_credits", "kiro_credits_total", "kiro_credits_used",
-        "kiro_error", "kiro_error_count", "kiro_expires_at",
-        "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
-        "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
-        "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
-        "gl_credits", "gl_error", "gl_error_count",
-        "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
-        "cbai_error", "cbai_error_count",
-        "skboss_status", "skboss_api_key", "skboss_credits",
-        "skboss_error", "skboss_error_count",
-        "windsurf_status", "windsurf_api_key", "windsurf_credits",
-        "windsurf_error", "windsurf_error_count",
-    ]
+        _SYNC_FIELDS = [
+            "password", "status",
+            "kiro_status", "kiro_access_token", "kiro_refresh_token", "kiro_profile_arn",
+            "kiro_credits", "kiro_credits_total", "kiro_credits_used",
+            "kiro_error", "kiro_error_count", "kiro_expires_at",
+            "cb_status", "cb_api_key", "cb_credits", "cb_error", "cb_error_count", "cb_expires_at",
+            "ws_status", "ws_api_key", "ws_credits", "ws_error", "ws_error_count",
+            "gl_status", "gl_refresh_token", "gl_user_id", "gl_gummie_id", "gl_id_token",
+            "gl_credits", "gl_error", "gl_error_count",
+            "cbai_status", "cbai_api_key", "cbai_session_token", "cbai_credits",
+            "cbai_error", "cbai_error_count",
+            "skboss_status", "skboss_api_key", "skboss_credits",
+            "skboss_error", "skboss_error_count",
+            "windsurf_status", "windsurf_api_key", "windsurf_credits",
+            "windsurf_error", "windsurf_error_count",
+        ]
 
-    # Upsert D1 accounts to local
-    for acc in d1_accounts:
-        email = acc.get("email", "")
-        if not email:
-            continue
+        # Upsert D1 accounts to local — D1 is source of truth
+        for acc in d1_accounts:
+            email = acc.get("email", "")
+            if not email:
+                continue
 
-        # Skip deleted accounts from D1
-        if acc.get("status") == "deleted":
-            if email in local_by_email:
-                await db.delete_account(local_by_email[email]["id"])
-                deleted += 1
-            continue
+            # Skip deleted accounts from D1
+            if acc.get("status") == "deleted":
+                if email in local_by_email:
+                    await db.delete_account(local_by_email[email]["id"])
+                    deleted += 1
+                continue
 
-        # Skip tombstoned accounts — these were deleted locally and should
-        # NOT be re-added from D1. Also re-send the delete to D1 in case
-        # another device re-pushed it.
-        if email.lower() in _deleted_tombstones:
-            log.info("Skipping tombstoned account from D1: %s", email)
-            # Re-send delete to D1 to clean up if another device re-pushed it
-            try:
-                await _api_post("/api/sync/push", {
-                    "license_key": LICENSE_KEY,
-                    "device_fingerprint": _device_fingerprint,
-                    "accounts": [{"email": email, "status": "deleted"}],
-                }, timeout=10)
-            except Exception:
-                pass
-            continue
-
-        existing = local_by_email.get(email)
-        if existing:
-            # Update local with D1 data — but protect healthy local statuses
-            _STATUS_COLS = {"kiro_status", "cb_status", "ws_status", "gl_status", "cbai_status", "skboss_status"}
-            _BAD_STATUSES = {"banned", "exhausted", "failed", "rate_limited"}
-            fields = {}
-            for key in _SYNC_FIELDS:
-                if key in acc and acc[key] is not None:
-                    # Don't overwrite local "ok" with D1 "banned/exhausted"
-                    if key in _STATUS_COLS:
-                        local_val = existing.get(key, "")
-                        if local_val == "ok" and acc[key] in _BAD_STATUSES:
-                            continue
-                    fields[key] = acc[key]
-            if fields:
-                await db.update_account(existing["id"], **fields)
-                updated += 1
-        else:
-            # New account from D1
-            account_id = await db.create_account(email, acc.get("password", ""))
-            fields = {}
-            for key in _SYNC_FIELDS:
-                if key in acc and acc[key] is not None:
-                    fields[key] = acc[key]
-            if fields:
-                await db.update_account(account_id, **fields)
-            added += 1
-
-    # Delete local accounts that don't exist in D1
-    # BUT protect recently created accounts (< 30 min) — they may not have synced yet
-    import datetime
-    _now = datetime.datetime.utcnow()
-    for email, local_acc in local_by_email.items():
-        if email not in d1_emails:
-            # Don't delete if created recently (push may not have succeeded yet)
-            created = local_acc.get("created_at", "")
-            if created:
+            # Skip tombstoned accounts — deleted locally, re-send delete to D1
+            if email.lower() in _deleted_tombstones:
+                log.info("Skipping tombstoned account from D1: %s", email)
                 try:
-                    created_dt = datetime.datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
-                    age_minutes = (_now - created_dt).total_seconds() / 60
-                    if age_minutes < 30:
-                        log.info("Skipping delete of recent account %s (age: %.0f min)", email, age_minutes)
-                        continue
+                    await _api_post("/api/sync/push", {
+                        "license_key": LICENSE_KEY,
+                        "device_fingerprint": _device_fingerprint,
+                        "accounts": [{"email": email, "status": "deleted"}],
+                    }, timeout=10)
                 except Exception:
                     pass
-            await db.delete_account(local_acc["id"])
-            deleted += 1
+                continue
 
-    # Sync settings
-    settings = result.get("settings", {})
-    if isinstance(settings, dict):
-        for key, value in settings.items():
-            await db.set_setting(key, str(value))
+            existing = local_by_email.get(email)
+            if existing:
+                # D1 overwrites local — D1 is source of truth
+                fields = {}
+                for key in _SYNC_FIELDS:
+                    if key in acc and acc[key] is not None:
+                        fields[key] = acc[key]
+                if fields:
+                    await db.update_account(existing["id"], **fields)
+                    updated += 1
+            else:
+                # New account from D1
+                account_id = await db.create_account(email, acc.get("password", ""))
+                fields = {}
+                for key in _SYNC_FIELDS:
+                    if key in acc and acc[key] is not None:
+                        fields[key] = acc[key]
+                if fields:
+                    await db.update_account(account_id, **fields)
+                added += 1
 
-    # Sync filters
-    filters = result.get("filters", [])
-    if filters:
-        local_filters = await db.get_filters()
-        for lf in local_filters:
-            await db.delete_filter(lf["id"])
-        for f in filters:
-            await db.create_filter(
-                find_text=f.get("find_text", ""),
-                replace_text=f.get("replace_text", ""),
-                is_regex=bool(f.get("is_regex", 0)),
-                description=f.get("description", ""),
-            )
-        from .message_filter import invalidate_cache
-        invalidate_cache()
+        # Delete local accounts that don't exist in D1
+        # Protect accounts created < 5 min ago (auto-push may still be in flight)
+        import datetime
+        _now = datetime.datetime.utcnow()
+        for email, local_acc in local_by_email.items():
+            if email not in d1_emails:
+                created = local_acc.get("created_at", "")
+                if created:
+                    try:
+                        created_dt = datetime.datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
+                        age_minutes = (_now - created_dt).total_seconds() / 60
+                        if age_minutes < 5:
+                            log.info("Skipping delete of recent account %s (age: %.0f min)", email, age_minutes)
+                            continue
+                    except Exception:
+                        pass
+                await db.delete_account(local_acc["id"])
+                deleted += 1
+
+        # Sync settings
+        settings = result.get("settings", {})
+        if isinstance(settings, dict):
+            for key, value in settings.items():
+                await db.set_setting(key, str(value))
+
+        # Sync filters
+        filters = result.get("filters", [])
+        if filters:
+            local_filters = await db.get_filters()
+            for lf in local_filters:
+                await db.delete_filter(lf["id"])
+            for f in filters:
+                await db.create_filter(
+                    find_text=f.get("find_text", ""),
+                    replace_text=f.get("replace_text", ""),
+                    is_regex=bool(f.get("is_regex", 0)),
+                    description=f.get("description", ""),
+                )
+            from .message_filter import invalidate_cache
+            invalidate_cache()
+
+    finally:
+        db._suppress_auto_push = False
 
     log.info("D1 full pull: +%d new, ~%d updated, -%d deleted, %d total",
              added, updated, deleted, len(d1_accounts))
@@ -1091,10 +1116,14 @@ async def scan_watchwords(
 # ─── Periodic Sync Loop ─────────────────────────────────────────────────────
 
 async def _sync_loop() -> None:
-    """Heartbeat: every 2 minutes, pull ALL from D1 → replace local cache.
+    """Heartbeat: every SYNC_INTERVAL, pull from D1 → update local.
 
-    D1 = pusat. Local = cache.
-    Any changes from other devices appear within 2 minutes.
+    Architecture (v2 — real-time):
+    - PUSH: every local change pushes to D1 immediately (via auto-push hook in database.py)
+    - PULL: periodic pull from D1 to get changes from other devices
+    - NO bulk push-all — that caused deleted accounts to reappear
+
+    D1 = source of truth. Local = cache.
     """
     while True:
         try:
@@ -1109,28 +1138,11 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push ALL accounts on every heartbeat (ensures D1 stays in sync)
-            # Filter out tombstoned emails to prevent re-pushing deleted accounts
-            from . import database as db
-            all_accounts = await db.get_accounts()
-            if _deleted_tombstones:
-                pre_count = len(all_accounts)
-                all_accounts = [
-                    acc for acc in all_accounts
-                    if acc.get("email", "").lower() not in _deleted_tombstones
-                ]
-                filtered = pre_count - len(all_accounts)
-                if filtered:
-                    log.info("Sync push: filtered %d tombstoned accounts", filtered)
-            await push_sync(accounts=all_accounts)
+            # Flush buffered usage logs + alerts (NOT accounts)
+            await push_sync()
 
-            # Pull ALL from D1 → replace local cache
-            # After successful pull, clear tombstones — D1 no longer has them
-            pull_result = await full_pull_replace_local()
-            if pull_result.get("ok"):
-                if _deleted_tombstones:
-                    log.info("Clearing %d tombstones after successful pull", len(_deleted_tombstones))
-                    _deleted_tombstones.clear()
+            # Pull from D1 → update local with changes from other devices
+            await full_pull_replace_local()
 
         except asyncio.CancelledError:
             break

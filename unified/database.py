@@ -709,18 +709,82 @@ async def count_active_api_keys() -> int:
 
 
 # ---------------------------------------------------------------------------
+# D1 auto-push hook (registered by license_client on startup)
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio
+from typing import Callable, Coroutine
+
+# Callback: async fn(account_id: int) -> None — pushes account to D1
+_d1_push_hook: Optional[Callable[[int], Coroutine]] = None
+# Callback: async fn(email: str) -> None — deletes account from D1
+_d1_delete_hook: Optional[Callable[[str], Coroutine]] = None
+# Flag to suppress auto-push (set True during pull-from-D1 writes)
+_suppress_auto_push: bool = False
+
+
+def register_d1_hooks(
+    push_hook: Callable[[int], Coroutine],
+    delete_hook: Callable[[str], Coroutine],
+) -> None:
+    """Register D1 sync hooks. Called by license_client after activation."""
+    global _d1_push_hook, _d1_delete_hook
+    _d1_push_hook = push_hook
+    _d1_delete_hook = delete_hook
+    log.info("D1 auto-push hooks registered")
+
+
+def _fire_push(account_id: int) -> None:
+    """Fire-and-forget D1 push for an account. Non-blocking."""
+    if _suppress_auto_push or _d1_push_hook is None:
+        return
+    try:
+        _asyncio.get_event_loop().create_task(_safe_push(account_id))
+    except RuntimeError:
+        pass  # No event loop — skip (e.g. during shutdown)
+
+
+async def _safe_push(account_id: int) -> None:
+    """Push account to D1, swallowing errors."""
+    try:
+        await _d1_push_hook(account_id)
+    except Exception as e:
+        log.debug("D1 auto-push failed for account %d: %s", account_id, e)
+
+
+def _fire_delete(email: str) -> None:
+    """Fire-and-forget D1 delete for an account. Non-blocking."""
+    if _suppress_auto_push or _d1_delete_hook is None:
+        return
+    try:
+        _asyncio.get_event_loop().create_task(_safe_delete(email))
+    except RuntimeError:
+        pass
+
+
+async def _safe_delete(email: str) -> None:
+    """Delete account from D1, swallowing errors."""
+    try:
+        await _d1_delete_hook(email)
+    except Exception as e:
+        log.debug("D1 auto-delete failed for %s: %s", email, e)
+
+
+# ---------------------------------------------------------------------------
 # Account CRUD
 # ---------------------------------------------------------------------------
 
 async def create_account(email: str, password: str) -> int:
-    """Create account in local DB only. Caller handles D1 sync."""
+    """Create account in local DB and auto-push to D1."""
     db = await get_db()
     cur = await db.execute(
         "INSERT INTO accounts (email, password) VALUES (?, ?)",
         (email, password),
     )
     await db.commit()
-    return cur.lastrowid
+    account_id = cur.lastrowid
+    _fire_push(account_id)
+    return account_id
 
 
 async def get_accounts(status: Optional[str] = None) -> list[dict]:
@@ -743,7 +807,7 @@ async def get_account(account_id: int) -> Optional[dict]:
 
 
 async def update_account(account_id: int, **fields: Any) -> bool:
-    """Update account in local DB only. Caller handles D1 sync."""
+    """Update account in local DB and auto-push to D1."""
     if not fields:
         return False
     db = await get_db()
@@ -761,6 +825,7 @@ async def update_account(account_id: int, **fields: Any) -> bool:
         f"UPDATE accounts SET {', '.join(sets)} WHERE id = ?", vals
     )
     await db.commit()
+    _fire_push(account_id)
     return True
 
 
@@ -826,11 +891,21 @@ async def deduct_windsurf_credit(account_id: int, cost: float) -> None:
 
 
 async def delete_account(account_id: int) -> bool:
-    """Delete account from local DB only. Caller handles D1 sync."""
+    """Delete account from local DB and auto-push delete to D1."""
     db = await get_db()
+    # Get email before deleting (needed for D1 delete)
+    cur = await db.execute("SELECT email FROM accounts WHERE id = ?", (account_id,))
+    row = await cur.fetchone()
+    email = row["email"] if row else None
+
     cur = await db.execute("DELETE FROM accounts WHERE id = ?", (account_id,))
     await db.commit()
-    return cur.rowcount > 0
+    deleted = cur.rowcount > 0
+
+    if deleted and email:
+        _fire_delete(email)
+
+    return deleted
 
 
 async def move_to_trash(account_id: int) -> bool:
