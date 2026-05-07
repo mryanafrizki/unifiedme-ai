@@ -443,9 +443,21 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
         if job.account_id:
             try:
                 from . import license_client
-                await license_client.d1_sync_account(job.account_id)
-            except Exception:
-                pass
+                push_ok = await license_client.d1_sync_account(job.account_id)
+                if not push_ok:
+                    log.warning("D1 push failed for %s (id=%s) — account may not sync to other devices", job.email, job.account_id)
+                    batch_state.broadcast({
+                        "type": "job_log", "job_id": job.id, "email": job.email,
+                        "provider": "d1", "step": "push_failed",
+                        "message": "D1 push failed — account saved locally only",
+                    })
+            except Exception as exc:
+                log.warning("D1 push error for %s: %s", job.email, exc)
+                batch_state.broadcast({
+                    "type": "job_log", "job_id": job.id, "email": job.email,
+                    "provider": "d1", "step": "push_error",
+                    "message": f"D1 push error: {exc}",
+                })
 
         batch_state.broadcast({
             "type": "job_done",
