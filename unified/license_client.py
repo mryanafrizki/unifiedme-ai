@@ -47,6 +47,11 @@ _ALERT_COOLDOWN = 300  # 5 min per keyword per license
 
 _sync_task: Optional[asyncio.Task] = None
 
+# Tombstone set: emails deleted locally that must NOT be re-pushed to D1.
+# Prevents the race condition where sync loop pushes a deleted account back to D1
+# before other devices have pulled the deletion.
+_deleted_tombstones: set[str] = set()
+
 
 # ─── Device Fingerprint ─────────────────────────────────────────────────────
 
@@ -334,6 +339,9 @@ async def pull_and_merge() -> dict:
         email = acc.get("email", "")
         if not email:
             continue
+        # Skip tombstoned accounts — deleted locally, should not be re-created
+        if email.lower() in _deleted_tombstones:
+            continue
         existing = await db.get_account_by_email(email)
         if not existing:
             # New account from D1 (added on another device) → add to local
@@ -445,6 +453,9 @@ async def pull_new_accounts_only() -> dict:
     for acc in d1_accounts:
         email = acc.get("email", "")
         if not email or acc.get("status") == "deleted":
+            continue
+        # Skip tombstoned accounts — deleted locally, should not be re-created
+        if email.lower() in _deleted_tombstones:
             continue
         existing = await db.get_account_by_email(email)
         if not existing:
@@ -567,6 +578,10 @@ async def _write_to_local_db(data: dict) -> None:
     for acc in accounts:
         email = acc.get("email", "")
         if not email:
+            continue
+        # Skip tombstoned accounts — deleted locally, should not be re-created
+        if email.lower() in _deleted_tombstones:
+            log.debug("_write_to_local_db: skipping tombstoned %s", email)
             continue
         existing = await db.get_account_by_email(email)
         if existing:
@@ -760,7 +775,8 @@ async def d1_sync_account(account_id: int) -> bool:
 
 
 async def d1_delete_account(email: str) -> bool:
-    """Delete account from D1 by email."""
+    """Delete account from D1 by email. Also registers a tombstone to prevent re-push."""
+    register_tombstone(email)
     if not is_licensed():
         return False
     try:
@@ -773,6 +789,16 @@ async def d1_delete_account(email: str) -> bool:
     except Exception as e:
         log.warning("D1 delete failed for %s: %s", email, e)
         return False
+
+
+def register_tombstone(email: str) -> None:
+    """Register an email as deleted so sync loop won't re-push it to D1.
+
+    Tombstones are cleared after a successful full pull, since at that point
+    D1 no longer has the account and there's nothing to re-push.
+    """
+    _deleted_tombstones.add(email.lower())
+    log.debug("Tombstone registered: %s (total: %d)", email, len(_deleted_tombstones))
 
 
 async def full_pull_replace_local() -> dict:
@@ -841,6 +867,22 @@ async def full_pull_replace_local() -> dict:
             if email in local_by_email:
                 await db.delete_account(local_by_email[email]["id"])
                 deleted += 1
+            continue
+
+        # Skip tombstoned accounts — these were deleted locally and should
+        # NOT be re-added from D1. Also re-send the delete to D1 in case
+        # another device re-pushed it.
+        if email.lower() in _deleted_tombstones:
+            log.info("Skipping tombstoned account from D1: %s", email)
+            # Re-send delete to D1 to clean up if another device re-pushed it
+            try:
+                await _api_post("/api/sync/push", {
+                    "license_key": LICENSE_KEY,
+                    "device_fingerprint": _device_fingerprint,
+                    "accounts": [{"email": email, "status": "deleted"}],
+                }, timeout=10)
+            except Exception:
+                pass
             continue
 
         existing = local_by_email.get(email)
@@ -1068,12 +1110,27 @@ async def _sync_loop() -> None:
             })
 
             # Push ALL accounts on every heartbeat (ensures D1 stays in sync)
+            # Filter out tombstoned emails to prevent re-pushing deleted accounts
             from . import database as db
             all_accounts = await db.get_accounts()
+            if _deleted_tombstones:
+                pre_count = len(all_accounts)
+                all_accounts = [
+                    acc for acc in all_accounts
+                    if acc.get("email", "").lower() not in _deleted_tombstones
+                ]
+                filtered = pre_count - len(all_accounts)
+                if filtered:
+                    log.info("Sync push: filtered %d tombstoned accounts", filtered)
             await push_sync(accounts=all_accounts)
 
             # Pull ALL from D1 → replace local cache
-            await full_pull_replace_local()
+            # After successful pull, clear tombstones — D1 no longer has them
+            pull_result = await full_pull_replace_local()
+            if pull_result.get("ok"):
+                if _deleted_tombstones:
+                    log.info("Clearing %d tombstones after successful pull", len(_deleted_tombstones))
+                    _deleted_tombstones.clear()
 
         except asyncio.CancelledError:
             break
