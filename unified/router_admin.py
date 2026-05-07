@@ -772,8 +772,11 @@ async def bind_mcp_bulk_endpoint(request: Request, _: bool = Depends(verify_admi
 
 
 @router.delete("/accounts/delete-fix")
-async def delete_fix_accounts(_: bool = Depends(verify_admin)):
+async def delete_fix_accounts(request: Request, _: bool = Depends(verify_admin)):
     """Per-provider fix cleanup: clear dead provider credentials.
+
+    If `provider` is specified in body, only clear that provider's credentials.
+    Otherwise clear all providers.
 
     For each account, check each provider:
     - If provider is verified-fix (exhausted/banned/failed + verified=1), clear its credentials.
@@ -781,6 +784,14 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
 
     This allows keeping accounts that still have working providers.
     """
+    # Parse optional provider filter from request body
+    target_provider = None
+    try:
+        body = await request.json()
+        target_provider = body.get("provider")
+    except Exception:
+        pass
+
     accounts = await db.get_accounts()
     cleared = 0
     deleted = 0
@@ -790,7 +801,8 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
         any_cleared = False
 
         # Kiro: fix = verified + dead status
-        if acc.get("kiro_verified", 0) == 1 and acc.get("kiro_status") in ("failed", "exhausted", "banned"):
+        if (not target_provider or target_provider == "kiro") and \
+           acc.get("kiro_verified", 0) == 1 and acc.get("kiro_status") in ("failed", "exhausted", "banned"):
             await db.update_account(acct_id, kiro_status="none", kiro_access_token="",
                                     kiro_refresh_token="", kiro_error="", kiro_error_count=0,
                                     kiro_credits=0, kiro_credits_total=0, kiro_credits_used=0,
@@ -799,34 +811,53 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
             cleared += 1
 
         # CodeBuddy: fix = verified + dead status (including rate_limited)
-        if acc.get("cb_verified", 0) == 1 and acc.get("cb_status") in ("failed", "exhausted", "banned", "rate_limited"):
+        if (not target_provider or target_provider == "codebuddy") and \
+           acc.get("cb_verified", 0) == 1 and acc.get("cb_status") in ("failed", "exhausted", "banned", "rate_limited"):
             await db.update_account(acct_id, cb_status="none", cb_api_key="",
                                     cb_error="", cb_error_count=0, cb_credits=0, cb_verified=0)
             any_cleared = True
             cleared += 1
 
         # WaveSpeed: fix = verified + dead status
-        if acc.get("ws_verified", 0) == 1 and acc.get("ws_status") in ("failed", "exhausted", "banned"):
+        if (not target_provider or target_provider == "wavespeed") and \
+           acc.get("ws_verified", 0) == 1 and acc.get("ws_status") in ("failed", "exhausted", "banned"):
             await db.update_account(acct_id, ws_status="none", ws_api_key="",
                                     ws_error="", ws_error_count=0, ws_credits=0, ws_verified=0)
             any_cleared = True
             cleared += 1
 
         # Gumloop: fix = verified + dead status
-        if acc.get("gl_verified", 0) == 1 and acc.get("gl_status") in ("failed", "exhausted", "banned"):
+        if (not target_provider or target_provider == "gumloop") and \
+           acc.get("gl_verified", 0) == 1 and acc.get("gl_status") in ("failed", "exhausted", "banned"):
             await db.update_account(acct_id, gl_status="none", gl_refresh_token="", gl_id_token="",
                                     gl_user_id="", gl_gummie_id="", gl_error="", gl_error_count=0,
                                     gl_verified=0)
             any_cleared = True
             cleared += 1
 
-        # Push cleared account to D1
-        if any_cleared:
-            try:
-                from . import license_client
-                await license_client.d1_sync_account(acct_id)
-            except Exception:
-                pass
+        # ChatBAI: fix = verified + dead status
+        if (not target_provider or target_provider == "cbai") and \
+           acc.get("cbai_verified", 0) == 1 and acc.get("cbai_status") in ("failed", "exhausted", "banned"):
+            await db.update_account(acct_id, cbai_status="none", cbai_api_key="", cbai_session_token="",
+                                    cbai_error="", cbai_error_count=0, cbai_credits=0, cbai_verified=0)
+            any_cleared = True
+            cleared += 1
+
+        # SkillBoss: fix = verified + dead status
+        if (not target_provider or target_provider == "skillboss") and \
+           acc.get("skboss_verified", 0) == 1 and acc.get("skboss_status") in ("failed", "exhausted", "banned"):
+            await db.update_account(acct_id, skboss_status="none", skboss_api_key="",
+                                    skboss_error="", skboss_error_count=0, skboss_credits=0, skboss_verified=0)
+            any_cleared = True
+            cleared += 1
+
+        # Windsurf: fix = verified + dead status
+        if (not target_provider or target_provider == "windsurf") and \
+           acc.get("windsurf_status") in ("failed", "exhausted", "banned"):
+            await db.update_account(acct_id, windsurf_status="none", windsurf_api_key="",
+                                    windsurf_error="", windsurf_error_count=0, windsurf_credits=0)
+            any_cleared = True
+            cleared += 1
 
         # After cleanup, check if account has ANY alive provider left
         if any_cleared:
@@ -837,6 +868,9 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
                     or (refreshed.get("cb_status") == "ok" and refreshed.get("cb_api_key"))
                     or (refreshed.get("ws_status") == "ok" and refreshed.get("ws_api_key"))
                     or (refreshed.get("gl_status") == "ok" and refreshed.get("gl_refresh_token"))
+                    or (refreshed.get("cbai_status") == "ok" and refreshed.get("cbai_api_key"))
+                    or (refreshed.get("skboss_status") == "ok" and refreshed.get("skboss_api_key"))
+                    or (refreshed.get("windsurf_status") == "ok" and refreshed.get("windsurf_api_key"))
                 )
                 # Also check if any provider is still pending/none (could be re-logged)
                 has_pending = (
@@ -844,6 +878,9 @@ async def delete_fix_accounts(_: bool = Depends(verify_admin)):
                     or refreshed.get("cb_status") in ("none", "pending")
                     or refreshed.get("ws_status") in ("none", "pending")
                     or refreshed.get("gl_status") in ("none", "pending")
+                    or refreshed.get("cbai_status") in ("none", "pending")
+                    or refreshed.get("skboss_status") in ("none", "pending")
+                    or refreshed.get("windsurf_status") in ("none", "pending")
                 )
                 if not has_any and not has_pending:
                     try:
