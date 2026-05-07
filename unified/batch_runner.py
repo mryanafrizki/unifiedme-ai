@@ -1228,7 +1228,7 @@ async def _run_skillboss_login(job: AccountJob) -> dict:
     python_bin = str(_py) if _py.exists() else "python"
 
     headless = "true" if batch_state.headless else "false"
-    cmd = [python_bin, str(script), "--email", job.email, "--secret", job.password]
+    cmd = [python_bin, "-u", str(script), "--email", job.email, "--secret", job.password]
 
     batch_state.broadcast({
         "type": "job_log", "job_id": job.id, "email": job.email,
@@ -1236,7 +1236,7 @@ async def _run_skillboss_login(job: AccountJob) -> dict:
         "message": f"Launching SkillBoss signup (headless={headless})...",
     })
 
-    env = {**os.environ, "BATCHER_CAMOUFOX_HEADLESS": headless, "BATCHER_ENABLE_CAMOUFOX": "true"}
+    env = {**os.environ, "BATCHER_CAMOUFOX_HEADLESS": headless, "BATCHER_ENABLE_CAMOUFOX": "true", "PYTHONUNBUFFERED": "1"}
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -1246,43 +1246,64 @@ async def _run_skillboss_login(job: AccountJob) -> dict:
             env=env,
             cwd=str(AUTH_DIR),
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
+    except Exception as exc:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "skillboss", "step": "error",
+            "message": f"Process launch error: {exc}",
+        })
+        return {"skillboss": {"success": False, "error": str(exc)}}
+
+    # Stream stdout line-by-line for real-time progress
+    result_data: dict = {"skillboss": {"success": False, "error": "No result"}}
+    try:
+        async def _read_lines():
+            while True:
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=180)
+                if not line:
+                    break
+                yield line.decode(errors="replace").strip()
+
+        async for line in _read_lines():
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+                if data.get("type") == "progress":
+                    batch_state.broadcast({
+                        "type": "job_log", "job_id": job.id, "email": job.email,
+                        "provider": "skillboss", "step": data.get("step", ""),
+                        "message": data.get("message", ""),
+                    })
+                elif data.get("type") == "result":
+                    result_data = {"skillboss": data}
+                    break
+            except (json.JSONDecodeError, ValueError):
+                continue
     except asyncio.TimeoutError:
         batch_state.broadcast({
             "type": "job_log", "job_id": job.id, "email": job.email,
             "provider": "skillboss", "step": "timeout",
             "message": "Signup timed out (180s)",
         })
-        return {"skillboss": {"success": False, "error": "Signup timed out (180s)"}}
-    except Exception as exc:
-        batch_state.broadcast({
-            "type": "job_log", "job_id": job.id, "email": job.email,
-            "provider": "skillboss", "step": "error",
-            "message": f"Process error: {exc}",
-        })
-        return {"skillboss": {"success": False, "error": str(exc)}}
-
-    # Parse JSON lines from stdout — broadcast progress
-    result_data: dict = {"skillboss": {"success": False, "error": "No result"}}
-    for line in stdout.decode(errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
         try:
-            data = json.loads(line)
-            if data.get("type") == "progress":
-                batch_state.broadcast({
-                    "type": "job_log", "job_id": job.id, "email": job.email,
-                    "provider": "skillboss", "step": data.get("step", ""),
-                    "message": data.get("message", ""),
-                })
-            elif data.get("type") == "result":
-                result_data = {"skillboss": data}
-                break
-        except (json.JSONDecodeError, ValueError):
-            continue
+            proc.kill()
+        except Exception:
+            pass
+        return {"skillboss": {"success": False, "error": "Signup timed out (180s)"}}
+
+    # Wait for process to finish
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=10)
+    except Exception:
+        pass
 
     # Log stderr if failed
+    stderr = b""
+    try:
+        stderr = await proc.stderr.read()
+    except Exception:
+        pass
     if not result_data.get("skillboss", {}).get("success") and stderr:
         err_text = stderr.decode(errors="replace")[:300]
         batch_state.broadcast({
