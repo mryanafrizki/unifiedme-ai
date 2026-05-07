@@ -60,7 +60,13 @@ async def _fill_google_pass(pg, secret: str) -> bool:
         await loc.press_sequentially(secret, delay=70)
         await asyncio.sleep(0.5)
         await pg.evaluate("() => { const b = document.querySelector('#passwordNext button'); if (b) b.click(); }")
-        await asyncio.sleep(5)
+        # Wait for navigation (TOS page, consent, or redirect)
+        try:
+            await pg.wait_for_load_state("domcontentloaded", timeout=30000)
+        except Exception:
+            pass
+        await asyncio.sleep(3)
+        emit({"type": "progress", "step": "post_pass", "message": f"After pass: {pg.url[:60]}"})
         return True
     except Exception as e:
         emit({"type": "progress", "step": "error", "message": f"Pass failed: {e}"})
@@ -102,9 +108,10 @@ async def run_signup(email: str, secret: str) -> dict:
 
     manager, browser, page = await create_stealth_browser(
         headless=os.getenv("BATCHER_CAMOUFOX_HEADLESS", "true").lower() == "true",
-        timeout=30000,
+        timeout=120000,
         humanize=True,
     )
+    page.set_default_navigation_timeout(120000)
 
     context = page.context
     popup_page = None
@@ -157,7 +164,9 @@ async def run_signup(email: str, secret: str) -> dict:
         auth_page = popup if popup else page
 
         if popup:
-            await popup.wait_for_load_state("domcontentloaded", timeout=15000)
+            popup.set_default_timeout(120000)
+            popup.set_default_navigation_timeout(120000)
+            await popup.wait_for_load_state("domcontentloaded", timeout=30000)
             emit({"type": "progress", "step": "popup_opened", "message": "Google popup opened"})
         else:
             for _ in range(10):
