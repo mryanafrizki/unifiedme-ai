@@ -1824,8 +1824,17 @@ async def test_batch_accounts(request: Request, _: bool = Depends(verify_admin))
 
     body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     providers_filter = body.get("providers", ["kiro", "codebuddy", "wavespeed", "chatbai", "skillboss", "windsurf"])
+    account_ids_filter = body.get("account_ids", [])
+
+    # Normalize provider aliases (dashboard sends "cbai" but loop uses "chatbai")
+    _provider_aliases = {"cbai": "chatbai", "skboss": "skillboss", "cb": "codebuddy", "ws": "wavespeed", "gl": "gumloop"}
+    providers_filter = [_provider_aliases.get(p, p) for p in providers_filter]
 
     accounts = await db.get_accounts()
+    # Filter by account_ids if specified
+    if account_ids_filter:
+        id_set = set(int(i) for i in account_ids_filter)
+        accounts = [a for a in accounts if a["id"] in id_set]
     results = []
     tested_count = 0
 
@@ -2157,10 +2166,15 @@ async def approve_account(account_id: int, provider: str, _: bool = Depends(veri
     col_map = {
         "kiro": "kiro_verified",
         "codebuddy": "cb_verified",
+        "cb": "cb_verified",
         "wavespeed": "ws_verified",
+        "ws": "ws_verified",
         "gumloop": "gl_verified",
+        "gl": "gl_verified",
         "chatbai": "cbai_verified",
         "cbai": "cbai_verified",
+        "skillboss": "skboss_verified",
+        "skboss": "skboss_verified",
         "windsurf": "windsurf_verified",
     }
     col = col_map.get(provider)
