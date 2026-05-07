@@ -1255,6 +1255,9 @@ async def _run_skillboss_login(job: AccountJob) -> dict:
         if result_data["skillboss"].get("error") == "No result":
             result_data["skillboss"]["error"] = f"Process failed: {err_text[:200]}"
 
+    # Wait for camoufox to fully cleanup before next run
+    await asyncio.sleep(3)
+
     return result_data
 
 

@@ -136,6 +136,7 @@ async def create_stealth_browser(
         locale=locale,
         proxy=proxy_cfg,
         enable_cache=True,
+        i_know_what_im_doing=True,
     )
 
     browser = await manager.__aenter__()
