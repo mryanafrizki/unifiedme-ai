@@ -152,13 +152,14 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                 await asyncio.sleep(3)
                 continue
 
-            # Consent on popup
+            # Consent on popup (includes Google Welcome "I understand" page)
             if not popup_closed and "accounts.google.com" in gurl and not clicked_consent:
                 result = await google_page.evaluate("""() => {
-                    for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"]')) {
-                        const t = (btn.textContent||'').trim().toLowerCase();
+                    const keywords = ['continue', 'allow', 'lanjutkan', 'i understand', 'accept', 'agree', 'got it', 'next'];
+                    for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"], input[type="submit"]')) {
+                        const t = (btn.textContent || btn.value || '').trim().toLowerCase();
                         if (!t || btn.offsetParent === null) continue;
-                        if (t === 'continue' || t === 'allow' || t === 'lanjutkan' || t.includes('continue') || t.includes('allow')) {
+                        if (keywords.some(k => t.includes(k))) {
                             btn.click(); return 'clicked:' + t;
                         }
                     }
@@ -173,13 +174,14 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                 else:
                     failed_clicks += 1
 
-            # Consent on main page
+            # Consent on main page (includes Google Welcome "I understand" page)
             if "accounts.google.com" in main_url and not clicked_consent:
                 result = await main_page.evaluate("""() => {
-                    for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                        const t = (btn.textContent||'').trim().toLowerCase();
+                    const keywords = ['continue', 'allow', 'i understand', 'accept', 'agree', 'got it', 'next'];
+                    for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                        const t = (btn.textContent || btn.value || '').trim().toLowerCase();
                         if (!t || btn.offsetParent === null) continue;
-                        if (t === 'continue' || t === 'allow' || t.includes('continue')) {
+                        if (keywords.some(k => t.includes(k))) {
                             btn.click(); return 'clicked:' + t;
                         }
                     }

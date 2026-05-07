@@ -217,22 +217,22 @@ async def fill_google_password(page, password: str) -> bool:
 
 
 async def _try_click_consent(page) -> str:
-    """Try to click Continue/Allow on a Google consent page. Returns click result string."""
+    """Try to click Continue/Allow/I understand on a Google consent page. Returns click result string."""
     try:
         return str(await page.evaluate("""() => {
             // Strategy 1: Find button by text content
+            const keywords = ['continue', 'allow', 'lanjutkan', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
             for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"]')) {
                 const t = (btn.textContent||'').trim().toLowerCase();
                 if (!t || btn.offsetParent === null) continue;
-                if (t === 'continue' || t === 'allow' || t === 'lanjutkan' || t === 'lanjut'
-                    || t.includes('continue') || t.includes('allow')) {
+                if (keywords.some(k => t.includes(k))) {
                     btn.click(); return 'text:' + t;
                 }
             }
             // Strategy 2: Find submit buttons/inputs
             for (const el of document.querySelectorAll('input[type="submit"], input[type="button"]')) {
                 const v = (el.value||'').toLowerCase();
-                if (v.includes('continue') || v.includes('allow') || v.includes('next')) {
+                if (keywords.some(k => v.includes(k))) {
                     el.click(); return 'input:' + v;
                 }
             }
@@ -329,9 +329,10 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
                 await google_page.evaluate("""() => {
                     const el = document.querySelector('#confirm') || document.querySelector('input[type="submit"]');
                     if (el) { el.click(); return; }
+                    const kw = ['continue', 'i agree', 'accept', 'i understand', 'got it', 'next'];
                     for (const btn of document.querySelectorAll('button')) {
                         const t = (btn.textContent||'').toLowerCase();
-                        if ((t==='continue'||t==='i agree'||t.includes('accept')) && btn.offsetParent!==null) { btn.click(); return; }
+                        if (kw.some(k => t.includes(k)) && btn.offsetParent!==null) { btn.click(); return; }
                     }
                 }""")
                 clicked_gaplustos = True
