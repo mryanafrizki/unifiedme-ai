@@ -352,6 +352,8 @@ async def pull_and_merge() -> dict:
                 "cbai_error", "cbai_error_count",
                 "skboss_status", "skboss_api_key", "skboss_credits",
                 "skboss_error", "skboss_error_count",
+                "windsurf_status", "windsurf_api_key", "windsurf_credits",
+                "windsurf_error", "windsurf_error_count",
             ]:
                 if key in acc and acc[key] is not None:
                     fields[key] = acc[key]
@@ -436,6 +438,8 @@ async def pull_new_accounts_only() -> dict:
         "cbai_error", "cbai_error_count",
         "skboss_status", "skboss_api_key", "skboss_credits",
         "skboss_error", "skboss_error_count",
+        "windsurf_status", "windsurf_api_key", "windsurf_credits",
+        "windsurf_error", "windsurf_error_count",
     ]
 
     for acc in d1_accounts:
@@ -554,6 +558,8 @@ async def _write_to_local_db(data: dict) -> None:
         "cbai_error", "cbai_error_count",
         "skboss_status", "skboss_api_key", "skboss_credits",
         "skboss_error", "skboss_error_count",
+        "windsurf_status", "windsurf_api_key", "windsurf_credits",
+        "windsurf_error", "windsurf_error_count",
     ]
 
     # Upsert accounts — D1 overwrites local
@@ -820,6 +826,8 @@ async def full_pull_replace_local() -> dict:
         "cbai_error", "cbai_error_count",
         "skboss_status", "skboss_api_key", "skboss_credits",
         "skboss_error", "skboss_error_count",
+        "windsurf_status", "windsurf_api_key", "windsurf_credits",
+        "windsurf_error", "windsurf_error_count",
     ]
 
     # Upsert D1 accounts to local
@@ -864,8 +872,22 @@ async def full_pull_replace_local() -> dict:
             added += 1
 
     # Delete local accounts that don't exist in D1
+    # BUT protect recently created accounts (< 30 min) — they may not have synced yet
+    import datetime
+    _now = datetime.datetime.utcnow()
     for email, local_acc in local_by_email.items():
         if email not in d1_emails:
+            # Don't delete if created recently (push may not have succeeded yet)
+            created = local_acc.get("created_at", "")
+            if created:
+                try:
+                    created_dt = datetime.datetime.fromisoformat(created.replace("Z", "+00:00").replace("+00:00", ""))
+                    age_minutes = (_now - created_dt).total_seconds() / 60
+                    if age_minutes < 30:
+                        log.info("Skipping delete of recent account %s (age: %.0f min)", email, age_minutes)
+                        continue
+                except Exception:
+                    pass
             await db.delete_account(local_acc["id"])
             deleted += 1
 
