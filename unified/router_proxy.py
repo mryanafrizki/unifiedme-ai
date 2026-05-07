@@ -20,6 +20,7 @@ from .proxy_skillboss import proxy_chat_completions as skillboss_proxy
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
 from .proxy_windsurf import proxy_chat_completions as windsurf_proxy
+from .proxy_therouter import proxy_chat_completions as therouter_proxy
 from .chatbai.proxy import proxy_chat_completions as chatbai_proxy
 from . import database as db
 from . import license_client
@@ -716,16 +717,10 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 break
             tried_windsurf_ids.append(account["id"])
 
+            # Windsurf sidecar manages its own account pool — we don't need
+            # per-account API keys. The sidecar picks the account internally.
+            # windsurf_api_key is optional metadata, not required for routing.
             windsurf_key = account.get("windsurf_api_key", "")
-            if not windsurf_key:
-                last_windsurf_error = f"Account {account['email']}: Missing windsurf_api_key"
-                await mark_account_error(account["id"], tier, "Missing windsurf_api_key")
-                await db.log_usage(
-                    key_info["id"], account["id"], model, tier.value, 503, 0,
-                    request_headers=req_headers_str, request_body=req_body_str,
-                    error_message=last_windsurf_error, proxy_url=proxy_url or "",
-                )
-                continue
 
             response, cost = await windsurf_proxy(body, windsurf_key, client_wants_stream, proxy_url=proxy_url)
             latency = int((time.monotonic() - start) * 1000)
@@ -838,6 +833,107 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         # All Windsurf retries exhausted
         all_tried = ", ".join(str(i) for i in tried_windsurf_ids)
         final_error = f"All Windsurf accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_windsurf_error}"
+        await db.log_usage(
+            key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
+            request_headers=req_headers_str, request_body=req_body_str,
+            error_message=final_error, proxy_url=proxy_url or "",
+        )
+        return JSONResponse(
+            {"error": {"message": final_error, "type": "server_error"}},
+            status_code=503,
+        )
+
+    if tier == Tier.THEROUTER:
+        # Route to TheRouter — instant rotation on failure
+        max_retries = 5
+        tried_tr_ids: list[int] = []
+        last_tr_error = ""
+
+        for attempt in range(max_retries):
+            account = await get_next_account(tier, exclude_ids=tried_tr_ids)
+            if account is None:
+                break
+            tried_tr_ids.append(account["id"])
+
+            tr_key = account.get("tr_api_key", "")
+            if not tr_key:
+                last_tr_error = f"Account {account['email']}: Missing tr_api_key"
+                await mark_account_error(account["id"], tier, "Missing tr_api_key")
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, 503, 0,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    error_message=last_tr_error, proxy_url=proxy_url or "",
+                )
+                continue
+
+            response, cost = await therouter_proxy(body, tr_key, client_wants_stream, proxy_url=proxy_url)
+            latency = int((time.monotonic() - start) * 1000)
+            status = response.status_code if hasattr(response, "status_code") else 200
+            resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
+            error_msg = ""
+
+            if status in (401, 403):
+                error_msg = f"TheRouter HTTP {status} (account: {account['email']})"
+                await db.update_account(account["id"], tr_status="banned", tr_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_tr_error = error_msg
+                log.warning("TheRouter %s HTTP %d, trying next account", account["email"], status)
+                continue
+            elif status == 429:
+                error_msg = f"TheRouter HTTP 429 rate limited (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_tr_error = error_msg
+                log.warning("TheRouter %s rate limited, trying next account", account["email"])
+                continue
+            elif status == 402:
+                error_msg = f"TheRouter HTTP 402 exhausted (account: {account['email']})"
+                await db.update_account(account["id"], tr_status="exhausted", tr_error=error_msg)
+                try:
+                    updated = await db.get_account(account["id"])
+                    if updated: await license_client.push_account_now(updated)
+                except Exception: pass
+                await db.log_usage(
+                    key_info["id"], account["id"], model, tier.value, status, latency,
+                    request_headers=req_headers_str, request_body=req_body_str,
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
+                )
+                last_tr_error = error_msg
+                log.warning("TheRouter %s exhausted, trying next account", account["email"])
+                continue
+            elif status >= 500:
+                error_msg = f"TheRouter HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
+            elif status < 400:
+                await mark_account_success(account["id"], tier)
+
+            await db.log_usage(
+                key_info["id"], account["id"], model, tier.value, status, latency,
+                request_headers=req_headers_str, request_body=req_body_str,
+                response_headers=resp_headers_str, response_body=resp_body_str,
+                error_message=error_msg, proxy_url=proxy_url or "",
+            )
+            return response
+
+        # All TheRouter retries exhausted
+        all_tried = ", ".join(str(i) for i in tried_tr_ids)
+        final_error = f"All TheRouter accounts exhausted. Tried IDs: [{all_tried}]. Last error: {last_tr_error}"
         await db.log_usage(
             key_info["id"], None, model, tier.value, 503, int((time.monotonic() - start) * 1000),
             request_headers=req_headers_str, request_body=req_body_str,
@@ -1090,6 +1186,7 @@ async def list_models(key_info: dict = Depends(verify_api_key)):
                 "chatbai" if tier == Tier.CHATBAI else
                 "skillboss" if tier == Tier.SKILLBOSS else
                 "windsurf" if tier == Tier.WINDSURF else
+                "therouter" if tier == Tier.THEROUTER else
                 "codebuddy"
             ),
             "permission": [],
