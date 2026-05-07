@@ -551,12 +551,8 @@ async def get_proxy_for_api_call() -> dict | None:
 
 
 async def get_proxy_for_batch() -> dict | None:
-    """Get the next proxy for a batch login. Falls back to API pool if batch pool empty."""
-    result = await _get_proxy_for_purpose("batch")
-    if result is None:
-        # Fallback: try API proxy pool
-        result = await _get_proxy_for_purpose("api")
-    return result
+    """Get the next proxy for a batch login. Only uses batch-purpose proxies."""
+    return await _get_proxy_for_purpose("batch")
 
 
 async def get_batch_proxies_for_workers(n: int) -> list[dict]:
@@ -567,9 +563,6 @@ async def get_batch_proxies_for_workers(n: int) -> list[dict]:
     Each worker gets a different proxy. If no proxies at all, returns [None]*n.
     """
     proxies = await get_checked_proxies("batch")
-    if not proxies:
-        # Fallback: use API proxy pool if batch pool empty
-        proxies = await get_checked_proxies("api")
     if not proxies:
         return [None] * n  # type: ignore — no proxies, workers run without proxy
     # Cycle through proxies if n > len(proxies)

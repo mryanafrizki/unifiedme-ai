@@ -50,10 +50,14 @@ async def admin_list_models(_: bool = Depends(verify_admin)):
             "id": model_name,
             "object": "model",
             "created": 1700000000,
-            "owned_by": "kiro" if tier == Tier.STANDARD else (
-                "wavespeed" if tier == Tier.WAVESPEED else (
-                    "gumloop" if tier == Tier.MAX_GL else "codebuddy"
-                )
+            "owned_by": (
+                "kiro" if tier == Tier.STANDARD else
+                "wavespeed" if tier == Tier.WAVESPEED else
+                "gumloop" if tier == Tier.MAX_GL else
+                "chatbai" if tier == Tier.CHATBAI else
+                "skillboss" if tier == Tier.SKILLBOSS else
+                "windsurf" if tier == Tier.WINDSURF else
+                "codebuddy"
             ),
             "tier": tier.value,
         })
