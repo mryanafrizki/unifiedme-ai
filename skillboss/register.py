@@ -70,10 +70,11 @@ async def _fill_google_pass(pg, secret: str) -> bool:
 async def _handle_google_consent(pg) -> bool:
     try:
         clicked = await pg.evaluate("""() => {
-            for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                const txt = (btn.textContent || '').trim().toLowerCase();
+            const keywords = ['continue', 'allow', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
+            for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
                 if (!txt || btn.offsetParent === null) continue;
-                if (txt === 'continue' || txt.includes('allow') || txt.includes('lanjut')) {
+                if (keywords.some(k => txt.includes(k))) {
                     btn.click(); return true;
                 }
             }
@@ -166,17 +167,11 @@ async def run_signup(email: str, secret: str) -> dict:
         if not await _fill_google_pass(auth_page, secret):
             return {"success": False, "error": "Failed to fill Google credentials"}
 
-        # Step 6: Handle consent
-        await asyncio.sleep(2)
-        if "accounts.google.com" in auth_page.url:
-            emit({"type": "progress", "step": "consent", "message": "Handling consent..."})
-            await _handle_google_consent(auth_page)
-            await asyncio.sleep(3)
-
-        # Step 7: Wait for redirect to SkillBoss
-        emit({"type": "progress", "step": "wait_complete", "message": "Waiting for auth complete..."})
+        # Step 6+7: Handle consent/welcome pages and wait for redirect
+        emit({"type": "progress", "step": "consent", "message": "Handling consent/welcome..."})
         target_page = page
-        for _ in range(30):
+        for _ in range(45):
+            # Check if we landed on SkillBoss
             try:
                 if "console" in page.url or "login/success" in page.url:
                     target_page = page
@@ -189,9 +184,20 @@ async def run_signup(email: str, secret: str) -> dict:
                     if "console" in popup_url or "login/success" in popup_url:
                         target_page = popup
                         break
+                    if "skillboss" in popup_url and "login" not in popup_url:
+                        target_page = popup
+                        break
                 except Exception:
                     target_page = page
                     break
+
+            # Try clicking consent/welcome buttons on auth page
+            try:
+                if "accounts.google.com" in auth_page.url or "google.com" in auth_page.url:
+                    await _handle_google_consent(auth_page)
+            except Exception:
+                pass
+
             await asyncio.sleep(1)
 
         # Step 8: Go to /console

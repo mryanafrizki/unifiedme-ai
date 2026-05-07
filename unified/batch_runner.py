@@ -390,6 +390,16 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                     await db.update_account(job.account_id, gl_status="failed",
                                             gl_error=error)
 
+            if "skillboss" in job.providers:
+                if result.get("skillboss", {}).get("success"):
+                    if "skillboss" not in imported:
+                        await db.update_account(job.account_id, skboss_status="failed",
+                                                skboss_error="Import failed")
+                else:
+                    error = result.get("skillboss", {}).get("error", "Login failed")
+                    await db.update_account(job.account_id, skboss_status="failed",
+                                            skboss_error=error)
+
             if not any_success:
                 refreshed = await db.get_account(job.account_id)
                 has_any_ok = refreshed and (
@@ -397,6 +407,7 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                     or refreshed.get("cb_status") == "ok"
                     or refreshed.get("ws_status") == "ok"
                     or refreshed.get("gl_status") == "ok"
+                    or refreshed.get("skboss_status") == "ok"
                 )
                 if not has_any_ok:
                     await db.update_account(job.account_id, status="failed")
