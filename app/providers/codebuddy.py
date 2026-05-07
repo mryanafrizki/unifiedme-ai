@@ -840,10 +840,11 @@ async def _handle_google_consent_continue(page: Any) -> bool:
         clicked = bool(
             await page.evaluate(
                 """() => {
-                    for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                        const txt = (btn.textContent || '').trim().toLowerCase();
+                    const keywords = ['continue', 'allow', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
+                    for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                        const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
                         if (!txt || btn.offsetParent === null) continue;
-                        if (txt === 'continue' || txt.includes('allow') || txt.includes('lanjut')) {
+                        if (keywords.some(k => txt.includes(k))) {
                             btn.click();
                             return true;
                         }

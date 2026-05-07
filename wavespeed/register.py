@@ -190,19 +190,20 @@ async def handle_google_consent(page) -> None:
                 await asyncio.sleep(3)
                 continue
 
-            # OAuth consent (Continue/Allow button)
-            if "accounts.google.com" in url and ("consent" in url or "signin/oauth" in url):
+            # OAuth consent / Welcome page (Continue/Allow/I understand button)
+            if "accounts.google.com" in url:
                 if url not in clicked_urls:
                     await page.evaluate("""() => {
-                        for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                            const txt = (btn.textContent || '').trim().toLowerCase();
-                            if ((txt === 'continue' || txt.includes('allow') || txt.includes('lanjut')) && btn.offsetParent !== null) {
+                        const keywords = ['continue', 'allow', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
+                        for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                            const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
+                            if (keywords.some(k => txt.includes(k)) && btn.offsetParent !== null) {
                                 btn.click(); return;
                             }
                         }
                     }""")
                     clicked_urls.add(url)
-                    emit({"type": "progress", "step": "consent", "message": "Clicked Continue on OAuth consent"})
+                    emit({"type": "progress", "step": "consent", "message": "Clicked consent/welcome button"})
                 # Wait for navigation after click — don't click again
                 await asyncio.sleep(3)
                 continue
@@ -395,19 +396,20 @@ async def run(email: str, password: str, headless: bool = False, proxy_url: str 
                     await asyncio.sleep(5)
                     continue
 
-                # OAuth consent (Continue/Allow) — click ONCE
-                if "accounts.google.com" in url and ("consent" in url or "signin/oauth" in url):
+                # OAuth consent / Welcome (Continue/Allow/I understand) — click ONCE
+                if "accounts.google.com" in url:
                     if "oauth_consent" not in clicked_consent:
                         await page.evaluate("""() => {
-                            for (const btn of document.querySelectorAll('button, div[role="button"]')) {
-                                const txt = (btn.textContent || '').trim().toLowerCase();
-                                if ((txt === 'continue' || txt.includes('allow') || txt.includes('lanjut')) && btn.offsetParent !== null) {
+                            const keywords = ['continue', 'allow', 'lanjut', 'i understand', 'accept', 'agree', 'got it', 'next'];
+                            for (const btn of document.querySelectorAll('button, div[role="button"], input[type="submit"]')) {
+                                const txt = (btn.textContent || btn.value || '').trim().toLowerCase();
+                                if (keywords.some(k => txt.includes(k)) && btn.offsetParent !== null) {
                                     btn.click(); return;
                                 }
                             }
                         }""")
                         clicked_consent.add("oauth_consent")
-                        emit({"type": "progress", "step": "consent", "message": "Clicked Continue on OAuth"})
+                        emit({"type": "progress", "step": "consent", "message": "Clicked consent/welcome"})
                     await asyncio.sleep(3)
                     continue
 
