@@ -1872,7 +1872,10 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
         if not cb_key:
             return {"ok": False, "error": "No CB API key"}
         from .proxy_codebuddy import proxy_chat_completions as cb_proxy
-        body = {"model": "claude-opus-4.6", "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 100, "stream": False}
+        import random as _rnd
+        _cb_models = ["claude-opus-4.6", "gpt-5.4", "gpt-5.2", "gemini-2.5-pro", "deepseek-v3-2-volc"]
+        test_model = _rnd.choice(_cb_models)
+        body = {"model": test_model, "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 100, "stream": False}
         proxy_info = await db.get_proxy_for_api_call()
         px = proxy_info["url"] if proxy_info else None
         t0 = _time.monotonic()
@@ -1887,8 +1890,8 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
                     resp_body = response.body.decode("utf-8", errors="replace")[:2000]
                 except Exception:
                     pass
-            await db.log_usage(None, acct_id, "claude-opus-4.6", "max", status, latency,
-                               request_body='{"test":"batch"}', response_body=resp_body, proxy_url=px or "")
+            await db.log_usage(None, acct_id, test_model, "max", status, latency,
+                               request_body=json.dumps(body), response_body=resp_body, proxy_url=px or "")
             if status == 200:
                 return {"ok": True, "latency_ms": latency}
             error = f"HTTP {status}"
@@ -1900,8 +1903,8 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             return {"ok": False, "error": error[:300], "latency_ms": latency}
         except Exception as e:
             latency = int((_time.monotonic() - t0) * 1000)
-            await db.log_usage(None, acct_id, "claude-opus-4.6", "max", 502, latency,
-                               request_body='{"test":"batch"}', error_message=str(e)[:200], proxy_url=proxy_url or "")
+            await db.log_usage(None, acct_id, test_model, "max", 502, latency,
+                               request_body=json.dumps(body), error_message=str(e)[:200], proxy_url=px or "")
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
     elif provider == "kiro":
@@ -1973,14 +1976,10 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
         if not cbai_key:
             return {"ok": False, "error": "No ChatBAI API key"}
         from .chatbai.proxy import proxy_chat_completions as cbai_proxy
-        # Rotate models — use counter to pick different model each 5 accounts
+        import random as _rnd
         _cbai_models = ["glm-5", "bchatai-kimi-k2.5", "bchatai-gemini-3-flash", "bchatai-gpt-5-mini", "bchatai-minimax-m2.5", "bchatai-gpt-5-nano", "bchatai-gpt-5.2"]
-        if not hasattr(_test_account_provider, '_cbai_counter'):
-            _test_account_provider._cbai_counter = 0
-        _test_account_provider._cbai_counter += 1
-        model_idx = (_test_account_provider._cbai_counter // 5) % len(_cbai_models)
-        test_model = _cbai_models[model_idx]
-        body = {"model": test_model, "messages": [{"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
+        test_model = _rnd.choice(_cbai_models)
+        body = {"model": test_model, "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
         proxy_info = await db.get_proxy_for_api_call()
         px = proxy_info["url"] if proxy_info else None
         t0 = _time.monotonic()
@@ -1988,13 +1987,27 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             response, cost = await cbai_proxy(body, cbai_key, False, proxy_url=px)
             latency = int((_time.monotonic() - t0) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
+            resp_body = ""
+            if hasattr(response, "body"):
+                try:
+                    resp_body = response.body.decode("utf-8", errors="replace")[:2000]
+                except Exception:
+                    pass
             await db.log_usage(None, acct_id, test_model, "chatbai", status, latency,
-                               request_body='{"test":"batch"}', proxy_url=px or "")
+                               request_body=json.dumps(body), response_body=resp_body, proxy_url=px or "")
             if status == 200:
                 return {"ok": True, "latency_ms": latency}
-            return {"ok": False, "error": f"HTTP {status}", "latency_ms": latency}
+            error = f"HTTP {status}"
+            try:
+                err_data = json.loads(resp_body)
+                error = err_data.get("error", {}).get("message", error) if isinstance(err_data, dict) else error
+            except Exception:
+                pass
+            return {"ok": False, "error": error[:300], "latency_ms": latency}
         except Exception as e:
             latency = int((_time.monotonic() - t0) * 1000)
+            await db.log_usage(None, acct_id, test_model, "chatbai", 502, latency,
+                               request_body=json.dumps(body), error_message=str(e)[:200], proxy_url=px or "")
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
     elif provider == "skillboss" or provider == "skboss":
@@ -2002,7 +2015,10 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
         if not skboss_key:
             return {"ok": False, "error": "No SkillBoss API key"}
         from .proxy_skillboss import proxy_chat_completions as skboss_proxy
-        body = {"model": "skboss-claude-haiku-4.5", "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 50, "stream": False}
+        import random as _rnd
+        _skb_models = ["skboss-claude-haiku-4.5", "skboss-gpt-5.2", "skboss-gemini-2.5-flash"]
+        test_model = _rnd.choice(_skb_models)
+        body = {"model": test_model, "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 50, "stream": False}
         proxy_info = await db.get_proxy_for_api_call()
         px = proxy_info["url"] if proxy_info else None
         t0 = _time.monotonic()
@@ -2016,13 +2032,21 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
                     resp_body = response.body.decode("utf-8", errors="replace")[:2000]
                 except Exception:
                     pass
-            await db.log_usage(None, acct_id, "skboss-claude-haiku-4.5", "skillboss", status, latency,
-                               request_body='{"test":"warmup"}', response_body=resp_body, proxy_url=px or "")
+            await db.log_usage(None, acct_id, test_model, "skillboss", status, latency,
+                               request_body=json.dumps(body), response_body=resp_body, proxy_url=px or "")
             if status == 200:
                 return {"ok": True, "latency_ms": latency}
-            return {"ok": False, "error": f"HTTP {status}", "latency_ms": latency}
+            error = f"HTTP {status}"
+            try:
+                err_data = json.loads(resp_body)
+                error = err_data.get("error", {}).get("message", error) if isinstance(err_data, dict) else error
+            except Exception:
+                pass
+            return {"ok": False, "error": error[:300], "latency_ms": latency}
         except Exception as e:
             latency = int((_time.monotonic() - t0) * 1000)
+            await db.log_usage(None, acct_id, test_model, "skillboss", 502, latency,
+                               request_body=json.dumps(body), error_message=str(e)[:200], proxy_url=px or "")
             return {"ok": False, "error": str(e)[:300], "latency_ms": latency}
 
     return {"ok": False, "error": f"Unknown provider: {provider}"}
