@@ -1068,6 +1068,7 @@ async def _sync_loop() -> None:
             })
 
             # Push ALL accounts on every heartbeat (ensures D1 stays in sync)
+            from . import database as db
             all_accounts = await db.get_accounts()
             await push_sync(accounts=all_accounts)
 
