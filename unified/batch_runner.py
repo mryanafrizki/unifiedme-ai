@@ -165,6 +165,8 @@ async def start_batch(accounts: list[tuple[str, str]], providers: list[str],
                 needed_providers.remove("gumloop")
             if "skillboss" in needed_providers and existing.get("skboss_status") == "ok":
                 needed_providers.remove("skillboss")
+            if "therouter" in needed_providers and existing.get("tr_status") == "ok":
+                needed_providers.remove("therouter")
             if existing.get("windsurf_status") == "ok":
                 for _wfp in ("windsurf", "windsurf-emailpass", "windsurf-google"):
                     if _wfp in needed_providers:
@@ -261,6 +263,10 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
             skboss_result = await _run_skillboss_login(job)
             result.update(skboss_result)
 
+        if "therouter" in job.providers:
+            tr_result = await _run_therouter_login(job, proxy_override=proxy_url_used or None)
+            result.update(tr_result)
+
         _wf_provider = next((p for p in job.providers if p.startswith("windsurf")), None)
         if _wf_provider:
             windsurf_result = await _run_windsurf_login(job, proxy_override=proxy_url_used or None, method=_wf_provider)
@@ -276,7 +282,8 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
         cbai_ok = "chatbai" in job.providers and result.get("chatbai", {}).get("success")
         skboss_ok = "skillboss" in job.providers and result.get("skillboss", {}).get("success")
         windsurf_ok = any(p.startswith("windsurf") for p in job.providers) and result.get("windsurf", {}).get("success")
-        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok or skboss_ok or windsurf_ok
+        tr_ok = "therouter" in job.providers and result.get("therouter", {}).get("success")
+        any_login_success = kiro_ok or cb_ok or ws_ok or gl_ok or cbai_ok or skboss_ok or windsurf_ok or tr_ok
 
         if any_login_success and not job.account_id:
             job.account_id = await db.create_account(job.email, job.password)
@@ -375,6 +382,22 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                 "provider": "windsurf", "success": ok,
             })
 
+        if tr_ok:
+            api_key = result.get("therouter", {}).get("api_key", "")
+            if api_key and job.account_id:
+                from .config import TR_DEFAULT_CREDITS
+                await db.update_account(job.account_id, tr_status="ok", tr_api_key=api_key, tr_credits=TR_DEFAULT_CREDITS, tr_error="")
+                imported.append("therouter")
+                ok = True
+            else:
+                if job.account_id:
+                    await db.update_account(job.account_id, tr_status="failed", tr_error="No API key")
+                ok = False
+            batch_state.broadcast({
+                "type": "provider_done", "job_id": job.id, "email": job.email,
+                "provider": "therouter", "success": ok,
+            })
+
         any_success = bool(imported)
         job.status = JobStatus.SUCCESS if any_success else JobStatus.FAILED
         job.finished_at = time.time()
@@ -430,6 +453,16 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                     await db.update_account(job.account_id, skboss_status="failed",
                                             skboss_error=error)
 
+            if "therouter" in job.providers:
+                if result.get("therouter", {}).get("success"):
+                    if "therouter" not in imported:
+                        await db.update_account(job.account_id, tr_status="failed",
+                                                tr_error="Import failed")
+                else:
+                    error = result.get("therouter", {}).get("error", "Login failed")
+                    await db.update_account(job.account_id, tr_status="failed",
+                                            tr_error=error)
+
             if not any_success:
                 refreshed = await db.get_account(job.account_id)
                 has_any_ok = refreshed and (
@@ -438,6 +471,7 @@ async def _run_single_job(job: AccountJob, index: int, proxy_info: dict | None) 
                     or refreshed.get("ws_status") == "ok"
                     or refreshed.get("gl_status") == "ok"
                     or refreshed.get("skboss_status") == "ok"
+                    or refreshed.get("tr_status") == "ok"
                 )
                 if not has_any_ok:
                     await db.update_account(job.account_id, status="failed")
@@ -1895,3 +1929,85 @@ async def retry_account(account_id: int, providers: Optional[list[str]] = None) 
         "codebuddy": result.get("codebuddy", {}),
         "wavespeed": result.get("wavespeed", {}),
     }
+
+
+# ---------------------------------------------------------------------------
+# TheRouter login (pure HTTP — no browser)
+# ---------------------------------------------------------------------------
+
+async def _run_therouter_login(job: AccountJob, proxy_override: str | None = None,
+                                domain: str = "@gmail.com", count: int = 1) -> dict:
+    """Run TheRouter signup + login + API key creation.
+
+    Pure HTTP flow — no subprocess needed.
+    Auto-generates email+password via register.py (no manual input needed).
+    Updates job.email and job.password with the actual generated credentials.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+    batch_state.broadcast({
+        "type": "job_log", "job_id": job.id, "email": job.email,
+        "provider": "therouter", "step": "start",
+        "message": "Starting TheRouter auto-registration...",
+    })
+
+    try:
+        from therouter.register import create_full_account
+    except ImportError as e:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "therouter", "step": "error",
+            "message": f"Import error: {e}",
+        })
+        return {"therouter": {"success": False, "error": f"Import error: {e}"}}
+
+    try:
+        # Pass None for email/password so register.py auto-generates them
+        result = await create_full_account(
+            email=None,
+            password=None,
+            proxy=proxy_override,
+            batch_mode=True,
+            domain=domain,
+        )
+
+        api_key = result.get("api_key", "")
+        if api_key:
+            # Update job with the actual generated credentials
+            actual_email = result.get("email", job.email)
+            actual_password = result.get("password", job.password)
+            job.email = actual_email
+            job.password = actual_password
+
+            batch_state.broadcast({
+                "type": "job_log", "job_id": job.id, "email": actual_email,
+                "provider": "therouter", "step": "done",
+                "message": f"Registered {actual_email} — API key: {api_key[:20]}...",
+            })
+            return {"therouter": {
+                "success": True,
+                "api_key": api_key,
+                "email": actual_email,
+                "password": actual_password,
+                "name": result.get("name", ""),
+                "user_id": result.get("user_id", ""),
+                "tenant_id": result.get("tenant_id", ""),
+                "quotas": result.get("quotas", {}),
+            }}
+        else:
+            error = result.get("error", "No API key returned")
+            batch_state.broadcast({
+                "type": "job_log", "job_id": job.id, "email": job.email,
+                "provider": "therouter", "step": "error",
+                "message": error,
+            })
+            return {"therouter": {"success": False, "error": error}}
+
+    except Exception as exc:
+        batch_state.broadcast({
+            "type": "job_log", "job_id": job.id, "email": job.email,
+            "provider": "therouter", "step": "error",
+            "message": str(exc),
+        })
+        return {"therouter": {"success": False, "error": str(exc)}}

@@ -1306,12 +1306,21 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
         parts = line.split(":", 1)
         accounts.append((parts[0].strip(), parts[1].strip()))
 
-    if not accounts:
-        return JSONResponse({"error": "No valid accounts"}, status_code=400)
-
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google")]
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google", "therouter")]
     if not providers:
         return JSONResponse({"error": "No valid providers"}, status_code=400)
+
+    # TheRouter auto-gen: if no accounts provided but therouter is selected, generate placeholders
+    tr_only = len(providers) == 1 and providers[0] == "therouter"
+    if not accounts and "therouter" in providers:
+        import random, string
+        tr_count = max(1, min(100, req.tr_count))
+        for _ in range(tr_count):
+            placeholder_email = f"tr-auto-{random.randint(10000,99999)}@placeholder"
+            placeholder_pass = "".join(random.choices(string.ascii_letters + string.digits, k=14))
+            accounts.append((placeholder_email, placeholder_pass))
+    elif not accounts:
+        return JSONResponse({"error": "No valid accounts"}, status_code=400)
 
     mcp_urls = [u.strip() for u in (req.mcp_urls or []) if u.strip()]
 
