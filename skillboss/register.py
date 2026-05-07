@@ -60,13 +60,11 @@ async def _fill_google_pass(pg, secret: str) -> bool:
         await loc.press_sequentially(secret, delay=70)
         await asyncio.sleep(0.5)
         await pg.evaluate("() => { const b = document.querySelector('#passwordNext button'); if (b) b.click(); }")
-        # Wait for navigation (TOS page, consent, or redirect)
+        await asyncio.sleep(8)
         try:
-            await pg.wait_for_load_state("domcontentloaded", timeout=30000)
+            emit({"type": "progress", "step": "post_pass", "message": f"After pass: {pg.url[:60]}"})
         except Exception:
-            pass
-        await asyncio.sleep(3)
-        emit({"type": "progress", "step": "post_pass", "message": f"After pass: {pg.url[:60]}"})
+            emit({"type": "progress", "step": "post_pass", "message": "After pass: page navigated"})
         return True
     except Exception as e:
         emit({"type": "progress", "step": "error", "message": f"Pass failed: {e}"})
