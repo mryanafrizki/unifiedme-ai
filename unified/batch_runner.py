@@ -1944,6 +1944,7 @@ async def _run_therouter_login(job: AccountJob, proxy_override: str | None = Non
     Updates job.email and job.password with the actual generated credentials.
     """
     import sys
+    from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
     batch_state.broadcast({

@@ -300,6 +300,15 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN last_used_windsurf TEXT DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN windsurf_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN windsurf_test_error TEXT DEFAULT ''",
+        # TheRouter fields
+        "ALTER TABLE accounts ADD COLUMN tr_status TEXT DEFAULT 'none'",
+        "ALTER TABLE accounts ADD COLUMN tr_api_key TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN tr_credits REAL DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN tr_error TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN tr_error_count INTEGER DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN last_used_tr TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN tr_verified INTEGER DEFAULT 0",
+        "ALTER TABLE accounts ADD COLUMN tr_test_error TEXT DEFAULT ''",
         # Proxy pool separation + selection
         "ALTER TABLE proxies ADD COLUMN purpose TEXT DEFAULT 'api'",
         "ALTER TABLE proxies ADD COLUMN checked INTEGER DEFAULT 0",
