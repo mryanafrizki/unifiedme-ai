@@ -12,6 +12,8 @@ Usage:
     unifiedme addaccounts add      Batch add accounts (interactive)
     unifiedme addaccounts status   Show batch progress (real-time)
     unifiedme addaccounts stop     Force stop running batch
+    unifiedme windsurf env         Setup Windsurf sidecar .env (interactive)
+    unifiedme windsurf status      Show Windsurf sidecar status
     unifiedme mcp add <path>       Add MCP server for a folder
     unifiedme mcp remove <id>      Remove MCP server
     unifiedme mcp start [id]       Start MCP server(s)
@@ -2338,6 +2340,165 @@ def cmd_vps():
         print(f"    {CMD} vps install <id>      Auto-install on a VPS")
 
 
+def cmd_windsurf_env():
+    """Interactive setup for Windsurf sidecar .env file."""
+    from .config import BASE_DIR
+
+    env_path = BASE_DIR / "windsurf" / ".env"
+    sidecar_dir = BASE_DIR / "windsurf"
+
+    print()
+    print("  +======================================+")
+    print("  |   Windsurf Sidecar — Setup           |")
+    print("  +======================================+")
+    print()
+
+    if not sidecar_dir.exists():
+        print(f"  [ERROR] Sidecar not found: {sidecar_dir}")
+        print(f"  Run: git clone https://github.com/unifiedaa/WindsurfAPI.git {sidecar_dir}")
+        return
+
+    # Load existing .env if present
+    existing = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                existing[k.strip()] = v.strip()
+        print(f"  Found existing .env ({len(existing)} vars)")
+    else:
+        print("  No .env found — creating new one")
+
+    print()
+
+    # Port
+    port = input(f"  Sidecar port [{existing.get('PORT', '3003')}]: ").strip()
+    port = port or existing.get("PORT", "3003")
+
+    # API Key (internal auth between proxy and sidecar)
+    api_key = input(f"  Internal API key [{existing.get('API_KEY', 'wf-internal-secret')}]: ").strip()
+    api_key = api_key or existing.get("API_KEY", "wf-internal-secret")
+
+    # Auth token
+    print()
+    print("  Get your auth token from: https://windsurf.com/show-auth-token")
+    token = input(f"  Auth token [{existing.get('CODEIUM_AUTH_TOKEN', '')[:20] + '...' if existing.get('CODEIUM_AUTH_TOKEN') else 'none'}]: ").strip()
+    token = token or existing.get("CODEIUM_AUTH_TOKEN", "")
+
+    # LS Binary path
+    print()
+    # Auto-detect
+    ls_default = existing.get("LS_BINARY_PATH", "")
+    if not ls_default:
+        import glob
+        candidates = glob.glob(os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Windsurf", "resources", "app", "extensions", "windsurf", "bin", "language_server*"))
+        if candidates:
+            ls_default = candidates[0]
+        elif platform.system() == "Linux":
+            for p in ["/opt/windsurf/language_server_linux_x64",
+                      os.path.expanduser("~/.windsurf/bin/language_server_linux_x64")]:
+                if os.path.exists(p):
+                    ls_default = p
+                    break
+    if ls_default:
+        print(f"  Auto-detected LS binary: {ls_default}")
+    ls_path = input(f"  LS binary path [{ls_default or 'not found'}]: ").strip()
+    ls_path = ls_path or ls_default
+
+    # LS Port
+    ls_port = input(f"  LS gRPC port [{existing.get('LS_PORT', '42100')}]: ").strip()
+    ls_port = ls_port or existing.get("LS_PORT", "42100")
+
+    # Dashboard password
+    dash_pw = input(f"  Dashboard password [{existing.get('DASHBOARD_PASSWORD', '') or 'none'}]: ").strip()
+    dash_pw = dash_pw or existing.get("DASHBOARD_PASSWORD", "")
+
+    # Write .env
+    env_content = f"""# ========== Server ==========
+PORT={port}
+API_KEY={api_key}
+DATA_DIR=
+
+# ========== Codeium Auth ==========
+CODEIUM_AUTH_TOKEN={token}
+
+# ========== Language Server ==========
+LS_BINARY_PATH={ls_path}
+LS_PORT={ls_port}
+
+# ========== Dashboard ==========
+DASHBOARD_PASSWORD={dash_pw}
+
+# ========== Advanced ==========
+CODEIUM_API_URL=https://server.self-serve.windsurf.com
+DEFAULT_MODEL=claude-4.5-sonnet-thinking
+MAX_TOKENS=8192
+LOG_LEVEL=info
+"""
+    env_path.write_text(env_content, encoding="utf-8")
+
+    print()
+    print(f"  [OK] Saved to {env_path}")
+    print()
+    print("  Summary:")
+    print(f"    Port:       {port}")
+    print(f"    API Key:    {api_key}")
+    print(f"    Token:      {'set' if token else 'not set'}")
+    print(f"    LS Binary:  {ls_path or 'not set'}")
+    print(f"    LS Port:    {ls_port}")
+    print(f"    Dashboard:  {'set' if dash_pw else 'no password'}")
+    print()
+    print(f"  Test: cd {sidecar_dir} && node src/index.js")
+    print(f"  Or restart proxy: {CMD} stop && {CMD} start")
+    print()
+
+
+def cmd_windsurf_status():
+    """Show Windsurf sidecar status."""
+    import httpx
+    from .config import WINDSURF_UPSTREAM, WINDSURF_INTERNAL_KEY
+
+    print()
+    print("  Windsurf Sidecar Status")
+    print("  " + "-" * 30)
+
+    try:
+        resp = httpx.get(f"{WINDSURF_UPSTREAM}/health", timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"  Status:    {data.get('status', '?')}")
+            print(f"  Version:   {data.get('version', '?')}")
+            print(f"  Uptime:    {data.get('uptime', '?')}s")
+            accts = data.get("accounts", {})
+            print(f"  Accounts:  {accts.get('active', 0)} active / {accts.get('total', 0)} total")
+        else:
+            print(f"  Error: HTTP {resp.status_code}")
+    except Exception:
+        print("  Not running")
+
+    print()
+
+
+def cmd_windsurf():
+    """Route windsurf subcommands."""
+    args = sys.argv[2:]
+    subcmd = args[0] if args else ""
+
+    subcmds = {
+        "env": cmd_windsurf_env,
+        "status": cmd_windsurf_status,
+    }
+
+    if subcmd in subcmds:
+        subcmds[subcmd]()
+    else:
+        print(f"\n  Usage:")
+        print(f"    {CMD} windsurf env       Setup Windsurf sidecar .env (interactive)")
+        print(f"    {CMD} windsurf status    Show sidecar status")
+        print()
+
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -2353,6 +2514,7 @@ def cli_main():
         "kill-port": cmd_kill_port,
         "logout": cmd_logout,
         "addaccounts": cmd_addaccounts,
+        "windsurf": cmd_windsurf,
         "mcp": cmd_mcp,
         "tunnel": cmd_tunnel,
         "vps": cmd_vps,

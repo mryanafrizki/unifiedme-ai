@@ -28,6 +28,7 @@ from .proxy_codebuddy import close_all_clients as close_codebuddy
 from .proxy_wavespeed import close_all_clients as close_wavespeed
 from .proxy_gumloop import close_all_clients as close_gumloop
 from .chatbai.proxy import close_all_clients as close_chatbai
+from .proxy_windsurf import close_all_clients as close_windsurf
 from . import license_client
 
 logging.basicConfig(
@@ -268,9 +269,10 @@ async def lifespan(app: FastAPI):
             _gl = sum(1 for a in local_after if a.get("gl_status") == "ok")
             _cbai = sum(1 for a in local_after if a.get("cbai_status") == "ok")
             _skb = sum(1 for a in local_after if a.get("skboss_status") == "ok")
+            _wf = sum(1 for a in local_after if a.get("windsurf_status") == "ok")
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
             log.info("  D1 Synced (pulled %d accounts)", pull_result.get("total", 0))
-            log.info("  KR: %d  CB: %d  WS: %d  GL: %d  CBAI: %d  SKB: %d", _kr, _cb, _ws, _gl, _cbai, _skb)
+            log.info("  KR: %d  CB: %d  WS: %d  GL: %d  CBAI: %d  SKB: %d  WF: %d", _kr, _cb, _ws, _gl, _cbai, _skb, _wf)
             log.info("  %s · %s (%s)", _now_wib, _device, _os_info)
             log.info("  Heartbeat: every %ds", license_client.SYNC_INTERVAL)
             log.info("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
@@ -281,6 +283,24 @@ async def lifespan(app: FastAPI):
     admin_pw = await db.get_setting("admin_password_set", "")
     if not admin_pw:
         log.info("First time setup — open http://localhost:%d/dashboard to set your admin password", LISTEN_PORT)
+
+    # Start Windsurf sidecar (non-blocking, lazy — only if Node.js + sidecar code exist)
+    try:
+        from .windsurf_manager import windsurf_sidecar
+        if windsurf_sidecar.is_available():
+            log.info("Starting Windsurf sidecar...")
+            sidecar_ok = await windsurf_sidecar.start()
+            if sidecar_ok:
+                synced = await windsurf_sidecar.sync_accounts_from_db()
+                _wf = sum(1 for a in (await db.get_accounts()) if a.get("windsurf_status") == "ok")
+                log.info("Windsurf sidecar ready (port %d, %d accounts synced, %d in DB)",
+                         windsurf_sidecar._port, synced, _wf)
+            else:
+                log.warning("Windsurf sidecar failed to start — windsurf-* models unavailable")
+        else:
+            log.info("Windsurf sidecar not available (Node.js or unified/windsurf/ missing)")
+    except Exception as e:
+        log.warning("Windsurf sidecar startup error: %s — windsurf-* models unavailable", e)
 
     log.info("Unified AI Proxy ready on port %d", LISTEN_PORT)
 
@@ -332,6 +352,15 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await close_chatbai()
+    except Exception:
+        pass
+    try:
+        await close_windsurf()
+    except Exception:
+        pass
+    try:
+        from .windsurf_manager import windsurf_sidecar
+        await windsurf_sidecar.stop()
     except Exception:
         pass
     # NOTE: Do NOT stop tunnels or MCP servers here.

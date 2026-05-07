@@ -184,6 +184,7 @@ code,pre,.mono{font-family:'JetBrains Mono',monospace}
 .badge-max_gl{background:rgba(34,211,238,.12);color:var(--cyan)}
 .badge-chatbai{background:rgba(251,191,36,.12);color:#fbbf24}
 .badge-skillboss{background:rgba(168,85,247,.12);color:#a855f7}
+.badge-windsurf{background:rgba(6,182,212,.12);color:#06b6d4}
 .acct-col-actions{margin-left:auto;display:inline-flex;gap:3px;flex-shrink:0}
 .btn-xs{font-size:9px;padding:1px 5px;border-radius:3px;border:1px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer;transition:all .15s;white-space:nowrap;line-height:1.4}
 .btn-xs:hover{background:var(--bg-card);color:var(--text)}
@@ -861,6 +862,21 @@ a:hover{text-decoration:underline}
           <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
         </div>
       </div>
+      <div class="acct-col">
+        <div class="acct-col-header">
+          <h4><span class="badge badge-windsurf">WF</span> WINDSURF <span class="acct-count" id="acct-count-windsurf">0</span></h4>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('windsurf')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('windsurf')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('windsurf')">Del</button></span>
+        </div>
+        <div class="acct-col-filters" data-provider="windsurf">
+          <button class="acct-col-filter active" data-pfilter="all">All</button>
+          <button class="acct-col-filter" data-pfilter="active">Active</button>
+          <button class="acct-col-filter" data-pfilter="temporary">Temporary</button>
+          <button class="acct-col-filter" data-pfilter="fix">Fix</button>
+        </div>
+        <div class="acct-col-body" id="acct-body-windsurf">
+          <div class="loading-overlay"><div class="loading-spinner"></div> Loading...</div>
+        </div>
+      </div>
     </div>
 
     <!-- Trash Section -->
@@ -915,6 +931,10 @@ a:hover{text-decoration:underline}
       <div class="models-col">
         <h3><span class="badge badge-skillboss">SkillBoss</span> SkillBoss Models</h3>
         <div id="skillboss-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
+      </div>
+      <div class="models-col">
+        <h3><span class="badge badge-windsurf">Windsurf</span> Windsurf Models</h3>
+        <div id="windsurf-models"><div class="loading-overlay"><div class="loading-spinner"></div> Loading models...</div></div>
       </div>
     </div>
   </div>
@@ -1061,6 +1081,11 @@ a:hover{text-decoration:underline}
 <label><input type="checkbox" id="chk-gumloop"> Gumloop</label>
 <label><input type="checkbox" id="chk-chatbai"> ChatBAI</label>
 <label><input type="checkbox" id="chk-skillboss"> SkillBoss</label>
+              <label><input type="checkbox" id="chk-windsurf" onchange="toggleWindsurfMethods()"> Windsurf</label>
+              <span id="windsurf-methods" style="display:none;margin-left:4px;padding-left:8px;border-left:1px solid var(--border);font-size:11px">
+                <label><input type="checkbox" id="chk-wf-emailpass" checked> Email+Pass</label>
+                <label><input type="checkbox" id="chk-wf-google"> Google OAuth</label>
+              </span>
           <span style="border-left:1px solid var(--border);padding-left:10px"><label><input type="checkbox" id="chk-headless" checked> Headless</label></span>
           <span style="display:inline-flex;align-items:center;gap:3px">Parallel: <input type="number" id="batch-concurrency" value="1" min="1" max="10" style="width:40px;background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:1px 4px;font-size:12px;text-align:center"></span>
         </div>
@@ -2848,7 +2873,7 @@ async function loadAccounts() {
     state.sticky = data.sticky || {};
     // Count provider-level statuses across all accounts
     var countActive = 0, countFailed = 0, countBanned = 0, countExhausted = 0;
-    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status', 'cbai_status', 'skboss_status'];
+    var providerCols = ['kiro_status', 'cb_status', 'ws_status', 'gl_status', 'cbai_status', 'skboss_status', 'windsurf_status'];
     state.accounts.forEach(function(a) {
       var hasAnyOk = false;
       var hasAnyFailed = false;
@@ -2876,7 +2901,7 @@ async function loadAccounts() {
     renderAccounts();
     renderTrash();
   } catch (e) {
-    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl','acct-body-cbai','acct-body-skboss'].forEach(id => {
+    ['acct-body-kiro','acct-body-cb','acct-body-ws','acct-body-gl','acct-body-cbai','acct-body-skboss','acct-body-windsurf'].forEach(id => {
       const el = document.getElementById(id);
       if (el) el.innerHTML = '<div class="acct-col-empty">Failed to load: ' + escHtml(e.message) + '</div>';
     });
@@ -2918,6 +2943,7 @@ function renderAccounts() {
   renderAccountColumn('gl');
   renderAccountColumn('cbai');
   renderAccountColumn('skboss');
+    renderAccountColumn('windsurf');
 }
 
 function getProviderAccounts(provider) {
@@ -2940,6 +2966,9 @@ function getProviderAccounts(provider) {
     } else if (provider === 'skboss') {
       const s = (a.skboss_status || '').toLowerCase();
       return s && s !== 'pending' && s !== 'none' && s !== '';
+    } else if (provider === 'windsurf') {
+      const s = (a.windsurf_status || '').toLowerCase();
+      return s && s !== 'pending' && s !== 'none' && s !== '';
     }
     return false;
   });
@@ -2952,6 +2981,7 @@ function getProviderStatus(a, provider) {
   if (provider === 'gl') return (a.gl_status || 'none').toLowerCase();
   if (provider === 'cbai') return (a.cbai_status || 'none').toLowerCase();
   if (provider === 'skboss') return (a.skboss_status || 'none').toLowerCase();
+  if (provider === 'windsurf') return (a.windsurf_status || 'none').toLowerCase();
   return 'none';
 }
 
@@ -3024,7 +3054,7 @@ async function setStickyAccount(accountId, provider) {
 async function forceUseAccount(accountId, provider, providerApiName) {
   // Temporarily restore account status to 'ok' and set as sticky
   var tier = getTierForProvider(provider);
-  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : providerApiName === 'chatbai' ? 'cbai_status' : providerApiName === 'skillboss' ? 'skboss_status' : 'gl_status';
+  var statusCol = providerApiName === 'kiro' ? 'kiro_status' : providerApiName === 'codebuddy' ? 'cb_status' : providerApiName === 'wavespeed' ? 'ws_status' : providerApiName === 'chatbai' ? 'cbai_status' : providerApiName === 'skillboss' ? 'skboss_status' : providerApiName === 'windsurf' ? 'windsurf_status' : 'gl_status';
   var errorCol = providerApiName === 'kiro' ? 'kiro_error' : providerApiName === 'codebuddy' ? 'cb_error' : providerApiName === 'wavespeed' ? 'ws_error' : 'gl_error';
   var errorCountCol = providerApiName === 'kiro' ? 'kiro_error_count' : providerApiName === 'codebuddy' ? 'cb_error_count' : providerApiName === 'wavespeed' ? 'ws_error_count' : 'gl_error_count';
   try {
@@ -3816,13 +3846,16 @@ async function loadModels() {
     const gumloop = [];
     const chatbai = [];
     const skillboss = [];
+    const windsurf = [];
     for (let i = 0; i < models.length; i++) {
       const m = models[i];
       const id = m.id || m.name || '';
       const tier = (m.tier || '').toLowerCase();
       const owner = m.owned_by || m.provider || '';
       const entry = { name: id, provider: owner, tier: tier };
-      if (tier === 'skillboss' || owner.toLowerCase() === 'skillboss') {
+      if (tier === 'windsurf' || owner.toLowerCase() === 'windsurf') {
+        windsurf.push(entry);
+      } else if (tier === 'skillboss' || owner.toLowerCase() === 'skillboss') {
         skillboss.push(entry);
       } else if (tier === 'chatbai' || owner.toLowerCase() === 'chatbai') {
         chatbai.push(entry);
@@ -3842,12 +3875,14 @@ async function loadModels() {
     loadedModels.gumloop = gumloop;
     loadedModels.chatbai = chatbai;
     loadedModels.skillboss = skillboss;
+    loadedModels.windsurf = windsurf;
     renderModelColumn('standard-models', standard, 'standard');
     renderModelColumn('max-models', max, 'max');
     renderModelColumn('wavespeed-models', wavespeed, 'wavespeed');
     renderModelColumn('gumloop-models', gumloop, 'max_gl');
     renderModelColumn('chatbai-models', chatbai, 'chatbai');
     renderModelColumn('skillboss-models', skillboss, 'skillboss');
+    renderModelColumn('windsurf-models', windsurf, 'windsurf');
   } catch (e) {
     if (stdEl) stdEl.innerHTML = '<div class="empty-state">Failed to load models: ' + (e.message || e) + '</div>';
     if (maxEl) maxEl.innerHTML = '<div class="empty-state">Failed to load models</div>';
@@ -3866,7 +3901,7 @@ function renderModelColumn(containerId, models, tier) {
     const isThinking = m.name.endsWith('-thinking');
     const isPremium = tier === 'chatbai' && chatbaiPremium.includes(m.name);
     const modelId = escHtml(m.name);
-    const tierLabel = tier === 'standard' ? 'STD' : tier === 'max_gl' ? 'GL' : tier === 'chatbai' ? 'BAI' : tier === 'skillboss' ? 'SKB' : 'MAX';
+    const tierLabel = tier === 'standard' ? 'STD' : tier === 'max_gl' ? 'GL' : tier === 'chatbai' ? 'BAI' : tier === 'skillboss' ? 'SKB' : tier === 'windsurf' ? 'WF' : 'MAX';
     return '<div class="model-card" id="model-card-' + modelId + '">' +
       '<div class="model-name">' + modelId + (isThinking ? ' <span style="color:var(--orange);font-size:.7rem">&#x1f4ad;</span>' : '') + (isPremium ? ' <span style="background:rgba(251,191,36,.2);color:#fbbf24;font-size:.65rem;padding:.1rem .35rem;border-radius:3px;font-weight:600">Premium</span>' : '') + '</div>' +
       '<span class="badge badge-' + tier + '">' + tierLabel + '</span>' +
@@ -4357,6 +4392,15 @@ if (document.getElementById('chk-wavespeed').checked) providers.push('wavespeed'
 if (document.getElementById('chk-gumloop').checked) providers.push('gumloop');
 if (document.getElementById('chk-chatbai').checked) providers.push('chatbai');
 if (document.getElementById('chk-skillboss').checked) providers.push('skillboss');
+    if (document.getElementById('chk-windsurf').checked) {
+      if (document.getElementById('chk-wf-google').checked && !document.getElementById('chk-wf-emailpass').checked) {
+        providers.push('windsurf-google');
+      } else if (document.getElementById('chk-wf-emailpass').checked && !document.getElementById('chk-wf-google').checked) {
+        providers.push('windsurf-emailpass');
+      } else {
+        providers.push('windsurf');
+      }
+    }
   if (providers.length === 0) {
     toast('Select at least one provider', 'error');
     return;
@@ -4491,6 +4535,7 @@ function handleBatchEvent(data) {
     else if (prov === 'gumloop') job.gumloop = data.success;
     else if (prov === 'chatbai') job.chatbai = data.success;
     else if (prov === 'skillboss') job.skillboss = data.success;
+          else if (prov === 'windsurf') job.windsurf = data.success;
     renderBatchJobs();
     renderBatchResults();
   }
@@ -4569,6 +4614,11 @@ function renderBatchJobs() {
   renderBatchResults();
 }
 
+function toggleWindsurfMethods() {
+  var show = document.getElementById('chk-windsurf').checked;
+  document.getElementById('windsurf-methods').style.display = show ? 'inline' : 'none';
+}
+
 function getActiveProviders() {
   var provs = [];
   if (document.getElementById('chk-kiro').checked) provs.push('kiro');
@@ -4577,6 +4627,7 @@ if (document.getElementById('chk-wavespeed').checked) provs.push('wavespeed');
 if (document.getElementById('chk-gumloop').checked) provs.push('gumloop');
 if (document.getElementById('chk-chatbai').checked) provs.push('chatbai');
 if (document.getElementById('chk-skillboss').checked) provs.push('skillboss');
+if (document.getElementById('chk-windsurf').checked) provs.push('windsurf');
   return provs;
 }
 
@@ -4585,7 +4636,7 @@ function renderBatchResults() {
   var provs = getActiveProviders();
   // Show jobs with ANY provider result (not just completed jobs)
   var successJobs = jobs.filter(function(j) {
-    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop || j.chatbai || j.skillboss));
+    return j.status === 'success' || (j.status === 'running' && (j.kiro || j.codebuddy || j.wavespeed || j.gumloop || j.chatbai || j.skillboss || j.windsurf));
   });
   var failedJobs = jobs.filter(function(j) { return j.status === 'failed'; });
   var resultsDiv = document.getElementById('batch-results');
@@ -4598,7 +4649,7 @@ function renderBatchResults() {
 
   // Headers
   var headerHtml = provs.map(function(p) {
-    var name = p === 'codebuddy' ? 'CodeBuddy' : p === 'wavespeed' ? 'WaveSpeed' : p === 'gumloop' ? 'Gumloop' : p === 'chatbai' ? 'ChatBAI' : p === 'skillboss' ? 'SkillBoss' : 'Kiro';
+    var name = p === 'codebuddy' ? 'CodeBuddy' : p === 'wavespeed' ? 'WaveSpeed' : p === 'gumloop' ? 'Gumloop' : p === 'chatbai' ? 'ChatBAI' : p === 'skillboss' ? 'SkillBoss' : p === 'windsurf' ? 'Windsurf' : 'Kiro';
     return '<span class="br-header">' + name + '</span>';
   }).join('');
   document.getElementById('batch-res-ok-headers').innerHTML = '<span class="br-header" style="min-width:180px">Email</span>' + headerHtml;
@@ -4611,7 +4662,7 @@ function renderBatchResults() {
   if (successJobs.length > 0) {
     okDiv.innerHTML = successJobs.map(function(j) {
       var cols = provs.map(function(p) {
-        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : (p === 'chatbai') ? j.chatbai : (p === 'skillboss') ? j.skillboss : j.wavespeed;
+        var val = (p === 'kiro') ? j.kiro : (p === 'codebuddy') ? j.codebuddy : (p === 'gumloop') ? j.gumloop : (p === 'chatbai') ? j.chatbai : (p === 'skillboss') ? j.skillboss : (p === 'windsurf') ? j.windsurf : j.wavespeed;
         if (val === true) return '<span class="br-provider br-ok">\u2713</span>';
         if (val === false) return '<span class="br-provider br-fail">\u2717</span>';
         // undefined = still pending
