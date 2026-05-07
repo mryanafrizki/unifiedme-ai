@@ -199,21 +199,33 @@ async def run_signup(email: str, secret: str) -> dict:
 
         for tick in range(60):
             found_target = False
+            has_google_tos = False
 
-            # Check ALL pages for SkillBoss redirect
+            # Check if any page is still on Google TOS/speedbump
             for pg in unique_pages:
                 try:
                     u = pg.url
-                    if "console" in u or "login/success" in u:
-                        target_page = pg
-                        found_target = True
-                        break
-                    if "skillboss" in u and "login" not in u:
-                        target_page = pg
-                        found_target = True
+                    if "speedbump" in u or "workspacetermsofservice" in u:
+                        has_google_tos = True
                         break
                 except Exception:
                     continue
+
+            # Check ALL pages for SkillBoss redirect (only if no TOS pending)
+            if not has_google_tos:
+                for pg in unique_pages:
+                    try:
+                        u = pg.url
+                        if "console" in u or "login/success" in u:
+                            target_page = pg
+                            found_target = True
+                            break
+                        if "skillboss" in u and "login" not in u:
+                            target_page = pg
+                            found_target = True
+                            break
+                    except Exception:
+                        continue
 
             if found_target:
                 break
