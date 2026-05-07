@@ -853,9 +853,10 @@ async def delete_fix_accounts(request: Request, _: bool = Depends(verify_admin))
 
         # Windsurf: fix = verified + dead status
         if (not target_provider or target_provider == "windsurf") and \
-           acc.get("windsurf_status") in ("failed", "exhausted", "banned"):
+           acc.get("windsurf_verified", 0) == 1 and acc.get("windsurf_status") in ("failed", "exhausted", "banned"):
             await db.update_account(acct_id, windsurf_status="none", windsurf_api_key="",
-                                    windsurf_error="", windsurf_error_count=0, windsurf_credits=0)
+                                    windsurf_error="", windsurf_error_count=0, windsurf_credits=0,
+                                    windsurf_verified=0)
             any_cleared = True
             cleared += 1
 
@@ -2197,6 +2198,7 @@ async def warmup_accounts(request: Request, _: bool = Depends(verify_admin)):
         ("kiro", "kiro_status", "kiro_access_token", "kiro_error"),
         ("wavespeed", "ws_status", "ws_api_key", "ws_error"),
         ("gumloop", "gl_status", "gl_refresh_token", "gl_error"),
+        ("windsurf", "windsurf_status", "windsurf_api_key", "windsurf_error"),
     ]
 
     for acc in accounts:
@@ -2280,6 +2282,8 @@ async def approve_all_accounts(request: Request, _: bool = Depends(verify_admin)
             ("wavespeed", "ws_status", "ws_verified"),
             ("gumloop", "gl_status", "gl_verified"),
             ("cbai", "cbai_status", "cbai_verified"),
+            ("skillboss", "skboss_status", "skboss_verified"),
+            ("windsurf", "windsurf_status", "windsurf_verified"),
         ]:
             if provider and prov != provider:
                 continue
