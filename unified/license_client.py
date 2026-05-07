@@ -1067,8 +1067,9 @@ async def _sync_loop() -> None:
                 "device_fingerprint": _device_fingerprint,
             })
 
-            # Push buffered usage logs only (accounts pushed instantly per-change)
-            await push_sync()
+            # Push ALL accounts on every heartbeat (ensures D1 stays in sync)
+            all_accounts = await db.get_accounts()
+            await push_sync(accounts=all_accounts)
 
             # Pull ALL from D1 → replace local cache
             await full_pull_replace_local()
