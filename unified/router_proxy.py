@@ -221,6 +221,7 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             latency = int((time.monotonic() - start) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
             resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
             error_msg = ""
 
             if status in (401, 403):
@@ -233,7 +234,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_ws_error = error_msg
                 log.warning("WaveSpeed %s HTTP %d, trying next account", account["email"], status)
@@ -248,7 +250,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_ws_error = error_msg
                 log.warning("WaveSpeed %s exhausted, trying next account", account["email"])
@@ -344,6 +347,7 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             latency = int((time.monotonic() - start) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
             resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
             error_msg = ""
 
             if status in (401, 403):
@@ -351,7 +355,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.update_account(account["id"], gl_status="banned", gl_error=error_msg)
                 await db.log_usage(key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "")
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "")
                 log.warning("GL %s banned (HTTP %d), trying next", account["email"], status)
                 try:
                     updated = await db.get_account(account["id"])
@@ -363,7 +368,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.update_account(account["id"], gl_status="rate_limited", gl_error=error_msg)
                 await db.log_usage(key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "")
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "")
                 continue
             elif status >= 500:
                 error_msg = f"Gumloop HTTP {status} (account: {account['email']})"
@@ -602,6 +608,7 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             latency = int((time.monotonic() - start) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
             resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
             error_msg = ""
 
             if status in (401, 403):
@@ -614,18 +621,19 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_skboss_error = error_msg
                 log.warning("SkillBoss %s HTTP %d, trying next account", account["email"], status)
                 continue
             elif status == 429:
                 error_msg = f"SkillBoss HTTP 429 rate limited (account: {account['email']})"
-                # Don't mark exhausted on 429 — just rotate with cooldown
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_skboss_error = error_msg
                 log.warning("SkillBoss %s rate limited, cooldown 3s then next account", account["email"])
@@ -641,7 +649,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_skboss_error = error_msg
                 log.warning("SkillBoss %s exhausted, trying next account", account["email"])
@@ -722,6 +731,7 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             latency = int((time.monotonic() - start) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
             resp_headers_str = _capture_response_headers(response)
+            resp_body_str = _extract_response_body(response)
             error_msg = ""
 
             if status in (401, 403):
@@ -734,7 +744,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_windsurf_error = error_msg
                 log.warning("Windsurf %s HTTP %d, trying next account", account["email"], status)
@@ -745,7 +756,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_windsurf_error = error_msg
                 log.warning("Windsurf %s rate limited, trying next account", account["email"])
@@ -760,7 +772,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await db.log_usage(
                     key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
-                    response_headers=resp_headers_str, error_message=error_msg, proxy_url=proxy_url or "",
+                    response_headers=resp_headers_str, response_body=resp_body_str,
+                    error_message=error_msg, proxy_url=proxy_url or "",
                 )
                 last_windsurf_error = error_msg
                 log.warning("Windsurf %s exhausted, trying next account", account["email"])

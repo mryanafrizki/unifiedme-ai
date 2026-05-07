@@ -109,12 +109,25 @@ async def create_stealth_browser(
     locale = _pick_locale()
 
     # Build proxy config for camoufox
+    # Firefox/Camoufox does NOT support SOCKS5 proxy auth — auto-convert to HTTP.
+    # Most residential proxies support both HTTP and SOCKS5 on the same port.
     proxy_cfg = None
     if proxy:
+        server = proxy.get("server", "")
+        username = proxy.get("username", "")
+        password = proxy.get("password", "")
+
+        # Auto-convert socks5:// → http:// when auth is present
+        if username and server:
+            from urllib.parse import urlparse
+            parsed = urlparse(server)
+            if parsed.scheme in ("socks5", "socks5h", "socks4"):
+                server = f"http://{parsed.hostname}:{parsed.port}"
+
         proxy_cfg = {
-            "server": proxy.get("server", ""),
-            "username": proxy.get("username", ""),
-            "password": proxy.get("password", ""),
+            "server": server,
+            "username": username,
+            "password": password,
         }
 
     # Humanize: float = max seconds for cursor movement, True = default
