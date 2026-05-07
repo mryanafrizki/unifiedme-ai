@@ -89,6 +89,7 @@ class Tier(str, Enum):
     CHATBAI = "chatbai"         # ChatBAI (chat.b.ai)
     SKILLBOSS = "skillboss"     # SkillBoss
     WINDSURF = "windsurf"       # Windsurf IDE (sidecar)
+    THEROUTER = "therouter"     # TheRouter LLM Gateway
 
 
 # ---------------------------------------------------------------------------
@@ -338,6 +339,28 @@ _WINDSURF_MODELS = [
     "windsurf-arena-smart",
 ]
 
+# TheRouter models (tr- prefix)
+# Base models — each can have variants: :online, :thinking, :extended, :exacto
+_THEROUTER_BASE_MODELS = [
+    "claude-opus-4.7",
+    "claude-opus-4.6",
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-5.3-codex",
+    "gpt-5.2",
+]
+
+_THEROUTER_VARIANTS = ["", ":online", ":thinking", ":extended", ":exacto"]
+
+_THEROUTER_MODELS: list[str] = []
+for _base in _THEROUTER_BASE_MODELS:
+    for _var in _THEROUTER_VARIANTS:
+        _THEROUTER_MODELS.append(f"tr-{_base}{_var}")
+
+# TheRouter upstream
+THEROUTER_UPSTREAM = os.getenv("THEROUTER_UPSTREAM", "https://api.therouter.ai")
+TR_DEFAULT_CREDITS = 0.0  # Free tier — usage count only
+
 # Build lookup: model_name → Tier
 MODEL_TIER: dict[str, Tier] = {}
 
@@ -365,6 +388,9 @@ for m in _SKILLBOSS_MODELS:
 for m in _WINDSURF_MODELS:
     MODEL_TIER[m] = Tier.WINDSURF
 
+for m in _THEROUTER_MODELS:
+    MODEL_TIER[m] = Tier.THEROUTER
+
 # Hidden from display lists (routing-only aliases + thinking variants)
 _HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys())
 # Hide -thinking variants from model list (they still work for routing)
@@ -381,6 +407,7 @@ MAX_GL_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.MAX_GL
 CHATBAI_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.CHATBAI]
 SKILLBOSS_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.SKILLBOSS]
 WINDSURF_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.WINDSURF]
+THEROUTER_MODELS: list[str] = [k for k, v in MODEL_TIER.items() if v == Tier.THEROUTER]
 ALL_MODELS: list[str] = [k for k in MODEL_TIER if k not in _HIDDEN_ALIASES]
 
 
@@ -411,6 +438,9 @@ def get_tier(model: str) -> Tier | None:
     # Any model with "windsurf-" prefix → Windsurf
     if model.startswith("windsurf-"):
         return Tier.WINDSURF
+    # Any model with "tr-" prefix → TheRouter
+    if model.startswith("tr-"):
+        return Tier.THEROUTER
     # Any model with "/" → WaveSpeed (provider/model format)
     if "/" in model:
         return Tier.WAVESPEED

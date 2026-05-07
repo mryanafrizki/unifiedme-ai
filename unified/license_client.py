@@ -381,6 +381,8 @@ async def pull_and_merge() -> dict:
                     "skboss_error", "skboss_error_count",
                     "windsurf_status", "windsurf_api_key", "windsurf_credits",
                     "windsurf_error", "windsurf_error_count",
+                    "tr_status", "tr_api_key", "tr_credits",
+                    "tr_error", "tr_error_count",
                 ]:
                     if key in acc and acc[key] is not None:
                         fields[key] = acc[key]
@@ -462,6 +464,8 @@ async def pull_new_accounts_only() -> dict:
         "skboss_error", "skboss_error_count",
         "windsurf_status", "windsurf_api_key", "windsurf_credits",
         "windsurf_error", "windsurf_error_count",
+        "tr_status", "tr_api_key", "tr_credits",
+        "tr_error", "tr_error_count",
     ]
 
     # Suppress auto-push — we're writing D1 data to local
@@ -600,6 +604,8 @@ async def _write_to_local_db_inner(data: dict, db) -> None:
         "skboss_error", "skboss_error_count",
         "windsurf_status", "windsurf_api_key", "windsurf_credits",
         "windsurf_error", "windsurf_error_count",
+        "tr_status", "tr_api_key", "tr_credits",
+        "tr_error", "tr_error_count",
     ]
 
     # Upsert accounts — D1 overwrites local
@@ -887,6 +893,8 @@ async def full_pull_replace_local() -> dict:
             "skboss_error", "skboss_error_count",
             "windsurf_status", "windsurf_api_key", "windsurf_credits",
             "windsurf_error", "windsurf_error_count",
+            "tr_status", "tr_api_key", "tr_credits",
+            "tr_error", "tr_error_count",
         ]
 
         # Upsert D1 accounts to local — D1 is source of truth

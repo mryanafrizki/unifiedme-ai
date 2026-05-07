@@ -47,6 +47,7 @@ async def mark_account_error(account_id: int, tier: Tier, error: str) -> None:
         Tier.CHATBAI: ("cbai_error", "cbai_error_count", "cbai_status"),
         Tier.SKILLBOSS: ("skboss_error", "skboss_error_count", "skboss_status"),
         Tier.WINDSURF: ("windsurf_error", "windsurf_error_count", "windsurf_status"),
+        Tier.THEROUTER: ("tr_error", "tr_error_count", "tr_status"),
     }
     err_col, cnt_col, status_col = tier_config.get(tier, ("kiro_error", "kiro_error_count", "kiro_status"))
 
@@ -82,6 +83,7 @@ async def mark_account_success(account_id: int, tier: Tier) -> None:
         Tier.CHATBAI: {"cbai_error_count": 0, "cbai_error": ""},
         Tier.SKILLBOSS: {"skboss_error_count": 0, "skboss_error": ""},
         Tier.WINDSURF: {"windsurf_error_count": 0, "windsurf_error": ""},
+        Tier.THEROUTER: {"tr_error_count": 0, "tr_error": ""},
     }
     updates = tier_config.get(tier, {})
     if updates:

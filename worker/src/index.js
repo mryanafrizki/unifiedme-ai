@@ -365,6 +365,8 @@ async function syncPush(db, request) {
           skboss_error = ?, skboss_error_count = ?,
           windsurf_status = ?, windsurf_api_key = ?, windsurf_credits = ?,
           windsurf_error = ?, windsurf_error_count = ?,
+          tr_status = ?, tr_api_key = ?, tr_credits = ?,
+          tr_error = ?, tr_error_count = ?,
           updated_at = datetime('now')
           WHERE id = ?`).bind(
           acc.password || '', acc.status || 'active',
@@ -381,6 +383,8 @@ async function syncPush(db, request) {
           acc.skboss_error || '', acc.skboss_error_count || 0,
           acc.windsurf_status || 'none', acc.windsurf_api_key || '', acc.windsurf_credits || 0,
           acc.windsurf_error || '', acc.windsurf_error_count || 0,
+          acc.tr_status || 'none', acc.tr_api_key || '', acc.tr_credits || 0,
+          acc.tr_error || '', acc.tr_error_count || 0,
           existing.id
         ).run();
       } else {
@@ -398,8 +402,10 @@ async function syncPush(db, request) {
           skboss_status, skboss_api_key, skboss_credits,
           skboss_error, skboss_error_count,
           windsurf_status, windsurf_api_key, windsurf_credits,
-          windsurf_error, windsurf_error_count
-        ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?, ?,?,?,?,?)`).bind(
+          windsurf_error, windsurf_error_count,
+          tr_status, tr_api_key, tr_credits,
+          tr_error, tr_error_count
+        ) VALUES (?,?,?,?, ?,?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?, ?,?,?, ?,?,?, ?,?,?,?,?, ?,?,?,?,?, ?,?,?,?,?)`).bind(
           license.id, acc.email, acc.password || '', acc.status || 'active',
           acc.kiro_status || 'pending', acc.kiro_access_token || '', acc.kiro_refresh_token || '', acc.kiro_profile_arn || '',
           acc.kiro_credits || 0, acc.kiro_credits_total || 0, acc.kiro_credits_used || 0,
@@ -413,7 +419,9 @@ async function syncPush(db, request) {
           acc.skboss_status || 'none', acc.skboss_api_key || '', acc.skboss_credits || 0,
           acc.skboss_error || '', acc.skboss_error_count || 0,
           acc.windsurf_status || 'none', acc.windsurf_api_key || '', acc.windsurf_credits || 0,
-          acc.windsurf_error || '', acc.windsurf_error_count || 0
+          acc.windsurf_error || '', acc.windsurf_error_count || 0,
+          acc.tr_status || 'none', acc.tr_api_key || '', acc.tr_credits || 0,
+          acc.tr_error || '', acc.tr_error_count || 0
         ).run();
       }
       accountsUpserted++;

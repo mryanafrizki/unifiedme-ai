@@ -928,6 +928,7 @@ async def get_next_account_for_tier(tier: str, exclude_ids: list[int] | None = N
         "chatbai": ("cbai_status", "last_used_cbai"),
         "skillboss": ("skboss_status", "last_used_skboss"),
         "windsurf": ("windsurf_status", "last_used_windsurf"),
+        "therouter": ("tr_status", "last_used_tr"),
     }
     status_col, last_used_col = tier_config.get(tier, ("kiro_status", "last_used_kiro"))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")

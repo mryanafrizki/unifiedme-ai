@@ -85,6 +85,12 @@ CREATE TABLE IF NOT EXISTS accounts (
     windsurf_error TEXT NOT NULL DEFAULT '',
     windsurf_error_count INTEGER NOT NULL DEFAULT 0,
 
+    tr_status TEXT NOT NULL DEFAULT 'none',
+    tr_api_key TEXT NOT NULL DEFAULT '',
+    tr_credits REAL NOT NULL DEFAULT 0,
+    tr_error TEXT NOT NULL DEFAULT '',
+    tr_error_count INTEGER NOT NULL DEFAULT 0,
+
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(license_id, email)

@@ -29,6 +29,7 @@ from .proxy_wavespeed import close_all_clients as close_wavespeed
 from .proxy_gumloop import close_all_clients as close_gumloop
 from .chatbai.proxy import close_all_clients as close_chatbai
 from .proxy_windsurf import close_all_clients as close_windsurf
+from .proxy_therouter import close_all_clients as close_therouter
 from . import license_client
 
 logging.basicConfig(
@@ -356,6 +357,10 @@ async def lifespan(app: FastAPI):
         pass
     try:
         await close_windsurf()
+    except Exception:
+        pass
+    try:
+        await close_therouter()
     except Exception:
         pass
     try:
