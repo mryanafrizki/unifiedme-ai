@@ -46,6 +46,9 @@ worker/node_modules/
 worker/dist/
 worker/package-lock.json
 
+# Windsurf sidecar (external dependency, cloned separately)
+unified/windsurf/
+
 # OS
 .DS_Store
 Thumbs.db

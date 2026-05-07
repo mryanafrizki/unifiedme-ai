@@ -320,6 +320,95 @@ else
     echo -e "  $WARN Skipped. Install later: $VENV_PYTHON -m camoufox fetch"
 fi
 
+# ─── Node.js (required for Windsurf sidecar) ────────────────────────────────
+
+echo -e "  ${CYAN}Checking Node.js...${NC}"
+NODE_OK=false
+if command -v node &>/dev/null; then
+    NODE_VER=$(node --version 2>/dev/null | sed 's/v//')
+    NODE_MAJOR=$(echo "$NODE_VER" | cut -d. -f1)
+    if [ "$NODE_MAJOR" -ge 20 ]; then
+        echo -e "  $CHECK Node.js $NODE_VER"
+        NODE_OK=true
+    else
+        echo -e "  $WARN Node.js $NODE_VER found but too old (need >= 20)"
+    fi
+fi
+
+if [ "$NODE_OK" = false ]; then
+    echo -e "  ${YELLOW}Installing Node.js 20 LTS...${NC}"
+    if [ "$IS_LINUX" = true ]; then
+        # NodeSource setup
+        if command -v apt-get &>/dev/null; then
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null
+            sudo apt-get install -y nodejs 2>/dev/null
+        elif command -v yum &>/dev/null; then
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null
+            sudo yum install -y nodejs 2>/dev/null
+        elif command -v dnf &>/dev/null; then
+            curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash - 2>/dev/null
+            sudo dnf install -y nodejs 2>/dev/null
+        fi
+    elif [ "$IS_MAC" = true ]; then
+        if command -v brew &>/dev/null; then
+            brew install node@20 2>/dev/null
+        else
+            echo -e "  ${YELLOW}Install Node.js manually: https://nodejs.org/en/download${NC}"
+        fi
+    elif [ "$IS_WINDOWS" = true ]; then
+        echo -e "  ${YELLOW}Install Node.js 20+ manually: https://nodejs.org/en/download${NC}"
+        echo -e "  ${YELLOW}Then re-run this script.${NC}"
+    fi
+
+    # Verify
+    if command -v node &>/dev/null; then
+        NODE_VER=$(node --version 2>/dev/null)
+        echo -e "  $CHECK Node.js $NODE_VER installed"
+    else
+        echo -e "  $WARN Node.js not installed — Windsurf provider will be unavailable"
+        echo -e "  $WARN Install later: https://nodejs.org/en/download"
+    fi
+fi
+
+echo ""
+
+# ─── Windsurf sidecar (WindsurfAPI) ──────────────────────────────────────────
+
+WINDSURF_DIR="$INSTALL_DIR/unified/windsurf"
+WINDSURF_REPO="https://github.com/unifiedaa/WindsurfAPI.git"
+
+echo -e "  ${CYAN}Setting up Windsurf sidecar...${NC}"
+if [ -d "$WINDSURF_DIR/.git" ]; then
+    echo -e "  Updating WindsurfAPI..."
+    cd "$WINDSURF_DIR"
+    git pull --ff-only 2>&1 || git pull 2>&1
+    cd "$INSTALL_DIR"
+    echo -e "  $CHECK WindsurfAPI updated"
+else
+    echo -e "  Cloning WindsurfAPI..."
+    git clone "$WINDSURF_REPO" "$WINDSURF_DIR" 2>&1
+    echo -e "  $CHECK WindsurfAPI cloned"
+fi
+
+# Download LS binary (Linux only — Windows/Mac users copy from Windsurf IDE)
+if [ "$IS_LINUX" = true ] && [ ! -f "/opt/windsurf/language_server_linux_x64" ]; then
+    echo -e "  ${CYAN}Downloading Windsurf Language Server binary...${NC}"
+    sudo mkdir -p /opt/windsurf/data/db 2>/dev/null
+    if [ -f "$WINDSURF_DIR/install-ls.sh" ]; then
+        cd "$WINDSURF_DIR"
+        bash install-ls.sh 2>&1 | tail -3
+        cd "$INSTALL_DIR"
+        echo -e "  $CHECK Language Server binary installed"
+    else
+        echo -e "  $WARN install-ls.sh not found — download LS binary manually"
+    fi
+elif [ "$IS_WINDOWS" = true ] || [ "$IS_MAC" = true ]; then
+    echo -e "  ${YELLOW}Note: Install Windsurf IDE to get the Language Server binary.${NC}"
+    echo -e "  ${YELLOW}Then set LS_BINARY_PATH in unified/windsurf/.env${NC}"
+fi
+
+echo ""
+
 # ─── Create data directory ───────────────────────────────────────────────────
 
 mkdir -p "$INSTALL_DIR/unified/data"
