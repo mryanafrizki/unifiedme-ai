@@ -222,8 +222,15 @@ async def run_signup(email: str, secret: str) -> dict:
                         continue
                     pg_url = pg_try.url
                     if "google.com" in pg_url:
-                        await _handle_google_consent(pg_try)
-                except Exception:
+                        if tick % 5 == 0:
+                            emit({"type": "progress", "step": "consent_try", "message": f"tick={tick} url={pg_url[:60]}"})
+                        result = await _handle_google_consent(pg_try)
+                        if result:
+                            emit({"type": "progress", "step": "consent_clicked", "message": f"Clicked on {pg_url[:60]}"})
+                            await asyncio.sleep(3)
+                except Exception as exc:
+                    if tick % 10 == 0:
+                        emit({"type": "progress", "step": "consent_error", "message": f"Error: {exc}"})
                     continue
 
             await asyncio.sleep(1)
