@@ -4513,58 +4513,6 @@ if (document.getElementById('chk-therouter').checked) providers.push('therouter'
   }
 }
 
-  const providers = [];
-    if (document.getElementById('chk-kiro').checked) providers.push('kiro');
-    if (document.getElementById('chk-codebuddy').checked) providers.push('codebuddy');
-if (document.getElementById('chk-wavespeed').checked) providers.push('wavespeed');
-if (document.getElementById('chk-gumloop').checked) providers.push('gumloop');
-if (document.getElementById('chk-chatbai').checked) providers.push('chatbai');
-if (document.getElementById('chk-skillboss').checked) providers.push('skillboss');
-if (document.getElementById('chk-therouter').checked) providers.push('therouter');
-    if (document.getElementById('chk-windsurf').checked) {
-      if (document.getElementById('chk-wf-google').checked && !document.getElementById('chk-wf-emailpass').checked) {
-        providers.push('windsurf-google');
-      } else if (document.getElementById('chk-wf-emailpass').checked && !document.getElementById('chk-wf-google').checked) {
-        providers.push('windsurf-emailpass');
-      } else {
-        providers.push('windsurf');
-      }
-    }
-  if (providers.length === 0) {
-    toast('Select at least one provider', 'error');
-    return;
-  }
-
-  state.batchRunning = true;
-  document.getElementById('batch-start-btn').disabled = true;
-  document.getElementById('batch-cancel-btn').disabled = false;
-
-  // Init jobs
-  state.batchJobs = lines.map(line => {
-    const [email] = line.split(':');
-    return { email: email.trim(), status: 'queued', message: '' };
-  });
-  renderBatchJobs();
-  clearLog();
-  addLog('Starting batch login for ' + lines.length + ' accounts...', 'info');
-
-  // Connect SSE BEFORE starting batch (avoid race condition with fast-failing jobs)
-  connectBatchSSE();
-
-  try {
-    await apiFetch('/api/batch/start', {
-      method: 'POST',
-      body: JSON.stringify({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1, mcp_urls: (document.getElementById('mcp-urls').value || '').trim().split('\n').filter(function(l){return l.trim();}) })
-    });
-  } catch (e) {
-    toast('Batch start failed: ' + e.message, 'error');
-    state.batchRunning = false;
-    document.getElementById('batch-start-btn').disabled = false;
-    document.getElementById('batch-cancel-btn').disabled = true;
-    addLog('Error: ' + e.message, 'err');
-  }
-}
-
 function connectBatchSSE() {
   if (state.batchEventSource) {
     state.batchEventSource.close();
