@@ -1,0 +1,14 @@
+Caranya simpel:
+cd C:\Users\User\unifiedme-ai
+# 1. Cek apa yang berubah
+git status
+# 2. Add file yang mau di-push
+git add -A                    # semua, atau
+git add file1.py file2.py     # spesifik
+# 3. Commit
+git commit -m "deskripsi perubahan"
+# 4. Push ke GitHub
+git push origin main
+Kalau ada conflict (remote punya commit baru):
+git pull --rebase origin main
+git push origin main

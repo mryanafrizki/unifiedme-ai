@@ -4440,12 +4440,9 @@ function stopLogsAutoRefresh() {
 // ── Batch Login ──
 async function startBatch() {
   const textarea = document.getElementById('batch-textarea');
-  const lines = textarea.value.trim().split('\n').filter(l => l.includes(':'));
-  if (lines.length === 0) {
-    toast('Enter at least one email:password pair', 'error');
-    return;
-  }
+  var lines = textarea.value.trim().split('\n').filter(l => l.includes(':'));
 
+  // Build providers list FIRST (needed for TheRouter auto-gen check)
   const providers = [];
     if (document.getElementById('chk-kiro').checked) providers.push('kiro');
     if (document.getElementById('chk-codebuddy').checked) providers.push('codebuddy');
@@ -4468,6 +4465,24 @@ if (document.getElementById('chk-therouter').checked) providers.push('therouter'
     return;
   }
 
+  // TheRouter auto-gen: if no accounts in textarea but TheRouter is checked, generate placeholders
+  var trCount = parseInt(document.getElementById('tr-count').value) || 1;
+  var trDomain = (document.getElementById('tr-domain').value || '@gmail.com').trim();
+  if (lines.length === 0 && providers.includes('therouter')) {
+    for (var gi = 0; gi < trCount; gi++) {
+      var rnd = Math.random().toString(36).substring(2, 8);
+      var rnd2 = Math.random().toString(36).substring(2, 8);
+      var digits = Math.floor(1000 + Math.random() * 9000);
+      var pw = Array.from({length:14}, function(){var c='abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*';return c[Math.floor(Math.random()*c.length)]}).join('');
+      lines.push(rnd + '.' + rnd2 + '.' + digits + trDomain + ':' + pw);
+    }
+  }
+
+  if (lines.length === 0) {
+    toast('Enter at least one email:password pair', 'error');
+    return;
+  }
+
   state.batchRunning = true;
   document.getElementById('batch-start-btn').disabled = true;
   document.getElementById('batch-cancel-btn').disabled = false;
@@ -4487,7 +4502,7 @@ if (document.getElementById('chk-therouter').checked) providers.push('therouter'
   try {
     await apiFetch('/api/batch/start', {
       method: 'POST',
-      body: JSON.stringify({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1, mcp_urls: (document.getElementById('mcp-urls').value || '').trim().split('\n').filter(function(l){return l.trim();}) })
+      body: JSON.stringify({ accounts: lines, providers, headless: document.getElementById('chk-headless').checked, concurrency: parseInt(document.getElementById('batch-concurrency').value) || 1, mcp_urls: (document.getElementById('mcp-urls').value || '').trim().split('\n').filter(function(l){return l.trim();}), tr_domain: trDomain, tr_count: trCount })
     });
   } catch (e) {
     toast('Batch start failed: ' + e.message, 'error');
@@ -4603,10 +4618,16 @@ function handleBatchEvent(data) {
     renderBatchResults();
   }
 
-  // Log
+  // Log — include proxy info when available
   const logLevel = status === 'success' || status === 'ok' ? 'ok' :
                    status === 'failed' || status === 'error' ? 'err' : 'info';
-  addLog('[' + email + '] ' + (message || status), logLevel);
+  var logMsg = message || status;
+  if (evType === 'job_start' && proxyUsed) {
+    logMsg = 'Starting (' + proxyUsed.replace(/^socks5?:\/\//, '').replace(/^https?:\/\//, '').substring(0, 30) + ')';
+  } else if (evType === 'job_done' && proxyUsed) {
+    logMsg = (message || status) + ' [proxy: ' + proxyUsed.replace(/^socks5?:\/\//, '').replace(/^https?:\/\//, '').substring(0, 30) + ']';
+  }
+  addLog('[' + email + '] ' + logMsg, logLevel);
 }
 
 async function cancelBatch() {

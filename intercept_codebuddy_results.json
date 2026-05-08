@@ -1,0 +1,352 @@
+{
+  "timestamp": 1777985192.8177161,
+  "endpoint": "https://www.codebuddy.ai/v2/chat/completions",
+  "discovered_models": [],
+  "test_results": [
+    {
+      "model": "gpt-5.5",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "1efc62ec-d950-4d78-815e-b798c543adaf"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.5-preview",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "2486b0d6-5652-4254-8719-85dac9fbe48e"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.5-turbo",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "111c9163-3f50-4389-964a-68e7328ad12a"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.5-mini",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "cb71a018-bc00-42f7-a4d6-3da10d38d781"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.5-nano",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "c6d35c9b-2b26-45c4-a4d3-c3a71c17882b"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.5-codex",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "186ad5ad-fdd3-4ca1-b5b3-2b8370f72703"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "o3-pro",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "6f54669e-4a86-419e-80dc-b6542ba95b9e"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "o3",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "d8953d44-7ac8-43be-ace0-3157c611d82e"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "o4-mini",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "6f5941ab-6e0e-4c25-bce0-c32427b74663"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "o4",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "0e6ad1da-a6ff-4b2c-b8b1-627b4d7e3566"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt5.5",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "d2d71fe4-3377-40f3-b999-a7c23013ff04"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "openai-gpt-5.5",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "7093dbf1-077d-4dbf-b98a-2c16db6cc5b9"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "chatgpt-5.5",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "dabc6b72-14ab-444e-9988-00ca274ea20a"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5-5",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "1669d301-54e9-4193-bcf7-fbfcebaad8b4"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt55",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "7f6ebb7f-a2dc-4faa-9ff2-e9d48b4ac357"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.4-pro",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "f44e7742-2535-4d06-ad31-f208ed7f3404"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.4-max",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "523e1c62-3694-440c-af8a-ce35a8215a40"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.4",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "c0403cbc-2c01-491d-b9a6-30119b2ea651"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    },
+    {
+      "model": "gpt-5.2",
+      "status": 400,
+      "error": {
+        "code": 11101,
+        "msg": "Parse message failed: 11101:invalid request",
+        "requestId": "cfe371c5-6c43-4ddf-95cc-546301c25719"
+      },
+      "response_model": null,
+      "content": "",
+      "usage": null,
+      "raw_chunks": []
+    }
+  ],
+  "working_models": [],
+  "failed_models": [
+    {
+      "model": "gpt-5.5",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '1efc62ec-d950-4d78-815e-b798c543adaf'}"
+    },
+    {
+      "model": "gpt-5.5-preview",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '2486b0d6-5652-4254-8719-85dac9fbe48e'}"
+    },
+    {
+      "model": "gpt-5.5-turbo",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '111c9163-3f50-4389-964a-68e7328ad12a'}"
+    },
+    {
+      "model": "gpt-5.5-mini",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'cb71a018-bc00-42f7-a4d6-3da10d38d781'}"
+    },
+    {
+      "model": "gpt-5.5-nano",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'c6d35c9b-2b26-45c4-a4d3-c3a71c17882b'}"
+    },
+    {
+      "model": "gpt-5.5-codex",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '186ad5ad-fdd3-4ca1-b5b3-2b8370f72703'}"
+    },
+    {
+      "model": "o3-pro",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '6f54669e-4a86-419e-80dc-b6542ba95b9e'}"
+    },
+    {
+      "model": "o3",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'd8953d44-7ac8-43be-ace0-3157c611d82e'}"
+    },
+    {
+      "model": "o4-mini",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '6f5941ab-6e0e-4c25-bce0-c32427b74663'}"
+    },
+    {
+      "model": "o4",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '0e6ad1da-a6ff-4b2c-b8b1-627b4d7e3566'}"
+    },
+    {
+      "model": "gpt5.5",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'd2d71fe4-3377-40f3-b999-a7c23013ff04'}"
+    },
+    {
+      "model": "openai-gpt-5.5",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '7093dbf1-077d-4dbf-b98a-2c16db6cc5b9'}"
+    },
+    {
+      "model": "chatgpt-5.5",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'dabc6b72-14ab-444e-9988-00ca274ea20a'}"
+    },
+    {
+      "model": "gpt-5-5",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '1669d301-54e9-4193-bcf7-fbfcebaad8b4'}"
+    },
+    {
+      "model": "gpt55",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '7f6ebb7f-a2dc-4faa-9ff2-e9d48b4ac357'}"
+    },
+    {
+      "model": "gpt-5.4-pro",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'f44e7742-2535-4d06-ad31-f208ed7f3404'}"
+    },
+    {
+      "model": "gpt-5.4-max",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': '523e1c62-3694-440c-af8a-ce35a8215a40'}"
+    },
+    {
+      "model": "gpt-5.4",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'c0403cbc-2c01-491d-b9a6-30119b2ea651'}"
+    },
+    {
+      "model": "gpt-5.2",
+      "status": 400,
+      "error": "{'code': 11101, 'msg': 'Parse message failed: 11101:invalid request', 'requestId': 'cfe371c5-6c43-4ddf-95cc-546301c25719'}"
+    }
+  ]
+}

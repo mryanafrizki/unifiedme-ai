@@ -1,0 +1,16 @@
+[
+  {
+    "email": "finux.tuva.7335@gmail.com",
+    "password": "nHoD9$#R77TmpJ",
+    "name": "Finux Tuva",
+    "api_key": "sk-HSdamCMkw76G59vU0U4xQvTrQ1F-6AdVN9Q3g__Dsz8",
+    "user_id": "861f1b74-7bd2-4365-a7d7-17b4309429e6",
+    "tenant_id": "c9d25895-fe0b-4964-9f9a-ab68ada4d3c4",
+    "quotas": {
+      "daily_quota": 100000000,
+      "rate_limit_per_minute": 100,
+      "concurrency_limit": 10
+    },
+    "error": ""
+  }
+]

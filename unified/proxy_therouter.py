@@ -30,7 +30,7 @@ async def get_client(proxy_url: str | None = None) -> httpx.AsyncClient:
     key = proxy_url or "__direct__"
     if key not in _clients:
         _clients[key] = httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=15, read=300, write=30, pool=10),
+            timeout=httpx.Timeout(connect=30, read=300, write=30, pool=10),
             limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
             follow_redirects=True,
             proxy=proxy_url,
@@ -48,19 +48,27 @@ async def close_all_clients() -> None:
 def _resolve_upstream_model(model: str) -> str:
     """Convert tr-* model name to TheRouter upstream format.
 
-    tr-claude-opus-4.7          -> openai/claude-opus-4.7
+    tr-claude-opus-4.6          -> anthropic/claude-opus-4.6
     tr-gpt-5.4:online           -> openai/gpt-5.4:online
     tr-gpt-5.3-codex:thinking   -> openai/gpt-5.3-codex:thinking
 
-    TheRouter uses provider/model format. We default to "openai/" prefix
-    since TheRouter routes internally based on the model name.
+    TheRouter uses provider/model format. Provider is inferred from model name.
     """
     if model.startswith("tr-"):
         model = model[3:]  # strip "tr-"
-    # TheRouter expects provider/model format
-    if "/" not in model:
-        return f"openai/{model}"
-    return model
+    # Already has provider prefix
+    if "/" in model:
+        return model
+    # Infer provider from model name
+    base = model.split(":")[0]  # strip variant suffix
+    if base.startswith("claude"):
+        return f"anthropic/{model}"
+    if base.startswith("gemini"):
+        return f"google/{model}"
+    if base.startswith("deepseek"):
+        return f"deepseek/{model}"
+    # Default: openai (gpt-*, o3-*, o4-*, etc.)
+    return f"openai/{model}"
 
 
 async def proxy_chat_completions(
@@ -78,13 +86,14 @@ async def proxy_chat_completions(
     # Resolve model name
     original_model = body.get("model", "")
     upstream_model = _resolve_upstream_model(original_model)
-    body = {**body, "model": upstream_model, "stream": True}
+    body = {**body, "model": upstream_model, "stream": is_stream}
 
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
-        "Accept": "text/event-stream",
     }
+    if is_stream:
+        headers["Accept"] = "text/event-stream"
 
     try:
         req = client.build_request(
@@ -93,7 +102,7 @@ async def proxy_chat_completions(
             json=body,
             headers=headers,
         )
-        upstream_resp = await client.send(req, stream=True)
+        upstream_resp = await client.send(req, stream=is_stream)
     except httpx.ConnectError as e:
         log.error("TheRouter connect error: %s", e)
         return JSONResponse(

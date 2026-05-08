@@ -156,6 +156,7 @@ async def list_accounts(request: Request, _: bool = Depends(verify_admin)):
         "chatbai": await db.get_sticky_account_id("chatbai"),
         "skillboss": await db.get_sticky_account_id("skillboss"),
         "windsurf": await db.get_sticky_account_id("windsurf"),
+        "therouter": await db.get_sticky_account_id("therouter"),
     }
 
     return {
@@ -283,7 +284,7 @@ async def set_sticky_account_endpoint(account_id: int, tier: str, _: bool = Depe
     Pinned accounts won't be auto-cleared on errors — they stay selected
     until manually cleared by the user.
     """
-    valid_tiers = {"standard", "max", "wavespeed", "max_gl", "chatbai", "skillboss", "windsurf"}
+    valid_tiers = {"standard", "max", "wavespeed", "max_gl", "chatbai", "skillboss", "windsurf", "therouter"}
     if tier not in valid_tiers:
         return JSONResponse({"error": f"Invalid tier: {tier}"}, status_code=400)
     account = await db.get_account(account_id)
@@ -1306,6 +1307,12 @@ async def sse_events(request: Request, _: bool = Depends(verify_admin)):
 @router.post("/batch/start")
 async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool = Depends(verify_admin)):
     """Start batch login."""
+    # Validate providers FIRST (needed before auto-gen check)
+    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "therouter", "windsurf", "windsurf-emailpass", "windsurf-google")]
+    if not providers:
+        return JSONResponse({"error": "No valid providers"}, status_code=400)
+
+    # Parse accounts from textarea
     accounts: list[tuple[str, str]] = []
     for line in req.accounts:
         line = line.strip()
@@ -1314,12 +1321,17 @@ async def start_batch_endpoint(req: BatchLoginRequest, request: Request, _: bool
         parts = line.split(":", 1)
         accounts.append((parts[0].strip(), parts[1].strip()))
 
+    # TheRouter auto-gen: generate placeholder accounts if textarea is empty
+    if not accounts and "therouter" in providers:
+        import random, string
+        tr_count = max(1, min(100, req.tr_count))
+        for _ in range(tr_count):
+            placeholder_email = f"tr-auto-{random.randint(10000,99999)}@placeholder"
+            placeholder_pass = "".join(random.choices(string.ascii_letters + string.digits, k=14))
+            accounts.append((placeholder_email, placeholder_pass))
+
     if not accounts:
         return JSONResponse({"error": "No valid accounts"}, status_code=400)
-
-    providers = [p for p in req.providers if p in ("kiro", "codebuddy", "wavespeed", "gumloop", "chatbai", "skillboss", "windsurf", "windsurf-emailpass", "windsurf-google")]
-    if not providers:
-        return JSONResponse({"error": "No valid providers"}, status_code=400)
 
     mcp_urls = [u.strip() for u in (req.mcp_urls or []) if u.strip()]
 
