@@ -49,6 +49,9 @@ worker/package-lock.json
 # Windsurf sidecar (external dependency, cloned separately)
 unified/windsurf/
 
+# Generated CLI wrapper (machine-specific path)
+unifiedme
+
 # OS
 .DS_Store
 Thumbs.db

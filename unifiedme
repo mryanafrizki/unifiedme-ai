@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-cd "/c/Users/User/unifiedme-ai" || { echo "Not found: /c/Users/User/unifiedme-ai"; exit 1; }
-exec "/c/Users/User/unifiedme-ai/.venv/Scripts/python.exe" -m unified.cli "$@"
