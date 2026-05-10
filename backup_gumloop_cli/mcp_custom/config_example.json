@@ -1,0 +1,19 @@
+{
+  "email": "your-email@example.com",
+  "password": "your-secure-password",
+  "mcp_server_config": {
+    "name": "My Custom MCP Server",
+    "endpoint": "http://localhost:3000",
+    "description": "Custom MCP server for automation"
+  },
+  "quiz_answers": [
+    "Answer for question 1",
+    "Answer for question 2",
+    "Answer for question 3",
+    "Answer for question 4",
+    "Answer for question 5",
+    "Answer for question 6"
+  ],
+  "headless": false,
+  "skip_account_creation": false
+}

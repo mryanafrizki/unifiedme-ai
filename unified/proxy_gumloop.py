@@ -38,6 +38,9 @@ log = logging.getLogger("unified.proxy_gumloop")
 # Auth cache: account_id → GumloopAuth
 _auth_cache: dict[int, GumloopAuth] = {}
 
+# Session cache: account_id → session_id (for persistent chat sessions)
+_session_cache: dict[int, int] = {}
+
 # Shared turnstile solver (tokens are account-independent)
 _turnstile: TurnstileSolver | None = None
 
@@ -238,6 +241,31 @@ def _convert_openai_messages_simple(body: dict) -> tuple[list[dict], str | None]
     return merged, system_prompt
 
 
+async def _get_or_create_session_for_account(account_id: int, db) -> int:
+    """Get or create persistent chat session for account.
+    
+    Each account gets one persistent session that's reused across all chat requests.
+    This ensures conversation context is maintained automatically.
+    """
+    if account_id in _session_cache:
+        session_id = _session_cache[account_id]
+        # Verify session still exists in database
+        session = await db.get_chat_session(session_id)
+        if session:
+            return session_id
+        # Session was deleted, remove from cache
+        del _session_cache[account_id]
+    
+    # Create new persistent session
+    session_id = await db.create_chat_session(
+        title=f"Persistent Session (Account {account_id})",
+        model="gl-claude-sonnet-4-5"
+    )
+    _session_cache[account_id] = session_id
+    log.info("Created persistent session %s for account %s", session_id, account_id)
+    return session_id
+
+
 async def proxy_chat_completions(
     body: dict,
     account: dict,
@@ -248,7 +276,11 @@ async def proxy_chat_completions(
 
     MCP mode: strips client tools, agent uses MCP tools server-side.
     All tool activity is streamed as text content.
+    
+    Supports persistent chat sessions via 'chat_session_id' field in body.
     """
+    from . import database as db
+    
     auth = _get_auth(account)
     await _ensure_turnstile_key()
     turnstile = _get_turnstile()
@@ -267,8 +299,36 @@ async def proxy_chat_completions(
     # Convert messages — strip tools, simple format
     messages, system_prompt = _convert_openai_messages_simple(body)
 
-    # Generate interaction_id per request (each OpenAI call = fresh Gumloop turn)
-    interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
+    # Handle persistent chat session via chat_session_id
+    # AUTO-PERSISTENT: If no chat_session_id provided, auto-create one per account
+    # This ensures conversation context is maintained across requests
+    interaction_id = None
+    chat_session_id = body.get("chat_session_id")
+    
+    # Auto-assign persistent session if not provided
+    if not chat_session_id:
+        account_id = account.get("id")
+        if account_id:
+            try:
+                session_id = await _get_or_create_session_for_account(account_id, db)
+                chat_session_id = session_id
+                log.info("Auto-assigned persistent session %s for account %s", session_id, account_id)
+            except Exception as e:
+                log.warning("Failed to auto-create session for account %s: %s", account_id, e)
+    
+    # Get or create interaction_id for the session
+    if chat_session_id:
+        try:
+            session_id_int = int(chat_session_id)
+            interaction_id = await db.get_or_create_gumloop_interaction_id(session_id_int)
+            log.info("Using persistent interaction_id for chat_session_id=%s: %s", chat_session_id, interaction_id)
+        except (ValueError, TypeError) as e:
+            log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
+    
+    if not interaction_id:
+        # Fallback: Generate new interaction_id (should rarely happen now)
+        interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
+        log.warning("Generated one-off interaction_id: %s (no session assigned)", interaction_id)
     for msg in messages:
         image_urls = msg.pop("_images", None)
         if not image_urls or msg.get("role") != "user":
@@ -364,13 +424,14 @@ async def proxy_chat_completions(
 
     stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
-    has_images = any(m.get("_gl_parts") for m in messages)
 
+    # Always pass interaction_id to maintain session continuity
+    # (previously only passed when has_images, which broke session persistence)
     if client_wants_stream:
         return _stream_gumloop(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
             stream_id, created, proxy_url,
-            interaction_id=interaction_id if has_images else None,
+            interaction_id=interaction_id,
             account_id=account.get("id", 0),
             account_email=account.get("email", "?"),
         ), 0.0
@@ -378,7 +439,7 @@ async def proxy_chat_completions(
         return await _accumulate_gumloop(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
             stream_id, created, proxy_url,
-            interaction_id=interaction_id if has_images else None,
+            interaction_id=interaction_id,
         )
 
 

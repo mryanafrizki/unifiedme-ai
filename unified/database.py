@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     model       TEXT DEFAULT '',
     endpoint    TEXT DEFAULT '',
     api_key     TEXT DEFAULT '',
+    gumloop_interaction_id TEXT DEFAULT '',
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
 );
@@ -257,6 +258,8 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN kiro_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN cb_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN ws_verified INTEGER DEFAULT 0",
+        # Gumloop chat session persistence
+        "ALTER TABLE chat_sessions ADD COLUMN gumloop_interaction_id TEXT DEFAULT ''",
         # Last test error for review
         "ALTER TABLE accounts ADD COLUMN kiro_test_error TEXT DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN cb_test_error TEXT DEFAULT ''",
@@ -1484,6 +1487,22 @@ async def get_chat_session(session_id: int) -> Optional[dict]:
     cur = await conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
     row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def get_or_create_gumloop_interaction_id(session_id: int) -> str:
+    """Get existing Gumloop interaction_id for session, or create new one if missing."""
+    import uuid
+    session = await get_chat_session(session_id)
+    if not session:
+        return ""
+    
+    interaction_id = session.get("gumloop_interaction_id", "")
+    if not interaction_id:
+        # Generate new interaction_id and save it
+        interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
+        await update_chat_session(session_id, gumloop_interaction_id=interaction_id)
+    
+    return interaction_id
 
 
 async def update_chat_session(session_id: int, **fields: Any) -> bool:

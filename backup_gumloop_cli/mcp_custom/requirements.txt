@@ -1,0 +1,10 @@
+# Gumloop University Automation Dependencies
+
+# Core automation
+playwright>=1.40.0
+
+# Optional: for enhanced logging
+colorlog>=6.8.0
+
+# Optional: for config validation
+pydantic>=2.5.0

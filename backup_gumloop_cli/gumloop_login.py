@@ -225,7 +225,8 @@ async def _try_click_consent(page) -> str:
                 const t = (btn.textContent||'').trim().toLowerCase();
                 if (!t || btn.offsetParent === null) continue;
                 if (t === 'continue' || t === 'allow' || t === 'lanjutkan' || t === 'lanjut'
-                    || t.includes('continue') || t.includes('allow')) {
+                    || t === 'i understand' || t === 'saya mengerti'
+                    || t.includes('continue') || t.includes('allow') || t.includes('understand')) {
                     btn.click(); return 'text:' + t;
                 }
             }
