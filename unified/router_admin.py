@@ -2071,7 +2071,7 @@ async def _test_account_provider(acc: dict, provider: str, proxy_url: str | None
             return {"ok": False, "error": "No ChatBAI API key"}
         from .chatbai.proxy import proxy_chat_completions as cbai_proxy
         import random as _rnd
-        _cbai_models = ["glm-5", "bchatai-kimi-k2.5", "bchatai-gemini-3-flash", "bchatai-gpt-5-mini", "bchatai-minimax-m2.5", "bchatai-gpt-5-nano", "bchatai-gpt-5.2"]
+        _cbai_models = ["glm-5", "bchatai-kimi-k2.5", "bchatai-gpt-5-mini", "bchatai-minimax-m2.5", "bchatai-gpt-5-nano", "bchatai-gpt-5.2", "bchatai-deepseek-v4-flash", "bchatai-deepseek-v4-pro"]
         test_model = _rnd.choice(_cbai_models)
         body = {"model": test_model, "messages": [{"role": "system", "content": "You are helpful."}, {"role": "user", "content": "Say OK"}], "max_tokens": 16, "stream": False}
         proxy_info = await db.get_proxy_for_api_call()

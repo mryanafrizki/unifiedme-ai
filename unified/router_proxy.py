@@ -366,11 +366,12 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 continue
             elif status == 429:
                 error_msg = f"Gumloop HTTP 429 rate limited (account: {account['email']})"
-                await db.update_account(account["id"], gl_status="rate_limited", gl_error=error_msg)
+                await db.mark_gl_exhausted_temporary(account["id"], 120, error_msg)  # 2 min cooldown
                 await db.log_usage(key_info["id"], account["id"], model, tier.value, status, latency,
                     request_headers=req_headers_str, request_body=req_body_str,
                     response_headers=resp_headers_str, response_body=resp_body_str,
                     error_message=error_msg, proxy_url=proxy_url or "")
+                log.warning("GL %s rate limited, 2min cooldown, trying next", account["email"])
                 continue
             elif status >= 500:
                 error_msg = f"Gumloop HTTP {status} (account: {account['email']})"
@@ -402,10 +403,11 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                     if stream_error:
                         acct_id = gl_stream_state.get("_account_id", _acct_id)
                         if "CREDIT_EXHAUSTED" in stream_error or "credit" in stream_error.lower():
-                            await db.update_account(acct_id, gl_status="exhausted",
-                                                    gl_error=stream_error[:200])
-                            await db.clear_sticky_account("max_gl")
-                            log.warning("[GL post-stream] Account %s marked exhausted: %s",
+                            await db.mark_gl_exhausted_temporary(
+                                acct_id, 3600,  # 1 hour cooldown for credit exhaustion
+                                stream_error[:200],
+                            )
+                            log.warning("[GL post-stream] Account %s temp exhausted (1h): %s",
                                         gl_stream_state.get("_account_email", "?"), stream_error[:100])
 
                     # Use error status code if stream had errors
@@ -512,6 +514,33 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 last_cbai_error = error_msg
                 log.warning("ChatBAI %s exhausted, trying next account", account["email"])
                 continue
+            elif status >= 400 and status < 500:
+                # Check for insufficient_user_quota / insufficient balance → fallback
+                resp_body_str = getattr(response, '_ws_raw_body', '') or _extract_response_body(response)
+                _is_quota_error = False
+                try:
+                    _err_data = json.loads(resp_body_str) if resp_body_str else {}
+                    _err_obj = _err_data.get("error", {})
+                    _err_code = _err_obj.get("code", "") if isinstance(_err_obj, dict) else ""
+                    _err_msg = _err_obj.get("message", "") if isinstance(_err_obj, dict) else str(_err_obj)
+                    _is_quota_error = _err_code in ("insufficient_user_quota", "insufficient_balance") or "insufficient balance" in _err_msg.lower()
+                except (json.JSONDecodeError, ValueError, AttributeError):
+                    pass
+                if _is_quota_error:
+                    error_msg = f"ChatBAI HTTP {status} insufficient quota (account: {account['email']})"
+                    await db.update_account(account["id"], cbai_status="exhausted", cbai_error=error_msg)
+                    await db.log_usage(
+                        key_info["id"], account["id"], model, tier.value, status, latency,
+                        request_headers=req_headers_str, request_body=req_body_str,
+                        response_headers=resp_headers_str, response_body=resp_body_str,
+                        error_message=error_msg, proxy_url=proxy_url or "",
+                    )
+                    last_cbai_error = error_msg
+                    log.warning("ChatBAI %s insufficient quota, trying next account", account["email"])
+                    continue
+                # Other 4xx: mark error but don't exhaust, still return to client
+                error_msg = f"ChatBAI HTTP {status} (account: {account['email']})"
+                await mark_account_error(account["id"], tier, error_msg)
             elif status >= 500:
                 error_msg = f"ChatBAI HTTP {status} (account: {account['email']})"
                 await mark_account_error(account["id"], tier, error_msg)

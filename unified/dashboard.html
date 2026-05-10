@@ -821,7 +821,7 @@ a:hover{text-decoration:underline}
       <div class="acct-col" id="acct-col-gl">
         <div class="acct-col-header">
           <h4>&#x1f30a; GUMLOOP <span class="acct-count" id="acct-count-gl">0</span></h4>
-          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('gumloop')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('gumloop')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('gumloop')">Del</button><button class="btn-xs" onclick="showMcpListModal()">MCP</button></span>
+          <span class="acct-col-actions"><button class="btn-xs" onclick="warmupAccounts('gumloop')">Warmup</button><button class="btn-xs" onclick="approveAllForProvider('gumloop')">Approve</button><button class="btn-xs" style="color:var(--red)" onclick="deleteFixForProvider('gumloop')">Del</button><button class="btn-xs" onclick="showMcpListModal()">MCP</button><button class="btn-xs" style="color:var(--cyan)" onclick="showBindMcpModal()">Bind</button></span>
         </div>
         <div class="acct-col-filters" data-provider="gl">
           <button class="acct-col-filter active" data-pfilter="all">All</button>
@@ -5728,6 +5728,7 @@ window.addMcpFromDashboard = addMcpFromDashboard;
 window.loadMcpInstances = loadMcpInstances;
 window.mcpInstanceAction = mcpInstanceAction;
 window.showDeleteMcpModal = showDeleteMcpModal;
+window.showBindMcpModal = showBindMcpModal;
 window.showMcpListModal = showMcpListModal;
 window.closeMcpListModal = closeMcpListModal;
 window.closeDeleteMcpModal = closeDeleteMcpModal;

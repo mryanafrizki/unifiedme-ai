@@ -528,13 +528,11 @@ def _stream_gumloop(
                         from . import database as _db
                         try:
                             acct_id = _stream_state.get("_account_id", 0)
-                            await _db.update_account(
-                                acct_id,
-                                gl_status="exhausted",
-                                gl_error=f"Credit exhausted: {error_msg[:150]}",
+                            await _db.mark_gl_exhausted_temporary(
+                                acct_id, 3600,  # 1 hour cooldown
+                                f"Credit exhausted: {error_msg[:150]}",
                             )
-                            await _db.clear_sticky_account("max_gl")
-                            log.warning("[GL stream] Account %s credit exhausted — marked immediately",
+                            log.warning("[GL stream] Account %s credit exhausted — temp exhausted 1h",
                                         _stream_state.get("_account_email", "?"))
                             # Push to D1 immediately so sync doesn't overwrite
                             try:

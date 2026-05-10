@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     gl_credits          REAL DEFAULT 0,
     gl_error            TEXT DEFAULT '',
     gl_error_count      INTEGER DEFAULT 0,
+    gl_exhausted_until  TEXT DEFAULT '',  -- ISO timestamp: temporary exhaustion cooldown
     last_used_gl        TEXT DEFAULT '',
 
     -- ChatBAI fields
@@ -272,6 +273,7 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN last_used_gl TEXT DEFAULT ''",
         "ALTER TABLE accounts ADD COLUMN gl_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN gl_test_error TEXT DEFAULT ''",
+        "ALTER TABLE accounts ADD COLUMN gl_exhausted_until TEXT DEFAULT ''",
         # ChatBAI fields
         "ALTER TABLE accounts ADD COLUMN cbai_status TEXT DEFAULT 'none'",
         "ALTER TABLE accounts ADD COLUMN cbai_api_key TEXT DEFAULT ''",
@@ -624,6 +626,56 @@ async def force_clear_sticky_account(tier: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Gumloop temporary exhaustion
+# ---------------------------------------------------------------------------
+
+async def mark_gl_exhausted_temporary(account_id: int, cooldown_seconds: int, error: str = "") -> None:
+    """Mark a Gumloop account as temporarily exhausted with a cooldown.
+
+    After cooldown_seconds, the account will auto-recover to 'ok' on next rotation check.
+    """
+    from datetime import datetime, timezone, timedelta
+    until = (datetime.now(timezone.utc) + timedelta(seconds=cooldown_seconds)).strftime("%Y-%m-%d %H:%M:%S")
+    await update_account(
+        account_id,
+        gl_status="exhausted",
+        gl_error=error[:200] if error else "",
+        gl_exhausted_until=until,
+    )
+    await clear_sticky_account("max_gl")
+    log.info("GL account %d marked exhausted until %s (%ds cooldown): %s",
+             account_id, until, cooldown_seconds, error[:80])
+
+
+async def recover_gl_exhausted_accounts() -> int:
+    """Auto-recover GL accounts whose cooldown has expired. Returns count recovered."""
+    db = await get_db()
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    cur = await db.execute(
+        """SELECT id, email FROM accounts
+           WHERE status = 'active'
+             AND gl_status = 'exhausted'
+             AND gl_exhausted_until != ''
+             AND gl_exhausted_until <= ?""",
+        (now,),
+    )
+    rows = await cur.fetchall()
+    count = 0
+    for row in rows:
+        await db.execute(
+            """UPDATE accounts
+               SET gl_status = 'ok', gl_error = '', gl_error_count = 0, gl_exhausted_until = ''
+               WHERE id = ?""",
+            (row["id"],),
+        )
+        count += 1
+        log.info("GL account %s auto-recovered from temporary exhaustion", row["email"])
+    if count:
+        await db.commit()
+    return count
+
+
+# ---------------------------------------------------------------------------
 # API key helpers
 # ---------------------------------------------------------------------------
 
@@ -927,6 +979,7 @@ async def get_next_account_for_tier(tier: str, exclude_ids: list[int] | None = N
 
     Supports exclude_ids for retry loops — skip already-tried accounts.
     Pinned accounts returned first (even if errored), then auto-rotation.
+    For max_gl tier: auto-recovers temporarily exhausted accounts whose cooldown expired.
     """
     db = await get_db()
     tier_config = {
@@ -942,6 +995,10 @@ async def get_next_account_for_tier(tier: str, exclude_ids: list[int] | None = N
     status_col, last_used_col = tier_config.get(tier, ("kiro_status", "last_used_kiro"))
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
     skip = set(exclude_ids or [])
+
+    # Auto-recover temporarily exhausted GL accounts whose cooldown has expired
+    if tier == "max_gl":
+        await recover_gl_exhausted_accounts()
 
     # 1. Check sticky/pinned account (only if not excluded)
     sticky_id = await get_sticky_account_id(tier)

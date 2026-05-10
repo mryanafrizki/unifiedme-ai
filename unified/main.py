@@ -303,12 +303,38 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("Windsurf sidecar startup error: %s — windsurf-* models unavailable", e)
 
+    # Start periodic GL exhaustion recovery (every 60s)
+    _gl_recovery_task: asyncio.Task | None = None
+
+    async def _periodic_gl_recovery():
+        """Background loop: auto-recover GL accounts whose cooldown has expired."""
+        while True:
+            try:
+                await asyncio.sleep(60)
+                recovered = await db.recover_gl_exhausted_accounts()
+                if recovered:
+                    log.info("Periodic GL recovery: %d account(s) restored to ok", recovered)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                log.warning("Periodic GL recovery error: %s", e)
+
+    _gl_recovery_task = asyncio.create_task(_periodic_gl_recovery())
+
     log.info("Unified AI Proxy ready on port %d", LISTEN_PORT)
 
     yield
 
     # Shutdown
     log.info("Shutting down...")
+
+    # Cancel periodic GL recovery
+    if _gl_recovery_task and not _gl_recovery_task.done():
+        _gl_recovery_task.cancel()
+        try:
+            await _gl_recovery_task
+        except asyncio.CancelledError:
+            pass
 
     # Final push ALL accounts to D1 before stopping
     try:

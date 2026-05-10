@@ -14,6 +14,21 @@ from .config import Tier, KIRO_UPSTREAM, CODEBUDDY_UPSTREAM, KIRO_ADMIN_PASSWORD
 
 log = logging.getLogger("unified.account_manager")
 
+
+def _is_gl_temp_exhausted(acc: dict) -> bool:
+    """Check if a GL account is only *temporarily* exhausted (has future cooldown).
+
+    Returns True if gl_status == 'exhausted' AND gl_exhausted_until is in the future.
+    These accounts will auto-recover and should NOT be treated as permanently dead.
+    """
+    if acc.get("gl_status") != "exhausted":
+        return False
+    until = acc.get("gl_exhausted_until", "")
+    if not until:
+        return False
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    return until > now  # ISO string comparison works for same-format timestamps
+
 MAX_CONSECUTIVE_ERRORS = 3
 
 
@@ -348,12 +363,17 @@ async def check_account_health(account_id: int) -> dict:
         await db.update_account(account_id, **updates)
 
     # Check if all dead → move to failed
+    # NOTE: Temporarily-exhausted GL accounts (with future gl_exhausted_until) are NOT dead —
+    # they will auto-recover after cooldown. Don't mark the whole account as failed.
     refreshed = await db.get_account(account_id)
     if refreshed:
         kiro_dead = refreshed["kiro_status"] in ("failed", "exhausted", "banned")
         cb_dead = refreshed["cb_status"] in ("failed", "exhausted", "expired", "banned")
         ws_dead = refreshed.get("ws_status", "none") in ("none", "failed", "exhausted", "banned")
-        gl_dead = refreshed.get("gl_status", "none") in ("none", "failed", "exhausted", "banned")
+        gl_dead = (
+            refreshed.get("gl_status", "none") in ("none", "failed", "exhausted", "banned")
+            and not _is_gl_temp_exhausted(refreshed)
+        )
         cbai_dead = refreshed.get("cbai_status", "none") in ("none", "failed", "exhausted", "banned")
         skboss_dead = refreshed.get("skboss_status", "none") in ("none", "failed", "exhausted", "banned")
         windsurf_dead = refreshed.get("windsurf_status", "none") in ("none", "failed", "exhausted", "banned")
@@ -365,14 +385,21 @@ async def check_account_health(account_id: int) -> dict:
 
 
 async def auto_trash() -> int:
-    """Move exhausted/banned accounts to trash. Returns count moved."""
+    """Move exhausted/banned accounts to trash. Returns count moved.
+
+    NOTE: Temporarily-exhausted GL accounts (with future gl_exhausted_until) are NOT
+    considered dead — they will auto-recover after their cooldown expires.
+    """
     accounts = await db.get_accounts(status="active")
     moved = 0
     for acc in accounts:
         kiro_dead = acc["kiro_status"] in ("failed", "exhausted")
         cb_dead = acc["cb_status"] in ("failed", "exhausted")
         ws_dead = acc.get("ws_status", "none") in ("none", "failed", "exhausted")
-        gl_dead = acc.get("gl_status", "none") in ("none", "failed", "exhausted")
+        gl_dead = (
+            acc.get("gl_status", "none") in ("none", "failed", "exhausted")
+            and not _is_gl_temp_exhausted(acc)
+        )
         cbai_dead = acc.get("cbai_status", "none") in ("none", "failed", "exhausted")
         skboss_dead = acc.get("skboss_status", "none") in ("none", "failed", "exhausted")
         windsurf_dead = acc.get("windsurf_status", "none") in ("none", "failed", "exhausted")

@@ -33,6 +33,9 @@ _PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4.5": (4.5, 22.5),
     "claude-sonnet-4.6": (2.7, 13.5),
     "claude-sonnet-4.5": (2.7, 13.5),
+    # DeepSeek
+    "deepseek-v4-flash": (0.14, 0.28),
+    "deepseek-v4-pro": (0.9, 3.5),
 }
 _DEFAULT_PRICING = (3.0, 15.0)
 

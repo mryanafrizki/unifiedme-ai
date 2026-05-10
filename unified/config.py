@@ -172,18 +172,18 @@ _WAVESPEED_ALIASES = [
 
 # ChatBAI models (bchatai- prefix)
 _CHATBAI_MODELS = [
-    # Free (signup bonus credits)
+    # Free
+    "bchatai-claude-haiku-4.5",
+    "bchatai-gpt-5.4-nano",
+    "bchatai-gpt-5.4-mini",
     "bchatai-gpt-5-mini",
     "bchatai-gpt-5-nano",
-    "bchatai-gpt-5.4-mini",
-    "bchatai-gpt-5.4-nano",
     "bchatai-gpt-5.2",
-    "bchatai-claude-haiku-4.5",
-    "bchatai-gemini-3.1-pro",
-    "bchatai-gemini-3-flash",
-    "bchatai-minimax-m2.5",
-    "bchatai-kimi-k2.5",
     "bchatai-glm-5",
+    "bchatai-kimi-k2.5",
+    "bchatai-minimax-m2.5",
+    "bchatai-deepseek-v4-flash",
+    "bchatai-deepseek-v4-pro",
     # Premium (requires topup)
     "bchatai-gpt-5.5",
     "bchatai-gpt-5.4",
