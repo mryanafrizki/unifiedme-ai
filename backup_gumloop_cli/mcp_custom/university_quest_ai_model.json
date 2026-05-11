@@ -1,0 +1,22 @@
+{
+  "slug": "ai-fundamentals/what-is-an-ai-model",
+  "url": "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model",
+  "http_endpoints_seen": [
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=9Vku2H9zpwZo6F6V",
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=2RujFieouyz5sDwQ",
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=7CNujGmDsWtHHBYi",
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=LxEd21Wn0CnL9-C1",
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=q5XIDgoJoPL_Wo_g",
+    "https://university.gumloop.com/ai-fundamentals/what-is-an-ai-model?_rsc=uEcY8StG-QF8BbJx"
+  ],
+  "title": "What is an AI Model?",
+  "question": "How do large language models generate responses?",
+  "correct_answer_index": 2,
+  "correct_answer_text": "They predict the most likely next word, one word at a time, based on patterns in their training data.",
+  "next_lesson": "/ai-fundamentals/hallucinations",
+  "notes": [
+    "Fetched from the public lesson page content.",
+    "The quiz HTML marks option 2 with class quiz-correct.",
+    "RSC-prefetch GET requests for this lesson were observed in intercept_university_log.json."
+  ]
+}

@@ -30,6 +30,7 @@ import string
 import sys
 import time
 import uuid
+import base64
 
 import httpx
 
@@ -41,26 +42,45 @@ FIREBASE_REFRESH_URL = f"https://securetoken.googleapis.com/v1/token?key={FIREBA
 
 UNIVERSITY_BASE = "https://university.gumloop.com"
 UNIVERSITY_START = f"{UNIVERSITY_BASE}/getting-started-with-gumloop/what-is-gumloop"
+AI_FUNDAMENTALS_START = f"{UNIVERSITY_BASE}/ai-fundamentals/what-is-an-ai-model"
 OAUTH_AUTHORIZE_URL = "https://www.gumloop.com/oauth/authorize"
 
-# Lesson paths in order
-LESSON_PATHS = [
-    "/getting-started-with-gumloop/what-is-gumloop",                    # Lesson 1: Introduction
-    "/getting-started-with-gumloop/building-your-first-agent",          # Lesson 2: Build Your First Agent
-    "/getting-started-with-gumloop/bring-your-agents-where-you-work",   # Lesson 3: Bring Your Agent Where You Work
-    "/getting-started-with-gumloop/teach-your-agents-skills",           # Lesson 4: Teach Your Agents with Skills
-    "/getting-started-with-gumloop/tasks-for-your-agents",              # Lesson 5: Triggers for Your Agents
-    "/getting-started-with-gumloop/chat-with-gumloop",                  # Lesson 6: Chat with Gumloop
+# Course plans in order
+COURSE_PLAN = [
+    {
+        "name": "getting-started-with-gumloop",
+        "start_path": "/getting-started-with-gumloop/what-is-gumloop",
+        "lesson_paths": [
+            "/getting-started-with-gumloop/what-is-gumloop",
+            "/getting-started-with-gumloop/building-your-first-agent",
+            "/getting-started-with-gumloop/bring-your-agents-where-you-work",
+            "/getting-started-with-gumloop/teach-your-agents-skills",
+            "/getting-started-with-gumloop/tasks-for-your-agents",
+            "/getting-started-with-gumloop/chat-with-gumloop",
+        ],
+        "expected_reward_credits": 10000,
+    },
+    {
+        "name": "ai-fundamentals",
+        "start_path": "/ai-fundamentals/what-is-an-ai-model",
+        "lesson_paths": [
+            "/ai-fundamentals/what-is-an-ai-model",
+            "/ai-fundamentals/hallucinations",
+            "/ai-fundamentals/tokens-and-costs",
+            "/ai-fundamentals/context",
+            "/ai-fundamentals/giving-your-chatbot-tools",
+            "/ai-fundamentals/what-are-instructions",
+            "/ai-fundamentals/skills",
+        ],
+        "expected_reward_credits": 5000,
+    },
 ]
 
-# Correct quiz answers (1-indexed option numbers)
-# Lesson 1: option 2 - "A tool connected to your apps that follows instructions to do work for you."
-# Lesson 2: option 3 - "A model, tools (apps), and instructions."
-# Lesson 3: option 3 - "It starts a new conversation with the agent in a thread, and you reply in the thread to continue."
-# Lesson 4: option 2 - "Agents have no memory between conversations, so skills give them reusable procedures for specific tasks."
-# Lesson 5: option 2 - "Add a recurring scheduled trigger directly on the agent."
-# Lesson 6: option 2 - "When you have a one-off task and don't want to configure a new agent for it."
-CORRECT_ANSWERS = [2, 3, 3, 2, 2, 2]
+# Course-local default answers when auto-detection fails (1-indexed option numbers)
+COURSE_DEFAULT_ANSWERS = {
+    "getting-started-with-gumloop": [2, 3, 3, 2, 2, 2],
+    "ai-fundamentals": [2, 2, 2, 2, 2, 2, 2],
+}
 
 # Captured HTTP traffic
 captured: list[dict] = []
@@ -146,6 +166,45 @@ async def extract_firebase_tokens(page) -> dict | None:
         return result
     except Exception as e:
         log(f"extract_firebase_tokens error: {e}")
+        return None
+
+
+def _decode_jwt_payload(token: str) -> dict:
+    try:
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {}
+        payload = parts[1]
+        padding = "=" * (-len(payload) % 4)
+        data = base64.urlsafe_b64decode(payload + padding)
+        return json.loads(data.decode("utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+
+async def extract_gumloop_auth_fallback(page) -> dict | None:
+    """Fallback auth extraction from Gumloop DOM / local storage when IndexedDB isn't ready."""
+    try:
+        result = await page.evaluate("""() => {
+            const el = document.querySelector('#gumloop-auth');
+            const token = el?.dataset?.token || el?.getAttribute('data-token') || '';
+            const email = el?.dataset?.email || el?.getAttribute('data-email') || '';
+            if (!token) return null;
+            return { token, email };
+        }""")
+        if not result or not result.get("token"):
+            return None
+
+        payload = _decode_jwt_payload(result["token"])
+        return {
+            "idToken": result["token"],
+            "refreshToken": payload.get("firebase", {}).get("sign_in_provider", ""),
+            "uid": payload.get("user_id") or payload.get("sub") or payload.get("uid") or "",
+            "email": result.get("email") or payload.get("email") or "",
+            "displayName": payload.get("name") or payload.get("name", "") or "",
+        }
+    except Exception as e:
+        log(f"extract_gumloop_auth_fallback error: {e}")
         return None
 
 
@@ -240,15 +299,48 @@ async def fill_google_password(page, password: str) -> bool:
 
 async def handle_consent(google_page, main_page) -> bool:
     """Handle Google consent screens and wait for redirect to Gumloop."""
-    for tick in range(60):
+    async def _auth_token_present(target) -> bool:
+        try:
+            return await target.evaluate("""() => {
+                const el = document.querySelector('#gumloop-auth');
+                const token = el?.dataset?.token || el?.getAttribute('data-token') || '';
+                return !!(token && token.trim());
+            }""")
+        except Exception:
+            return False
+
+    async def _oauth_done() -> bool:
+        try:
+            pages = []
+            try:
+                pages = [google_page, main_page, *google_page.context.pages]
+            except Exception:
+                pages = [google_page, main_page]
+
+            for target in pages:
+                try:
+                    if target.is_closed():
+                        continue
+                    target_url = target.url
+                except Exception:
+                    continue
+
+                if "/login/callback/oauth" in target_url:
+                    if await _auth_token_present(target):
+                        return True
+                    return True
+
+                if "gumloop.com" in target_url and "accounts.google.com" not in target_url and "/login" not in target_url:
+                    if await _auth_token_present(target):
+                        return True
+
+            return False
+        except Exception:
+            return False
+
+    for _ in range(60):
         await asyncio.sleep(1)
         try:
-            popup_closed = False
-            try:
-                popup_closed = google_page.is_closed()
-            except Exception:
-                popup_closed = True
-
             for target in [google_page, main_page]:
                 try:
                     if target.is_closed():
@@ -257,18 +349,17 @@ async def handle_consent(google_page, main_page) -> bool:
                     if "accounts.google.com" not in target_url:
                         continue
                     await target.evaluate("""() => {
-                        // Strategy 1: Find button by text content (includes "I understand")
+                        // Only click explicit approval buttons.
                         for (const btn of document.querySelectorAll('button, div[role="button"], a[role="button"]')) {
                             const t = (btn.textContent||'').trim().toLowerCase();
                             if (!t || btn.offsetParent === null) continue;
                             if (t === 'continue' || t === 'allow' || t === 'lanjutkan' || t === 'lanjut'
                                 || t === 'i understand' || t === 'saya mengerti' || t === 'accept' || t === 'agree'
-                                || t === 'got it' || t === 'next'
-                                || t.includes('continue') || t.includes('allow') || t.includes('understand')) {
+                                || t === 'got it' || t === 'next') {
                                 btn.click(); return true;
                             }
                         }
-                        // Strategy 2: Find submit buttons/inputs
+                        // Fallback: only obvious submit/confirm controls.
                         const el = document.querySelector('#confirm') || document.querySelector('input[type="submit"]');
                         if (el) { el.click(); return true; }
                         return false;
@@ -276,16 +367,82 @@ async def handle_consent(google_page, main_page) -> bool:
                 except Exception:
                     pass
 
-            if popup_closed or tick > 5:
-                try:
-                    main_url = main_page.url if not main_page.is_closed() else ""
-                except Exception:
-                    main_url = ""
-                if "gumloop.com" in main_url and "login" not in main_url and "accounts.google.com" not in main_url:
-                    return True
+            if await _oauth_done():
+                return True
         except Exception:
             pass
     return False
+
+
+async def click_google_account_choice(page, expected_email: str = "") -> bool:
+    """Click the visible Google account on the account chooser screen.
+
+    Returns True when it clicked a matching account row or any visible account row.
+    """
+    try:
+        result = await page.evaluate(r"""(expectedEmail) => {
+            const normalize = (text) => (text || '').trim().toLowerCase();
+            const expected = normalize(expectedEmail);
+
+            // Most reliable: find elements with data-identifier attribute (Google's standard)
+            const identified = Array.from(document.querySelectorAll('[data-identifier]'))
+                .filter(el => el && el.offsetParent !== null);
+
+            for (const el of identified) {
+                const idVal = normalize(el.getAttribute('data-identifier') || '');
+                if (!idVal) continue;
+                const txt = normalize(el.textContent || el.innerText || '');
+                // Match by data-identifier (email) or text content
+                const emailMatch = expected && (idVal === expected || idVal.includes(expected) || txt.includes(expected));
+                if (emailMatch) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            // If no email match found, click first visible data-identifier element
+            // that is NOT "Use another account"
+            for (const el of identified) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (txt.includes('use another account')) continue;
+                el.click();
+                return true;
+            }
+
+            // Broader strategy: look for visible account rows by role or class patterns
+            const candidates = Array.from(document.querySelectorAll(
+                'li[data-identifier], div[role="link"], div[class*="account"], ' +
+                '[class*="accountChooser"] li, [jsname] li, ul[class*="account"] li'
+            )).filter(el => el && el.offsetParent !== null);
+
+            for (const el of candidates) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (!txt || txt.includes('use another account') || txt.includes('help') || txt.includes('privacy')) continue;
+                if (expected && (txt.includes(expected) || txt.includes('@'))) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            // Last resort: any visible clickable item with an @ sign
+            const allVisible = Array.from(document.querySelectorAll(
+                'button, a, div[role="button"], li, [tabindex]:not([tabindex="-1"])'
+            )).filter(el => el && el.offsetParent !== null);
+
+            for (const el of allVisible) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (txt.includes('@') && !txt.includes('use another account')) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            return false;
+        }""", expected_email)
+        return bool(result)
+    except Exception as e:
+        log(f"click_google_account_choice error: {e}")
+        return False
 
 
 async def browser_login(email: str, password: str) -> tuple:
@@ -340,11 +497,35 @@ async def browser_login(email: str, password: str) -> tuple:
             await popup_page.wait_for_load_state("domcontentloaded", timeout=15000)
         await asyncio.sleep(2)
 
+        # If Google shows an account chooser, click the existing account first.
+        try:
+            chooser_url = google_page.url if not google_page.is_closed() else ""
+        except Exception:
+            chooser_url = ""
+        if "accounts.google.com" in chooser_url and "accountchooser" in chooser_url:
+            log("Google account chooser detected — clicking saved account...")
+            chosen = await click_google_account_choice(google_page, email)
+            if not chosen:
+                log("WARNING: Could not auto-click account chooser; continuing with current page state")
+            else:
+                await asyncio.sleep(3)
+
         log(f"Filling email: {email}")
         ok = await fill_google_email(google_page, email)
         if not ok:
             await manager.__aexit__(None, None, None)
             return {"error": "Failed to fill Google email"}, None, None
+
+        try:
+            after_email_url = google_page.url if not google_page.is_closed() else ""
+        except Exception:
+            after_email_url = ""
+        if "accounts.google.com" in after_email_url:
+            log("Checking for account chooser after email entry...")
+            chosen_after = await click_google_account_choice(google_page, email)
+            if chosen_after:
+                log("Clicked account in post-email chooser")
+                await asyncio.sleep(3)
 
         log("Filling password...")
         ok = await fill_google_password(google_page, password)
@@ -375,6 +556,11 @@ async def browser_login(email: str, password: str) -> tuple:
                 break
             log(f"Token attempt {attempt+1}/8...")
             await asyncio.sleep(3)
+
+        if not tokens or not tokens.get("idToken"):
+            log("IndexedDB token extraction failed after all attempts — retry cycle will handle")
+            # No fallback: user explicitly requires IndexedDB only (hard gate).
+            # The 3-attempt retry in main() will redo the full login.
 
         if not tokens or not tokens.get("idToken"):
             await manager.__aexit__(None, None, None)
@@ -571,11 +757,12 @@ async def setup_request_interception(page):
     page.on("response", on_response)
 
 
-async def navigate_to_university(page) -> bool:
+async def navigate_to_university(page, start_path: str | None = None) -> bool:
     """Navigate to Gumloop University start page."""
-    log("Navigating to Gumloop University...")
+    start_url = f"{UNIVERSITY_BASE}{start_path or '/getting-started-with-gumloop/what-is-gumloop'}"
+    log(f"Navigating to Gumloop University: {start_url}")
     try:
-        await page.goto(UNIVERSITY_START, wait_until="domcontentloaded", timeout=30000)
+        await page.goto(start_url, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
         
         # Check if there's a Login button and click it
@@ -706,10 +893,11 @@ async def handle_oauth_authorize(page, context) -> bool:
     return False
 
 
-async def answer_quiz(page, answer_index: int) -> bool:
+async def answer_quiz(page, answer_index: int, force_mark_complete: bool = False) -> bool:
     """
     Answer a quiz question on the current lesson page.
     answer_index: 1-indexed (1 = first option, 2 = second, 3 = third).
+    force_mark_complete: when True, attempt Mark Complete regardless of correctness.
     Returns True if answered and checked successfully.
     """
     log(f"Answering quiz: selecting option {answer_index}...")
@@ -828,23 +1016,30 @@ async def answer_quiz(page, answer_index: int) -> bool:
         if not clicked_check:
             log("WARNING: Could not find Check button after multiple attempts")
 
-        # Click "Mark Complete" if present
-        await asyncio.sleep(1)
-        clicked_mark = await page.evaluate("""() => {
-            const buttons = document.querySelectorAll('button, a');
-            for (const btn of buttons) {
-                const txt = (btn.textContent || '').trim().toLowerCase();
-                if (txt.includes('mark complete') || txt.includes('mark as complete') || txt.includes('completed')) {
-                    btn.click();
-                    return txt;
-                }
-            }
-            return null;
-        }""")
+        quiz_result = await wait_for_quiz_result(page)
+        if quiz_result == "wrong":
+            log("Quiz result is WRONG")
+            if not force_mark_complete:
+                log("Not advancing")
+                return False
+        elif quiz_result != "correct":
+            log(f"WARNING: Quiz result not confirmed (got {quiz_result!r})")
+            if not force_mark_complete:
+                log("Not advancing")
+                return False
+        else:
+            log("Quiz result confirmed CORRECT")
 
+        clicked_mark = await click_mark_complete(page)
         if clicked_mark:
             log(f"Clicked '{clicked_mark}'")
-            await asyncio.sleep(2)
+            completed = await wait_for_completion_confirmation(page)
+            if not completed:
+                log("WARNING: Mark Complete clicked but completion state was not confirmed")
+                return False
+            log("Lesson completion confirmed")
+        else:
+            log("No 'Mark Complete' button found; assuming lesson auto-completes")
 
         return True
 
@@ -853,15 +1048,54 @@ async def answer_quiz(page, answer_index: int) -> bool:
         return False
 
 
-async def navigate_to_lesson(page, lesson_index: int) -> bool:
-    """Navigate to a specific lesson by index (0-based)."""
-    if lesson_index >= len(LESSON_PATHS):
-        log(f"Lesson {lesson_index + 1} out of range")
-        return False
+async def detect_correct_answer(page) -> dict | None:
+    """Detect the correct quiz answer from DOM markers, independent of option ordering."""
+    try:
+        result = await page.evaluate(r"""() => {
+            const normalize = (text) => (text || '').trim().replace(/\s+/g, ' ');
+            const options = Array.from(document.querySelectorAll('label.quiz-option, .quiz-option'))
+                .filter(el => el && el.offsetParent !== null);
+            if (!options.length) return null;
 
-    path = LESSON_PATHS[lesson_index]
-    url = f"{UNIVERSITY_BASE}{path}"
-    log(f"Navigating to lesson {lesson_index + 1}: {url}")
+            for (let i = 0; i < options.length; i++) {
+                const option = options[i];
+                const cls = option.className || '';
+                if (cls.includes('quiz-correct')) {
+                    return {
+                        index: i + 1,
+                        text: normalize(option.textContent || option.innerText || ''),
+                        source: 'quiz-correct-class'
+                    };
+                }
+            }
+
+            const correctExplain = document.querySelector('.quiz-explain-correct');
+            if (correctExplain) {
+                const explanationText = normalize(correctExplain.textContent || '');
+                for (let i = 0; i < options.length; i++) {
+                    const optionText = normalize(options[i].textContent || options[i].innerText || '');
+                    if (optionText && explanationText && explanationText.toLowerCase().includes(optionText.toLowerCase())) {
+                        return {
+                            index: i + 1,
+                            text: optionText,
+                            source: 'explanation-text-match'
+                        };
+                    }
+                }
+            }
+
+            return null;
+        }""")
+        return result
+    except Exception as e:
+        log(f"detect_correct_answer error: {e}")
+        return None
+
+
+async def navigate_to_lesson(page, lesson_path: str) -> bool:
+    """Navigate to a specific lesson path."""
+    url = f"{UNIVERSITY_BASE}{lesson_path}"
+    log(f"Navigating to lesson: {url}")
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -872,22 +1106,104 @@ async def navigate_to_lesson(page, lesson_index: int) -> bool:
         return False
 
 
-async def click_lesson_sidebar(page, lesson_index: int) -> bool:
+async def wait_for_quiz_result(page, timeout_seconds: int = 12) -> str | None:
+    """Wait until the page clearly shows whether the quiz answer is correct or wrong."""
+    for _ in range(timeout_seconds * 2):
+        try:
+            state = await page.evaluate("""() => {
+                const visible = (el) => !!el && el.offsetParent !== null;
+                const correct = document.querySelector('.quiz-explain-correct');
+                const wrong = document.querySelector('.quiz-explain-wrong');
+                if (visible(correct)) return 'correct';
+                if (visible(wrong)) return 'wrong';
+
+                const checkedInput = document.querySelector('#q-check');
+                if (checkedInput && checkedInput.checked) {
+                    if (correct && (correct.textContent || '').trim()) return 'correct';
+                    if (wrong && (wrong.textContent || '').trim()) return 'wrong';
+                }
+
+                const bodyText = (document.body?.innerText || '').toLowerCase();
+                if (bodyText.includes('correct!')) return 'correct';
+                if (bodyText.includes('not quite')) return 'wrong';
+                return null;
+            }""")
+            if state in ("correct", "wrong"):
+                return state
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return None
+
+
+async def click_mark_complete(page) -> str | None:
+    """Click an explicit mark-complete control, but never click a generic already-completed label."""
+    await asyncio.sleep(1)
+    return await page.evaluate(r"""() => {
+        const normalize = (text) => (text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        const clickable = document.querySelectorAll('button, a, label[for], div[role="button"]');
+        for (const el of clickable) {
+            const txt = normalize(el.textContent || el.innerText || el.value || '');
+            if (!txt || el.offsetParent === null) continue;
+            if (txt === 'mark complete' || txt === 'mark as complete' || txt === 'complete lesson') {
+                el.click();
+                return txt;
+            }
+        }
+        return null;
+    }""")
+
+
+async def wait_for_completion_confirmation(page, timeout_seconds: int = 12) -> bool:
+    """Wait until the page shows that the lesson is complete before advancing."""
+    for _ in range(timeout_seconds * 2):
+        try:
+            confirmed = await page.evaluate(r"""() => {
+                const normalize = (text) => (text || '').trim().toLowerCase().replace(/\s+/g, ' ');
+                const visible = (el) => !!el && el.offsetParent !== null;
+
+                const clickable = document.querySelectorAll('button, a, label[for], div[role="button"]');
+                for (const el of clickable) {
+                    const txt = normalize(el.textContent || el.innerText || el.value || '');
+                    if (!txt || !visible(el)) continue;
+                    if (txt === 'completed' || txt === 'lesson completed' || txt === 'complete!') {
+                        return true;
+                    }
+                }
+
+                const bodyText = normalize(document.body?.innerText || '');
+                if (bodyText.includes('lesson completed') || bodyText.includes('marked complete')) {
+                    return true;
+                }
+
+                // Sidebar state sometimes reflects completion before navigation changes.
+                const completedItem = document.querySelector('[aria-current="page"] [class*="complete"], [aria-current="page"][class*="complete"]');
+                return !!completedItem;
+            }""")
+            if confirmed:
+                return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.5)
+    return False
+
+
+async def click_lesson_sidebar(page, lesson_path: str) -> bool:
     """Try clicking lesson in the sidebar navigation."""
     try:
-        clicked = await page.evaluate(f"""(idx) => {{
+        clicked = await page.evaluate(f"""(path) => {{
             // Find sidebar lesson links
             const links = document.querySelectorAll('nav a, aside a, [class*="sidebar"] a, [class*="lesson"] a');
             const lessonLinks = Array.from(links).filter(a => {{
                 const href = a.getAttribute('href') || '';
-                return href.includes('getting-started') || href.includes('lesson');
+                return href.includes(path) || href.includes('getting-started') || href.includes('ai-fundamentals');
             }});
-            if (lessonLinks.length > idx) {{
-                lessonLinks[idx].click();
-                return lessonLinks[idx].textContent.trim().substring(0, 40);
+            if (lessonLinks.length > 0) {{
+                lessonLinks[0].click();
+                return lessonLinks[0].textContent.trim().substring(0, 40);
             }}
             return null;
-        }}""", lesson_index)
+        }}""", lesson_path)
 
         if clicked:
             log(f"Clicked sidebar: {clicked}")
@@ -896,6 +1212,102 @@ async def click_lesson_sidebar(page, lesson_index: int) -> bool:
         return False
     except Exception:
         return False
+
+
+async def claim_course_credits(page, expected_reward_credits: int) -> bool:
+    """Wait for and claim the course completion credits modal."""
+    log(f"Waiting for credits claim modal ({expected_reward_credits} credits)...")
+    try:
+        modal_appeared = False
+        for _ in range(30):
+            claim_button = await page.query_selector('button.credit-redeem-action')
+            if claim_button:
+                modal_appeared = True
+                log("Credits claim modal detected!")
+                break
+            await asyncio.sleep(1)
+
+        if modal_appeared:
+            log("Clicking 'Claim Credits' button...")
+            await claim_button.click()
+            await asyncio.sleep(2)
+            log(f"Credits claimed successfully! (+{expected_reward_credits})")
+            return True
+
+        log("WARNING: Credits claim modal did not appear within 30 seconds")
+        return False
+    except Exception as e:
+        log(f"WARNING: Failed to claim credits: {e}")
+        return False
+
+
+async def run_course(page, context, course: dict, answers: list[int] | None = None):
+    course_name = course["name"]
+    lesson_paths = course["lesson_paths"]
+    default_answers = COURSE_DEFAULT_ANSWERS.get(course_name, [])
+
+    log(f"\n### COURSE START: {course_name} ###")
+    ok = await navigate_to_university(page, course["start_path"])
+    if not ok:
+        log(f"FAILED: Could not navigate to course {course_name}")
+        return False
+
+    await asyncio.sleep(2)
+    for i, lesson_path in enumerate(lesson_paths):
+        log(f"\n--- LESSON {i + 1}/{len(lesson_paths)}: {lesson_path} ---")
+        ok = await navigate_to_lesson(page, lesson_path)
+        if not ok:
+            ok = await click_lesson_sidebar(page, lesson_path)
+            if not ok:
+                log(f"WARNING: Could not navigate to lesson {lesson_path}")
+                continue
+
+        await asyncio.sleep(2)
+        await page.evaluate("""() => {
+            const quizHeader = Array.from(document.querySelectorAll('h2, h3, h4, strong, b'))
+                .find(el => (el.textContent || '').toLowerCase().includes('quiz'));
+            if (quizHeader) {
+                quizHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                window.scrollTo(0, document.body.scrollHeight * 0.7);
+            }
+        }""")
+        await asyncio.sleep(1)
+
+        auto_detected = await detect_correct_answer(page)
+        if auto_detected:
+            answer = int(auto_detected["index"])
+            log(f"Auto-detected correct answer: option {answer} ({auto_detected.get('source', 'unknown-source')})")
+            log(f"Auto-detected answer text: {auto_detected.get('text', '')[:120]}")
+            ok = await answer_quiz(page, answer, force_mark_complete=False)
+        elif i < len(default_answers):
+            answer = default_answers[i]
+            log(f"Using course default answer (force-complete): {answer}")
+            ok = await answer_quiz(page, answer, force_mark_complete=True)
+        elif answers and i < len(answers):
+            answer = answers[i]
+            log(f"Using provided answer (force-complete): {answer}")
+            ok = await answer_quiz(page, answer, force_mark_complete=True)
+        else:
+            print()
+            print(f"  ┌─ MANUAL INPUT NEEDED ─────────────────────")
+            print(f"  │ Lesson {i + 1} quiz is visible in the browser.")
+            print(f"  │ Enter the answer number (1, 2, or 3):")
+            print(f"  └──────────────────────────────────────────────")
+            try:
+                user_answer = input(f"  Answer for lesson {i + 1}: ").strip()
+                ok = user_answer.isdigit() and await answer_quiz(page, int(user_answer))
+            except (EOFError, KeyboardInterrupt):
+                log("Input cancelled, skipping remaining lessons")
+                break
+
+        if not ok:
+            log(f"WARNING: Failed to answer lesson {i + 1}")
+        await asyncio.sleep(2)
+
+    await claim_course_credits(page, course["expected_reward_credits"])
+    log(f"### COURSE COMPLETE: {course_name} ###")
+    return True
 
 
 async def run_university_flow(page, context, answers: list[int] | None = None):
@@ -912,10 +1324,11 @@ async def run_university_flow(page, context, answers: list[int] | None = None):
     # Set up interception
     await setup_request_interception(page)
 
-    # Navigate to university
-    ok = await navigate_to_university(page)
+    # Start on the first course landing page before OAuth kicks in
+    first_course_start = COURSE_PLAN[0]["start_path"]
+    ok = await navigate_to_university(page, first_course_start)
     if not ok:
-        log("FAILED: Could not navigate to university")
+        log("FAILED: Could not navigate to first course landing page")
         return False
 
     # Handle OAuth authorize
@@ -924,88 +1337,12 @@ async def run_university_flow(page, context, answers: list[int] | None = None):
         log("FAILED: Could not handle OAuth")
         return False
 
-    log("OAuth complete. Starting lessons...")
+    log("OAuth complete. Starting courses...")
     await asyncio.sleep(2)
-
-    # Answer all 6 lessons
-    for i in range(6):
-        log(f"\n--- LESSON {i + 1}/{6} ---")
-
-        # Navigate to lesson
-        ok = await navigate_to_lesson(page, i)
+    for course in COURSE_PLAN:
+        ok = await run_course(page, context, course, answers)
         if not ok:
-            # Try sidebar
-            ok = await click_lesson_sidebar(page, i)
-            if not ok:
-                log(f"WARNING: Could not navigate to lesson {i + 1}")
-                continue
-
-        await asyncio.sleep(2)
-
-        # Scroll to quiz section
-        await page.evaluate("""() => {
-            const quizHeader = Array.from(document.querySelectorAll('h2, h3, h4, strong, b'))
-                .find(el => (el.textContent || '').toLowerCase().includes('quiz'));
-            if (quizHeader) {
-                quizHeader.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            } else {
-                window.scrollTo(0, document.body.scrollHeight * 0.7);
-            }
-        }""")
-        await asyncio.sleep(1)
-
-        if answers and i < len(answers):
-            # Use provided answer
-            answer = answers[i]
-            log(f"Using provided answer: {answer}")
-            ok = await answer_quiz(page, answer)
-            if not ok:
-                log(f"WARNING: Failed to answer lesson {i + 1}")
-        else:
-            # Pause for manual input
-            print()
-            print(f"  ┌─ MANUAL INPUT NEEDED ─────────────────────")
-            print(f"  │ Lesson {i + 1} quiz is visible in the browser.")
-            print(f"  │ Enter the answer number (1, 2, or 3):")
-            print(f"  └──────────────────────────────────────────────")
-            try:
-                user_answer = input(f"  Answer for lesson {i + 1}: ").strip()
-                if user_answer.isdigit():
-                    ok = await answer_quiz(page, int(user_answer))
-                    if not ok:
-                        log(f"WARNING: Failed to answer lesson {i + 1}")
-                else:
-                    log(f"Skipping lesson {i + 1} (invalid input: {user_answer})")
-            except (EOFError, KeyboardInterrupt):
-                log("Input cancelled, skipping remaining lessons")
-                break
-
-        await asyncio.sleep(2)
-
-    # Wait for and claim credits modal
-    log("\n--- WAITING FOR CREDITS CLAIM MODAL ---")
-    try:
-        # Wait for the modal to appear (max 30 seconds)
-        modal_appeared = False
-        for attempt in range(30):
-            # Check if modal with "Claim Credits" button exists
-            claim_button = await page.query_selector('button.credit-redeem-action')
-            if claim_button:
-                modal_appeared = True
-                log("Credits claim modal detected!")
-                break
-            await asyncio.sleep(1)
-        
-        if modal_appeared:
-            # Click the "Claim Credits" button
-            log("Clicking 'Claim Credits' button...")
-            await claim_button.click()
-            await asyncio.sleep(2)
-            log("Credits claimed successfully!")
-        else:
-            log("WARNING: Credits claim modal did not appear within 30 seconds")
-    except Exception as e:
-        log(f"WARNING: Failed to claim credits: {e}")
+            log(f"WARNING: Course flow issue for {course['name']}")
 
     log("\n" + "=" * 50)
     log("UNIVERSITY FLOW COMPLETE")
@@ -1025,13 +1362,22 @@ async def main(email: str, password: str, mcp_url: str, answers: list[int] | Non
 
     # ── PHASE 1: Account Setup ──────────────────────────────────────
 
-    # Step 1: Browser login (browser stays open for Phase 2)
     log("PHASE 1: Account & MCP Setup")
-    log("STEP 1: Browser login...")
-    login_result, browser_manager, browser_page = await browser_login(email, password)
+    login_result, browser_manager, browser_page = None, None, None
+    for attempt in range(1, 4):
+        log(f"STEP 1: Browser login (attempt {attempt}/3)...")
+        result, manager, page_obj = await browser_login(email, password)
+        if "error" not in result:
+            login_result, browser_manager, browser_page = result, manager, page_obj
+            log(f"Login OK on attempt {attempt}")
+            break
+        log(f"Attempt {attempt} failed: {result['error']}")
+        if attempt < 3:
+            log("Waiting 5s before next attempt...")
+            await asyncio.sleep(5)
 
-    if "error" in login_result:
-        log(f"FAILED: {login_result['error']}")
+    if "error" in (login_result or {"error": "no result"}):
+        log("FAILED: All 3 login attempts exhausted")
         return
 
     # From here on, browser is alive — ensure cleanup on any exit path

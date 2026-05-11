@@ -143,6 +143,8 @@ _MAX_GL_MODELS = [
     "gl-gpt-5.2-codex",
 ]
 
+_MAX_GL2_MODELS = [m.replace("gl-", "gl2-", 1) for m in _MAX_GL_MODELS]
+
 # Dot-format aliases for Claude models (GPT already uses dots)
 _MAX_GL_DOT_ALIASES = {
     "gl-claude-opus-4.7": "gl-claude-opus-4-7",
@@ -151,6 +153,8 @@ _MAX_GL_DOT_ALIASES = {
     "gl-claude-sonnet-4.5": "gl-claude-sonnet-4-5",
     "gl-claude-haiku-4.5": "gl-claude-haiku-4-5",
 }
+
+_MAX_GL2_DOT_ALIASES = {k.replace("gl-", "gl2-", 1): v.replace("gl-", "gl2-", 1) for k, v in _MAX_GL_DOT_ALIASES.items()}
 
 # WaveSpeed models use provider/model format — any model with "/" is WaveSpeed
 # We also define popular aliases without the provider prefix
@@ -378,6 +382,10 @@ for m in _MAX_GL_MODELS:
     MODEL_TIER[m] = Tier.MAX_GL
 for alias in _MAX_GL_DOT_ALIASES:
     MODEL_TIER[alias] = Tier.MAX_GL
+for m in _MAX_GL2_MODELS:
+    MODEL_TIER[m] = Tier.MAX_GL
+for alias in _MAX_GL2_DOT_ALIASES:
+    MODEL_TIER[alias] = Tier.MAX_GL
 
 for m in _CHATBAI_MODELS:
     MODEL_TIER[m] = Tier.CHATBAI
@@ -392,7 +400,7 @@ for m in _THEROUTER_MODELS:
     MODEL_TIER[m] = Tier.THEROUTER
 
 # Hidden from display lists (routing-only aliases + thinking variants)
-_HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys())
+_HIDDEN_ALIASES: set[str] = set(_MAX_GL_DOT_ALIASES.keys()) | set(_MAX_GL2_DOT_ALIASES.keys())
 # Hide -thinking variants from model list (they still work for routing)
 for _m in list(_STANDARD_MODELS):
     _thinking = f"{_m}-thinking"
@@ -423,8 +431,10 @@ def get_tier(model: str) -> Tier | None:
     tier = MODEL_TIER.get(model)
     if tier is not None:
         return tier
-    # Any model with "gl-" prefix → MAX_GL (Gumloop)
+    # Any model with "gl-" or "gl2-" prefix → MAX_GL (Gumloop)
     if model.startswith("gl-"):
+        return Tier.MAX_GL
+    if model.startswith("gl2-"):
         return Tier.MAX_GL
     # Any model with "new-" prefix → WaveSpeed
     if model.startswith("new-"):

@@ -1,0 +1,31 @@
+I detect action/install intent: lo minta gue pasang rtk + caveman global, bikin selalu kepake, plus cara disable/uninstall. Gue install keduanya buat OpenCode + set default caveman always-on.
+Terpasang (global, user-level)
+RTK
+- Binary: C:\Users\ASUS\.local\bin\rtk.exe (v0.39.0)
+- OpenCode plugin (auto-rewrite command): C:\Users\ASUS\.config\opencode\plugins\rtk.ts
+- Verifikasi: rtk.exe --version jalan.
+Caveman
+- OpenCode plugin: C:\Users\ASUS\AppData\Roaming\opencode\plugins\caveman\
+- OpenCode commands: C:\Users\ASUS\AppData\Roaming\opencode\commands\
+  - caveman.md, caveman-commit.md, caveman-review.md
+- Always-on default mode: C:\Users\ASUS\AppData\Roaming\caveman\config.json diset:
+  - {"defaultMode":"full"}
+Biar “selalu menggunakan”
+1) Restart OpenCode (wajib) supaya plugin kebaca.
+2) Abis restart, semua bash tool call OpenCode bakal ke-rewrite lewat rtk otomatis.
+3) Caveman bakal default ke mode full (always-on) lewat config di atas.
+Nonaktif / Uninstall
+Disable sementara
+- Caveman: ubah C:\Users\ASUS\AppData\Roaming\caveman\config.json jadi:
+  - {"defaultMode":"off"}
+  - atau set env var CAVEMAN_DEFAULT_MODE=off (override config).
+- RTK: cara paling gampang disable = rename/hapus plugin:
+  - rename C:\Users\ASUS\.config\opencode\plugins\rtk.ts (mis. jadi rtk.ts.off), lalu restart OpenCode.
+Uninstall full
+- Caveman (cara resmi):
+  - npx -y github:JuliusBrussee/caveman -- --uninstall
+  - (opsional) hapus juga C:\Users\ASUS\AppData\Roaming\caveman\config.json
+- RTK:
+  - hapus C:\Users\ASUS\.config\opencode\plugins\rtk.ts
+  - hapus C:\Users\ASUS\.local\bin\rtk.exe
+Kalau lo bilang lo pake OpenCode via mana (CLI/desktop) gue bisa kasih langkah cek cepat setelah restart buat mastiin rewrite RTK bener-bener kejadian.

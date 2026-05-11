@@ -1,0 +1,348 @@
+{"type": "step-start", "final": false}
+{"type": "activity-notification", "final": false}
+{"type": "reasoning-start", "final": false}
+{"type": "interaction-name-update", "final": false}
+{"type": "reasoning-delta", "final": false, "delta": " The"}
+{"type": "reasoning-delta", "final": false, "delta": " user i"}
+{"type": "reasoning-delta", "final": false, "delta": "s askin"}
+{"type": "reasoning-delta", "final": false, "delta": "g me to"}
+{"type": "reasoning-delta", "final": false, "delta": " use MC"}
+{"type": "reasoning-delta", "final": false, "delta": "P tools"}
+{"type": "reasoning-delta", "final": false, "delta": " to lis"}
+{"type": "reasoning-delta", "final": false, "delta": "t the f"}
+{"type": "reasoning-delta", "final": false, "delta": "iles in"}
+{"type": "reasoning-delta", "final": false, "delta": " the wo"}
+{"type": "reasoning-delta", "final": false, "delta": "rkspace"}
+{"type": "reasoning-delta", "final": false, "delta": " root directory."}
+{"type": "reasoning-end", "final": false}
+{"type": "tool-input-start", "final": false, "toolName": "mcp_3k5451__list_directory"}
+{"type": "tool-input-delta", "final": false, "delta": ""}
+{"type": "tool-input-delta", "final": false, "delta": "{\"tool"}
+{"type": "tool-input-delta", "final": false, "delta": "_capt"}
+{"type": "tool-input-delta", "final": false, "delta": "ion\": \"Li"}
+{"type": "tool-input-delta", "final": false, "delta": "sting wor"}
+{"type": "tool-input-delta", "final": false, "delta": "kspace r"}
+{"type": "tool-input-delta", "final": false, "delta": "oot files"}
+{"type": "tool-input-delta", "final": false, "delta": "\""}
+{"type": "tool-input-delta", "final": false, "delta": ", \"pat"}
+{"type": "tool-input-delta", "final": false, "delta": "h\": \".\"}"}
+{"type": "tool-call", "final": false, "toolName": "list_directory", "input": {"path": "."}, "error": null}
+{"type": "tool-result", "final": false, "toolName": "list_directory", "input": {"path": "."}, "output": {"path": ".", "entries": ["[DIR]  .git/", "[FILE] .gitignore", "[FILE] .mcp_server.log", "[DIR]  .sisyphus/", "[DIR]  .venv/", "[FILE] _debug_windsurf_routing.py", "[FILE] _tmp_sync_test.py", "[FILE] add_accounts.py", "[DIR]  app/", "[DIR]  backup_gumloop_cli/", "[FILE] batch_dashboard.py", "[DIR]  chatbai/", "[FILE] check_db.py", "[FILE] COMMIT_MESSAGE.txt", "[FILE] DEPLOY GITHUB MANUAL.txt", "[FILE] DEVELOPER.md", "[FILE] Dockerfile", "[DIR]  docs/", "[FILE] example_persistent_chat.py", "[FILE] FIX_SUMMARY.md", "[FILE] FLOW_DIAGRAM.txt", "[FILE] GOOGLE_WELCOME_SCREEN_FIX.md", "[FILE] GUMLOOP_BATCH_LOGIN_EXPLAINED.md", "[FILE] GUMLOOP_HANDOFF.md", "[FILE] gumloop_login.py", "[FILE] GUMLOOP_SESSION_FIX.md", "[FILE] IMPLEMENTATION_CHECKLIST.md", "[FILE] INDEX_PERSISTENT_CHAT_FIX.md", "[FILE] install.sh", "[FILE] intercept_codebuddy.py", "[FILE] intercept_codebuddy_results.json", "[FILE] intercept_gumloop_mcp.py", "[FILE] intercept_gumloop_ws.py", "[FILE] intercept_mcp_log.json", "[FILE] intercept_windsurf.py", "[FILE] intercept_windsurf_results.json", "[FILE] login.py", "[FILE] MANUAL_TESTING_GUIDE.md", "[FILE] mcp_server.py", "[FILE] migrate_to_d1.py", "[FILE] ns", "[FILE] PERSISTENT_CHAT_GUIDE.md", "[FILE] README.md", "[FILE] README_PERSISTENT_CHAT_FIX.md", "[FILE] README_SESSION_FIX.md", "[FILE] requirements.txt", "[FILE] run_cb_login.sh", "[FILE] run_login.sh", "[FILE] session-ses_1ef2.md", "[FILE] setup.sh", "[FILE] setup_vps.sh", "[DIR]  skillboss/", "[FILE] SOLUTION_PERSISTENT_SESSION.md", "[FILE] start.py", "[FILE] start.sh", "[FILE] stop.sh", "[FILE] SUMMARY_GUMLOOP_SESSION_FIX.md", "[FILE] test_auto_persistent_session.py", "[FILE] test_gumloop_session.py", "[FILE] test_interaction_id_simple.py", "[DIR]  therouter/", "[DIR]  unified/", "[FILE] unifiedme", "[FILE] VERSION", "[DIR]  wavespeed/", "[DIR]  worker/"], "count": 66}}
+{"type": "finish", "final": false, "usage": {"input_tokens": 6, "output_tokens": 146, "cached_tokens": 0, "cache_creation_input_tokens": 38020, "total_tokens": 38172}}
+{"type": "step-start", "final": false}
+{"type": "text-start", "final": false}
+{"type": "text-delta", "final": false, "delta": "Here'"}
+{"type": "text-delta", "final": false, "delta": "s a s"}
+{"type": "text-delta", "final": false, "delta": "ummar"}
+{"type": "text-delta", "final": false, "delta": "y of "}
+{"type": "text-delta", "final": false, "delta": "the work"}
+{"type": "text-delta", "final": false, "delta": "space "}
+{"type": "text-delta", "final": false, "delta": "root ("}
+{"type": "text-delta", "final": false, "delta": "66 ent"}
+{"type": "text-delta", "final": false, "delta": "ries):"}
+{"type": "text-delta", "final": false, "delta": "\n\n## 📁"}
+{"type": "text-delta", "final": false, "delta": " Direc"}
+{"type": "text-delta", "final": false, "delta": "tories"}
+{"type": "text-delta", "final": false, "delta": " (12)\n"}
+{"type": "text-delta", "final": false, "delta": "- **`a"}
+{"type": "text-delta", "final": false, "delta": "pp/`**"}
+{"type": "text-delta", "final": false, "delta": ", **`wor"}
+{"type": "text-delta", "final": false, "delta": "ker/`**,"}
+{"type": "text-delta", "final": false, "delta": " **`unif"}
+{"type": "text-delta", "final": false, "delta": "ied/`** "}
+{"type": "text-delta", "final": false, "delta": "— likely"}
+{"type": "text-delta", "final": false, "delta": " applica"}
+{"type": "text-delta", "final": false, "delta": "tion/ser"}
+{"type": "text-delta", "final": false, "delta": "vice cod"}
+{"type": "text-delta", "final": false, "delta": "e\n- **`c"}
+{"type": "text-delta", "final": false, "delta": "hatbai/`"}
+{"type": "text-delta", "final": false, "delta": "**, **`s"}
+{"type": "text-delta", "final": false, "delta": "killboss/`**, **"}
+{"type": "text-delta", "final": false, "delta": "`theroute"}
+{"type": "text-delta", "final": false, "delta": "r/`**, **"}
+{"type": "text-delta", "final": false, "delta": "`wavespee"}
+{"type": "text-delta", "final": false, "delta": "d/`** — s"}
+{"type": "text-delta", "final": false, "delta": "ub-projec"}
+{"type": "text-delta", "final": false, "delta": "ts or mod"}
+{"type": "text-delta", "final": false, "delta": "ules\n- **"}
+{"type": "text-delta", "final": false, "delta": "`docs/`**"}
+{"type": "text-delta", "final": false, "delta": " — docume"}
+{"type": "text-delta", "final": false, "delta": "ntation\n-"}
+{"type": "text-delta", "final": false, "delta": " **`backup_g"}
+{"type": "text-delta", "final": false, "delta": "umloop_"}
+{"type": "text-delta", "final": false, "delta": "cli/`**"}
+{"type": "text-delta", "final": false, "delta": " — back"}
+{"type": "text-delta", "final": false, "delta": "up of a"}
+{"type": "text-delta", "final": false, "delta": " CLI to"}
+{"type": "text-delta", "final": false, "delta": "ol\n- **"}
+{"type": "text-delta", "final": false, "delta": "`.git/`"}
+{"type": "text-delta", "final": false, "delta": "**, **`"}
+{"type": "text-delta", "final": false, "delta": ".venv/`"}
+{"type": "text-delta", "final": false, "delta": "**, **`"}
+{"type": "text-delta", "final": false, "delta": ".sisyphus/`**"}
+{"type": "text-delta", "final": false, "delta": " — VC"}
+{"type": "text-delta", "final": false, "delta": "S, Py"}
+{"type": "text-delta", "final": false, "delta": "thon "}
+{"type": "text-delta", "final": false, "delta": "venv,"}
+{"type": "text-delta", "final": false, "delta": " and "}
+{"type": "text-delta", "final": false, "delta": "tooli"}
+{"type": "text-delta", "final": false, "delta": "ng\n\n#"}
+{"type": "text-delta", "final": false, "delta": "# 🐍 P"}
+{"type": "text-delta", "final": false, "delta": "ython"}
+{"type": "text-delta", "final": false, "delta": " scri"}
+{"type": "text-delta", "final": false, "delta": "pts\n- **Core"}
+{"type": "text-delta", "final": false, "delta": "/serve"}
+{"type": "text-delta", "final": false, "delta": "r**: `"}
+{"type": "text-delta", "final": false, "delta": "mcp_se"}
+{"type": "text-delta", "final": false, "delta": "rver.p"}
+{"type": "text-delta", "final": false, "delta": "y`, `s"}
+{"type": "text-delta", "final": false, "delta": "tart.p"}
+{"type": "text-delta", "final": false, "delta": "y`, `l"}
+{"type": "text-delta", "final": false, "delta": "ogin.p"}
+{"type": "text-delta", "final": false, "delta": "y`, `g"}
+{"type": "text-delta", "final": false, "delta": "umloop"}
+{"type": "text-delta", "final": false, "delta": "_login.py`, `"}
+{"type": "text-delta", "final": false, "delta": "add_acco"}
+{"type": "text-delta", "final": false, "delta": "unts.py`"}
+{"type": "text-delta", "final": false, "delta": ", `migra"}
+{"type": "text-delta", "final": false, "delta": "te_to_d1"}
+{"type": "text-delta", "final": false, "delta": ".py`, `c"}
+{"type": "text-delta", "final": false, "delta": "heck_db."}
+{"type": "text-delta", "final": false, "delta": "py`, `ba"}
+{"type": "text-delta", "final": false, "delta": "tch_dash"}
+{"type": "text-delta", "final": false, "delta": "board.py"}
+{"type": "text-delta", "final": false, "delta": "`, `exam"}
+{"type": "text-delta", "final": false, "delta": "ple_pers"}
+{"type": "text-delta", "final": false, "delta": "istent_cha"}
+{"type": "text-delta", "final": false, "delta": "t.py`\n- **"}
+{"type": "text-delta", "final": false, "delta": "Intercept "}
+{"type": "text-delta", "final": false, "delta": "utilities*"}
+{"type": "text-delta", "final": false, "delta": "*: `interc"}
+{"type": "text-delta", "final": false, "delta": "ept_codebu"}
+{"type": "text-delta", "final": false, "delta": "ddy.py`, `"}
+{"type": "text-delta", "final": false, "delta": "intercept_"}
+{"type": "text-delta", "final": false, "delta": "gumloop_mc"}
+{"type": "text-delta", "final": false, "delta": "p.py`, `in"}
+{"type": "text-delta", "final": false, "delta": "tercept_gumloop_ws."}
+{"type": "text-delta", "final": false, "delta": "py`, `interc"}
+{"type": "text-delta", "final": false, "delta": "ept_windsurf"}
+{"type": "text-delta", "final": false, "delta": ".py`\n- **Tes"}
+{"type": "text-delta", "final": false, "delta": "ts**: `test_"}
+{"type": "text-delta", "final": false, "delta": "auto_persist"}
+{"type": "text-delta", "final": false, "delta": "ent_session."}
+{"type": "text-delta", "final": false, "delta": "py`, `test_g"}
+{"type": "text-delta", "final": false, "delta": "umloop_sessi"}
+{"type": "text-delta", "final": false, "delta": "on.py`, `tes"}
+{"type": "text-delta", "final": false, "delta": "t_interactio"}
+{"type": "text-delta", "final": false, "delta": "n_id_simple.py"}
+{"type": "text-delta", "final": false, "delta": "`, `_t"}
+{"type": "text-delta", "final": false, "delta": "mp_syn"}
+{"type": "text-delta", "final": false, "delta": "c_test"}
+{"type": "text-delta", "final": false, "delta": ".py`, "}
+{"type": "text-delta", "final": false, "delta": "`_debu"}
+{"type": "text-delta", "final": false, "delta": "g_wind"}
+{"type": "text-delta", "final": false, "delta": "surf_r"}
+{"type": "text-delta", "final": false, "delta": "outing"}
+{"type": "text-delta", "final": false, "delta": ".py`\n\n"}
+{"type": "text-delta", "final": false, "delta": "## 🔧 S"}
+{"type": "text-delta", "final": false, "delta": "hell / setup"}
+{"type": "text-delta", "final": false, "delta": "\n- `insta"}
+{"type": "text-delta", "final": false, "delta": "ll.sh`, `"}
+{"type": "text-delta", "final": false, "delta": "setup.sh`"}
+{"type": "text-delta", "final": false, "delta": ", `setup_"}
+{"type": "text-delta", "final": false, "delta": "vps.sh`, "}
+{"type": "text-delta", "final": false, "delta": "`start.sh"}
+{"type": "text-delta", "final": false, "delta": "`, `stop."}
+{"type": "text-delta", "final": false, "delta": "sh`, `run"}
+{"type": "text-delta", "final": false, "delta": "_login.sh"}
+{"type": "text-delta", "final": false, "delta": "`, `run_c"}
+{"type": "text-delta", "final": false, "delta": "b_login.sh`\n-"}
+{"type": "text-delta", "final": false, "delta": " `Docke"}
+{"type": "text-delta", "final": false, "delta": "rfile`,"}
+{"type": "text-delta", "final": false, "delta": " `requi"}
+{"type": "text-delta", "final": false, "delta": "rements"}
+{"type": "text-delta", "final": false, "delta": ".txt`, "}
+{"type": "text-delta", "final": false, "delta": "`VERSIO"}
+{"type": "text-delta", "final": false, "delta": "N`, `.g"}
+{"type": "text-delta", "final": false, "delta": "itignor"}
+{"type": "text-delta", "final": false, "delta": "e`\n\n## "}
+{"type": "text-delta", "final": false, "delta": "📄 Docum"}
+{"type": "text-delta", "final": false, "delta": "entation (l"}
+{"type": "text-delta", "final": false, "delta": "ots of"}
+{"type": "text-delta", "final": false, "delta": " it — "}
+{"type": "text-delta", "final": false, "delta": "theme:"}
+{"type": "text-delta", "final": false, "delta": " Gumlo"}
+{"type": "text-delta", "final": false, "delta": "op ses"}
+{"type": "text-delta", "final": false, "delta": "sion/p"}
+{"type": "text-delta", "final": false, "delta": "ersist"}
+{"type": "text-delta", "final": false, "delta": "ent-ch"}
+{"type": "text-delta", "final": false, "delta": "at wor"}
+{"type": "text-delta", "final": false, "delta": "k)\n- `"}
+{"type": "text-delta", "final": false, "delta": "README.md`"}
+{"type": "text-delta", "final": false, "delta": ", `DEVE"}
+{"type": "text-delta", "final": false, "delta": "LOPER.m"}
+{"type": "text-delta", "final": false, "delta": "d`, `RE"}
+{"type": "text-delta", "final": false, "delta": "ADME_PE"}
+{"type": "text-delta", "final": false, "delta": "RSISTEN"}
+{"type": "text-delta", "final": false, "delta": "T_CHAT_"}
+{"type": "text-delta", "final": false, "delta": "FIX.md`"}
+{"type": "text-delta", "final": false, "delta": ", `READ"}
+{"type": "text-delta", "final": false, "delta": "ME_SESS"}
+{"type": "text-delta", "final": false, "delta": "ION_FIX"}
+{"type": "text-delta", "final": false, "delta": ".md`\n- `G"}
+{"type": "text-delta", "final": false, "delta": "UMLOOP"}
+{"type": "text-delta", "final": false, "delta": "_HANDO"}
+{"type": "text-delta", "final": false, "delta": "FF.md`"}
+{"type": "text-delta", "final": false, "delta": ", `GUM"}
+{"type": "text-delta", "final": false, "delta": "LOOP_S"}
+{"type": "text-delta", "final": false, "delta": "ESSION"}
+{"type": "text-delta", "final": false, "delta": "_FIX.m"}
+{"type": "text-delta", "final": false, "delta": "d`, `G"}
+{"type": "text-delta", "final": false, "delta": "UMLOOP"}
+{"type": "text-delta", "final": false, "delta": "_BATCH"}
+{"type": "text-delta", "final": false, "delta": "_LOGIN_EXPLAIN"}
+{"type": "text-delta", "final": false, "delta": "ED.md`,"}
+{"type": "text-delta", "final": false, "delta": " `SUMMA"}
+{"type": "text-delta", "final": false, "delta": "RY_GUML"}
+{"type": "text-delta", "final": false, "delta": "OOP_SES"}
+{"type": "text-delta", "final": false, "delta": "SION_FI"}
+{"type": "text-delta", "final": false, "delta": "X.md`\n-"}
+{"type": "text-delta", "final": false, "delta": " `PERSI"}
+{"type": "text-delta", "final": false, "delta": "STENT_C"}
+{"type": "text-delta", "final": false, "delta": "HAT_GUI"}
+{"type": "text-delta", "final": false, "delta": "DE.md`,"}
+{"type": "text-delta", "final": false, "delta": " `INDEX_P"}
+{"type": "text-delta", "final": false, "delta": "ERSISTE"}
+{"type": "text-delta", "final": false, "delta": "NT_CHAT"}
+{"type": "text-delta", "final": false, "delta": "_FIX.md"}
+{"type": "text-delta", "final": false, "delta": "`, `SOL"}
+{"type": "text-delta", "final": false, "delta": "UTION_P"}
+{"type": "text-delta", "final": false, "delta": "ERSISTE"}
+{"type": "text-delta", "final": false, "delta": "NT_SESS"}
+{"type": "text-delta", "final": false, "delta": "ION.md`"}
+{"type": "text-delta", "final": false, "delta": "\n- `GOO"}
+{"type": "text-delta", "final": false, "delta": "GLE_WEL"}
+{"type": "text-delta", "final": false, "delta": "COME_SCREE"}
+{"type": "text-delta", "final": false, "delta": "N_FIX.m"}
+{"type": "text-delta", "final": false, "delta": "d`, `FI"}
+{"type": "text-delta", "final": false, "delta": "X_SUMMA"}
+{"type": "text-delta", "final": false, "delta": "RY.md`,"}
+{"type": "text-delta", "final": false, "delta": " `IMPLE"}
+{"type": "text-delta", "final": false, "delta": "MENTATI"}
+{"type": "text-delta", "final": false, "delta": "ON_CHEC"}
+{"type": "text-delta", "final": false, "delta": "KLIST.m"}
+{"type": "text-delta", "final": false, "delta": "d`, `MA"}
+{"type": "text-delta", "final": false, "delta": "NUAL_TE"}
+{"type": "text-delta", "final": false, "delta": "STING_GUIDE"}
+{"type": "text-delta", "final": false, "delta": ".md`\n-"}
+{"type": "text-delta", "final": false, "delta": " `FLOW"}
+{"type": "text-delta", "final": false, "delta": "_DIAGR"}
+{"type": "text-delta", "final": false, "delta": "AM.txt"}
+{"type": "text-delta", "final": false, "delta": "`, `DE"}
+{"type": "text-delta", "final": false, "delta": "PLOY G"}
+{"type": "text-delta", "final": false, "delta": "ITHUB "}
+{"type": "text-delta", "final": false, "delta": "MANUAL"}
+{"type": "text-delta", "final": false, "delta": ".txt`,"}
+{"type": "text-delta", "final": false, "delta": " `COMM"}
+{"type": "text-delta", "final": false, "delta": "IT_MESSAG"}
+{"type": "text-delta", "final": false, "delta": "E.txt`,"}
+{"type": "text-delta", "final": false, "delta": " `sessi"}
+{"type": "text-delta", "final": false, "delta": "on-ses_"}
+{"type": "text-delta", "final": false, "delta": "1ef2.md"}
+{"type": "text-delta", "final": false, "delta": "`\n\n## 🗃"}
+{"type": "text-delta", "final": false, "delta": "️ Misc "}
+{"type": "text-delta", "final": false, "delta": "artifac"}
+{"type": "text-delta", "final": false, "delta": "ts\n- `i"}
+{"type": "text-delta", "final": false, "delta": "ntercep"}
+{"type": "text-delta", "final": false, "delta": "t_codeb"}
+{"type": "text-delta", "final": false, "delta": "uddy_results.json"}
+{"type": "text-delta", "final": false, "delta": "`, `interc"}
+{"type": "text-delta", "final": false, "delta": "ept_windsu"}
+{"type": "text-delta", "final": false, "delta": "rf_results"}
+{"type": "text-delta", "final": false, "delta": ".json`, `i"}
+{"type": "text-delta", "final": false, "delta": "ntercept_m"}
+{"type": "text-delta", "final": false, "delta": "cp_log.jso"}
+{"type": "text-delta", "final": false, "delta": "n`, `.mcp_"}
+{"type": "text-delta", "final": false, "delta": "server.log"}
+{"type": "text-delta", "final": false, "delta": "`\n- `ns`, "}
+{"type": "text-delta", "final": false, "delta": "`unifiedme"}
+{"type": "text-delta", "final": false, "delta": "` (no extens"}
+{"type": "text-delta", "final": false, "delta": "ions — po"}
+{"type": "text-delta", "final": false, "delta": "ssibly bi"}
+{"type": "text-delta", "final": false, "delta": "naries or"}
+{"type": "text-delta", "final": false, "delta": " scripts)"}
+{"type": "text-delta", "final": false, "delta": "\n\n## 🧭 Ta"}
+{"type": "text-delta", "final": false, "delta": "keaway\nTh"}
+{"type": "text-delta", "final": false, "delta": "is looks "}
+{"type": "text-delta", "final": false, "delta": "like a **"}
+{"type": "text-delta", "final": false, "delta": "Gumloop M"}
+{"type": "text-delta", "final": false, "delta": "CP server"}
+{"type": "text-delta", "final": false, "delta": " / session"}
+{"type": "text-delta", "final": false, "delta": "-persi"}
+{"type": "text-delta", "final": false, "delta": "stence"}
+{"type": "text-delta", "final": false, "delta": " proje"}
+{"type": "text-delta", "final": false, "delta": "ct** w"}
+{"type": "text-delta", "final": false, "delta": "ith a "}
+{"type": "text-delta", "final": false, "delta": "Python"}
+{"type": "text-delta", "final": false, "delta": " backe"}
+{"type": "text-delta", "final": false, "delta": "nd (`m"}
+{"type": "text-delta", "final": false, "delta": "cp_ser"}
+{"type": "text-delta", "final": false, "delta": "ver.py"}
+{"type": "text-delta", "final": false, "delta": "`, FastAPI/wor"}
+{"type": "text-delta", "final": false, "delta": "ker pat"}
+{"type": "text-delta", "final": false, "delta": "terns s"}
+{"type": "text-delta", "final": false, "delta": "uggeste"}
+{"type": "text-delta", "final": false, "delta": "d by `a"}
+{"type": "text-delta", "final": false, "delta": "pp/` + "}
+{"type": "text-delta", "final": false, "delta": "`worker"}
+{"type": "text-delta", "final": false, "delta": "/`), Do"}
+{"type": "text-delta", "final": false, "delta": "cker de"}
+{"type": "text-delta", "final": false, "delta": "ploymen"}
+{"type": "text-delta", "final": false, "delta": "t, seve"}
+{"type": "text-delta", "final": false, "delta": "ral login/"}
+{"type": "text-delta", "final": false, "delta": "interce"}
+{"type": "text-delta", "final": false, "delta": "pt util"}
+{"type": "text-delta", "final": false, "delta": "ities f"}
+{"type": "text-delta", "final": false, "delta": "or diff"}
+{"type": "text-delta", "final": false, "delta": "erent c"}
+{"type": "text-delta", "final": false, "delta": "lients "}
+{"type": "text-delta", "final": false, "delta": "(Windsu"}
+{"type": "text-delta", "final": false, "delta": "rf, Cod"}
+{"type": "text-delta", "final": false, "delta": "eBuddy,"}
+{"type": "text-delta", "final": false, "delta": " Gumloo"}
+{"type": "text-delta", "final": false, "delta": "p), and an"}
+{"type": "text-delta", "final": false, "delta": " unusu"}
+{"type": "text-delta", "final": false, "delta": "ally l"}
+{"type": "text-delta", "final": false, "delta": "arge a"}
+{"type": "text-delta", "final": false, "delta": "mount "}
+{"type": "text-delta", "final": false, "delta": "of fix"}
+{"type": "text-delta", "final": false, "delta": "/hando"}
+{"type": "text-delta", "final": false, "delta": "ff doc"}
+{"type": "text-delta", "final": false, "delta": "umenta"}
+{"type": "text-delta", "final": false, "delta": "tion c"}
+{"type": "text-delta", "final": false, "delta": "entere"}
+{"type": "text-delta", "final": false, "delta": "d on pers"}
+{"type": "text-delta", "final": false, "delta": "isten"}
+{"type": "text-delta", "final": false, "delta": "t cha"}
+{"type": "text-delta", "final": false, "delta": "t ses"}
+{"type": "text-delta", "final": false, "delta": "sions"}
+{"type": "text-delta", "final": false, "delta": ". The"}
+{"type": "text-delta", "final": false, "delta": " pres"}
+{"type": "text-delta", "final": false, "delta": "ence "}
+{"type": "text-delta", "final": false, "delta": "of `_"}
+{"type": "text-delta", "final": false, "delta": "tmp_*`"}
+{"type": "text-delta", "final": false, "delta": " and `_de"}
+{"type": "text-delta", "final": false, "delta": "bug_*` fi"}
+{"type": "text-delta", "final": false, "delta": "les sugge"}
+{"type": "text-delta", "final": false, "delta": "sts activ"}
+{"type": "text-delta", "final": false, "delta": "e in-prog"}
+{"type": "text-delta", "final": false, "delta": "ress debu"}
+{"type": "text-delta", "final": false, "delta": "gging. Wa"}
+{"type": "text-delta", "final": false, "delta": "nt me to "}
+{"type": "text-delta", "final": false, "delta": "dig into "}
+{"type": "text-delta", "final": false, "delta": "any speci"}
+{"type": "text-delta", "final": false, "delta": "fic area?"}
+{"type": "text-end", "final": false}
+{"type": "finish", "final": false, "usage": {"input_tokens": 1, "output_tokens": 1292, "cached_tokens": 38020, "cache_creation_input_tokens": 1322, "total_tokens": 40635}}
+{"type": "follow-up-prompts", "final": false}
+{"type": "finish", "final": true, "usage": {"input_tokens": 1, "output_tokens": 1292, "cached_tokens": 38020, "cache_creation_input_tokens": 1322, "total_tokens": 40635}}

@@ -1,0 +1,23 @@
+{"type": "session_start", "seq": 1, "ts": 1778525144.299078, "task": "read_hello", "prompt": "Read the sandbox hello file and tell me what it says.", "workspace_goal": "inspect workspace", "mcp_url": "http://fake.example/mcp", "tool_count": 2, "write_enabled": false, "role_budgets": {"planner": 1, "explorer": 3, "executor": 3, "verifier": 1}, "stream_mode": "pretty", "fixed_workspace": "C:\\Users\\ASUS\\unifiedme-ai\\_tmp_gumloop_omo_mcp\\fixtures\\workspace"}
+{"type": "role_start", "seq": 2, "ts": 1778525144.2999313, "role": "planner", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 3, "ts": 1778525144.3008091, "role": "planner", "delta": "planner", "iteration": null}
+{"type": "role_end", "seq": 4, "ts": 1778525144.3014445, "role": "planner", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "planner", "seq": 5, "ts": 1778525144.3019707, "context": {"task": "Read the sandbox hello file and tell me what it says.", "workspace_goal": "inspect workspace", "available_tools": ["read_file", "edit_file"], "workspace_rule": "Use only relative paths in the MCP workspace", "write_enabled": false}, "raw": "planner", "plan": {"status": "done", "goal": "Read hello", "exploration_checks": ["read hello"], "execution_steps": [], "validation_checks": ["summary"]}}
+{"type": "role_start", "seq": 6, "ts": 1778525144.302521, "role": "explorer", "model": "gl-fake", "iteration": 1}
+{"type": "message_delta", "seq": 7, "ts": 1778525144.3030417, "role": "explorer", "delta": "explorer-step1", "iteration": 1}
+{"type": "role_end", "seq": 8, "ts": 1778525144.3035467, "role": "explorer", "status": "needs_tool", "duration_ms": 0, "iteration": 1}
+{"type": "explorer", "seq": 9, "ts": 1778525144.3040745, "iteration": 1, "raw": "explorer-step1", "action": {"status": "needs_tool", "tool": "read_file", "arguments": {"path": "hello.txt"}, "reason": "Need file contents"}}
+{"type": "tool_call_start", "seq": 10, "ts": 1778525144.3046296, "phase": "explorer", "tool": "read_file", "arguments": {"path": "hello.txt"}, "iteration": 1}
+{"type": "explorer_tool", "seq": 11, "ts": 1778525144.3051548, "iteration": 1, "tool": "read_file", "arguments": {"path": "hello.txt"}, "result": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}}
+{"type": "tool_result", "seq": 12, "ts": 1778525144.3056302, "phase": "explorer", "tool": "read_file", "result_summary": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}, "iteration": 1}
+{"type": "role_start", "seq": 13, "ts": 1778525144.3062363, "role": "explorer", "model": "gl-fake", "iteration": 2}
+{"type": "message_delta", "seq": 14, "ts": 1778525144.306934, "role": "explorer", "delta": "explorer-step2", "iteration": 2}
+{"type": "role_end", "seq": 15, "ts": 1778525144.3075042, "role": "explorer", "status": "done", "duration_ms": 0, "iteration": 2}
+{"type": "explorer", "seq": 16, "ts": 1778525144.3080478, "iteration": 2, "raw": "explorer-step2", "action": {"status": "done", "summary": "Done exploring", "facts": ["hello.txt read"]}}
+{"type": "executor_skipped", "seq": 17, "ts": 1778525144.3085444, "reason": "read-only session", "iteration": null}
+{"type": "role_start", "seq": 18, "ts": 1778525144.3092322, "role": "verifier", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 19, "ts": 1778525144.3097398, "role": "verifier", "delta": "verifier", "iteration": null}
+{"type": "role_end", "seq": 20, "ts": 1778525144.3102813, "role": "verifier", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "verifier", "seq": 21, "ts": 1778525144.3107753, "raw": "verifier", "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}}
+{"type": "final_summary", "seq": 22, "ts": 1778525144.3112848, "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}, "changed_files": [], "transcript_path": "C:\\Users\\ASUS\\unifiedme-ai\\_tmp_gumloop_omo_mcp\\outputs\\omo_runs\\run_read_hello_1778525144_59368afc.jsonl"}
+{"type": "session_end", "seq": 23, "ts": 1778525144.311762, "changed_files": []}

@@ -1,0 +1,2 @@
+{"type": "session_start", "seq": 1, "ts": 1778523858.3951678, "task": "custom", "prompt": "Read hello please", "mcp_url": "http://fake.example/mcp", "tool_count": 2}
+{"type": "error", "seq": 2, "ts": 1778523858.39597, "role": "system", "error": "'FakeReasoner' object has no attribute 'model'"}

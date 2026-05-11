@@ -1,0 +1,1 @@
+Use MCP tools to read hello.txt from the current workspace and tell me its contents.

@@ -19,6 +19,7 @@ from .proxy_codebuddy import proxy_chat_completions as codebuddy_proxy, get_stre
 from .proxy_skillboss import proxy_chat_completions as skillboss_proxy
 from .proxy_wavespeed import proxy_chat_completions as wavespeed_proxy
 from .proxy_gumloop import proxy_chat_completions as gumloop_proxy
+from .proxy_gumloop_v2 import proxy_chat_completions as gumloop_v2_proxy
 from .proxy_windsurf import proxy_chat_completions as windsurf_proxy
 from .proxy_therouter import proxy_chat_completions as therouter_proxy
 from .chatbai.proxy import proxy_chat_completions as chatbai_proxy
@@ -344,7 +345,10 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 await mark_account_error(account["id"], tier, "Missing gl_gummie_id or gl_refresh_token")
                 continue
 
-            response, cost = await gumloop_proxy(body, account, client_wants_stream, proxy_url=proxy_url)
+            if model.startswith("gl2-"):
+                response, cost = await gumloop_v2_proxy(body, account, client_wants_stream, proxy_url=proxy_url)
+            else:
+                response, cost = await gumloop_proxy(body, account, client_wants_stream, proxy_url=proxy_url)
             latency = int((time.monotonic() - start) * 1000)
             status = response.status_code if hasattr(response, "status_code") else 200
             resp_headers_str = _capture_response_headers(response)

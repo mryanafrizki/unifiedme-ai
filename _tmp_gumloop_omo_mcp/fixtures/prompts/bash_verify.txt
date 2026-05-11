@@ -1,0 +1,1 @@
+Use MCP tools to run a harmless shell command that prints the current directory and lists files in the current workspace.

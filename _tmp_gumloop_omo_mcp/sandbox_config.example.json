@@ -1,0 +1,19 @@
+{
+  "gummie_id": "",
+  "user_id": "",
+  "refresh_token": "",
+  "id_token": "",
+  "model": "gl-claude-opus-4-7",
+  "captcha_api_key": "",
+  "proxy_base_url": "http://127.0.0.1:1430",
+  "proxy_api_key": "",
+  "mcp_url": "http://127.0.0.1:9877/mcp",
+  "max_iterations": 4,
+  "transcript_dir": "_tmp_gumloop_omo_mcp/outputs/omo_runs",
+  "session": {
+    "planner_budget": 1,
+    "explorer_budget": 4,
+    "verifier_budget": 1,
+    "stream": "pretty"
+  }
+}

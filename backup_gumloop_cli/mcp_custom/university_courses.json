@@ -1,0 +1,31 @@
+{
+  "courses": [
+    {
+      "name": "getting-started-with-gumloop",
+      "start_path": "/getting-started-with-gumloop/what-is-gumloop",
+      "lesson_paths": [
+        "/getting-started-with-gumloop/what-is-gumloop",
+        "/getting-started-with-gumloop/building-your-first-agent",
+        "/getting-started-with-gumloop/bring-your-agents-where-you-work",
+        "/getting-started-with-gumloop/teach-your-agents-skills",
+        "/getting-started-with-gumloop/tasks-for-your-agents",
+        "/getting-started-with-gumloop/chat-with-gumloop"
+      ],
+      "expected_reward_credits": 10000
+    },
+    {
+      "name": "ai-fundamentals",
+      "start_path": "/ai-fundamentals/what-is-an-ai-model",
+      "lesson_paths": [
+        "/ai-fundamentals/what-is-an-ai-model",
+        "/ai-fundamentals/hallucinations",
+        "/ai-fundamentals/tokens-and-costs",
+        "/ai-fundamentals/context",
+        "/ai-fundamentals/giving-your-chatbot-tools",
+        "/ai-fundamentals/what-are-instructions",
+        "/ai-fundamentals/skills"
+      ],
+      "expected_reward_credits": 5000
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{"type": "session_start", "seq": 1, "ts": 1778523983.3065112, "task": "read_hello", "prompt": "Read the sandbox hello file and tell me what it says.", "mcp_url": "http://fake.example/mcp", "tool_count": 2}
+{"type": "role_start", "seq": 2, "ts": 1778523983.3073232, "role": "planner", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 3, "ts": 1778523983.3080115, "role": "planner", "delta": "planner", "iteration": null}
+{"type": "role_end", "seq": 4, "ts": 1778523983.308563, "role": "planner", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "planner", "seq": 5, "ts": 1778523983.3099356, "context": {"task": "Read the sandbox hello file and tell me what it says.", "available_tools": ["read_file", "edit_file"], "workspace_rule": "Use only relative paths in the MCP workspace"}, "raw": "planner", "plan": {"status": "done", "goal": "Read hello", "exploration_checks": ["read hello"], "execution_steps": [], "validation_checks": ["summary"]}}
+{"type": "role_start", "seq": 6, "ts": 1778523983.3105764, "role": "explorer", "model": "gl-fake", "iteration": 1}
+{"type": "message_delta", "seq": 7, "ts": 1778523983.3110905, "role": "explorer", "delta": "explorer-step1", "iteration": 1}
+{"type": "role_end", "seq": 8, "ts": 1778523983.3116128, "role": "explorer", "status": "needs_tool", "duration_ms": 0, "iteration": 1}
+{"type": "explorer", "seq": 9, "ts": 1778523983.312186, "iteration": 1, "raw": "explorer-step1", "action": {"status": "needs_tool", "tool": "read_file", "arguments": {"path": "hello.txt"}, "reason": "Need file contents"}}
+{"type": "tool_call_start", "seq": 10, "ts": 1778523983.3127449, "phase": "explorer", "tool": "read_file", "arguments": {"path": "hello.txt"}, "iteration": 1}
+{"type": "explorer_tool", "seq": 11, "ts": 1778523983.3132713, "iteration": 1, "tool": "read_file", "arguments": {"path": "hello.txt"}, "result": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}}
+{"type": "tool_result", "seq": 12, "ts": 1778523983.3137846, "phase": "explorer", "tool": "read_file", "result_summary": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}, "iteration": 1}
+{"type": "role_start", "seq": 13, "ts": 1778523983.3143895, "role": "explorer", "model": "gl-fake", "iteration": 2}
+{"type": "message_delta", "seq": 14, "ts": 1778523983.31499, "role": "explorer", "delta": "explorer-step2", "iteration": 2}
+{"type": "role_end", "seq": 15, "ts": 1778523983.3155649, "role": "explorer", "status": "done", "duration_ms": 0, "iteration": 2}
+{"type": "explorer", "seq": 16, "ts": 1778523983.3161101, "iteration": 2, "raw": "explorer-step2", "action": {"status": "done", "summary": "Done exploring", "facts": ["hello.txt read"]}}
+{"type": "role_start", "seq": 17, "ts": 1778523983.3166442, "role": "executor", "model": "gl-fake", "iteration": 1}
+{"type": "message_delta", "seq": 18, "ts": 1778523983.317162, "role": "executor", "delta": "executor", "iteration": 1}
+{"type": "role_end", "seq": 19, "ts": 1778523983.317718, "role": "executor", "status": "done", "duration_ms": 0, "iteration": 1}
+{"type": "executor", "seq": 20, "ts": 1778523983.3182292, "iteration": 1, "raw": "executor", "action": {"status": "done", "summary": "Nothing to change", "changed_files": []}}
+{"type": "role_start", "seq": 21, "ts": 1778523983.3187537, "role": "verifier", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 22, "ts": 1778523983.3192809, "role": "verifier", "delta": "verifier", "iteration": null}
+{"type": "role_end", "seq": 23, "ts": 1778523983.3197906, "role": "verifier", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "verifier", "seq": 24, "ts": 1778523983.3203058, "raw": "verifier", "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}}
+{"type": "final_summary", "seq": 25, "ts": 1778523983.3208122, "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}, "changed_files": [], "transcript_path": "C:\\Users\\ASUS\\unifiedme-ai\\_tmp_gumloop_omo_mcp\\outputs\\omo_runs\\run_read_hello_1778523983.jsonl"}
+{"type": "session_end", "seq": 26, "ts": 1778523983.3213692, "changed_files": []}
+{"type": "session_start", "seq": 1, "ts": 1778523983.3288782, "task": "read_hello", "prompt": "Read the sandbox hello file and tell me what it says.", "mcp_url": "http://fake.example/mcp", "tool_count": 2}
+{"type": "role_start", "seq": 2, "ts": 1778523983.329474, "role": "planner", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 3, "ts": 1778523983.3300135, "role": "planner", "delta": "planner", "iteration": null}
+{"type": "role_end", "seq": 4, "ts": 1778523983.330555, "role": "planner", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "planner", "seq": 5, "ts": 1778523983.331062, "context": {"task": "Read the sandbox hello file and tell me what it says.", "available_tools": ["read_file", "edit_file"], "workspace_rule": "Use only relative paths in the MCP workspace"}, "raw": "planner", "plan": {"status": "done", "goal": "Read hello", "exploration_checks": ["read hello"], "execution_steps": [], "validation_checks": ["summary"]}}
+{"type": "role_start", "seq": 6, "ts": 1778523983.3315759, "role": "explorer", "model": "gl-fake", "iteration": 1}
+{"type": "message_delta", "seq": 7, "ts": 1778523983.3320632, "role": "explorer", "delta": "explorer-step1", "iteration": 1}
+{"type": "role_end", "seq": 8, "ts": 1778523983.3325763, "role": "explorer", "status": "needs_tool", "duration_ms": 0, "iteration": 1}
+{"type": "explorer", "seq": 9, "ts": 1778523983.3331392, "iteration": 1, "raw": "explorer-step1", "action": {"status": "needs_tool", "tool": "read_file", "arguments": {"path": "hello.txt"}, "reason": "Need file contents"}}
+{"type": "tool_call_start", "seq": 10, "ts": 1778523983.3337064, "phase": "explorer", "tool": "read_file", "arguments": {"path": "hello.txt"}, "iteration": 1}
+{"type": "explorer_tool", "seq": 11, "ts": 1778523983.3342843, "iteration": 1, "tool": "read_file", "arguments": {"path": "hello.txt"}, "result": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}}
+{"type": "tool_result", "seq": 12, "ts": 1778523983.334817, "phase": "explorer", "tool": "read_file", "result_summary": {"text": "1: Hello from the Gumloop OMO MCP sandbox."}, "iteration": 1}
+{"type": "role_start", "seq": 13, "ts": 1778523983.3354077, "role": "explorer", "model": "gl-fake", "iteration": 2}
+{"type": "message_delta", "seq": 14, "ts": 1778523983.3359585, "role": "explorer", "delta": "explorer-step2", "iteration": 2}
+{"type": "role_end", "seq": 15, "ts": 1778523983.3364847, "role": "explorer", "status": "done", "duration_ms": 0, "iteration": 2}
+{"type": "explorer", "seq": 16, "ts": 1778523983.3371084, "iteration": 2, "raw": "explorer-step2", "action": {"status": "done", "summary": "Done exploring", "facts": ["hello.txt read"]}}
+{"type": "role_start", "seq": 17, "ts": 1778523983.3376634, "role": "executor", "model": "gl-fake", "iteration": 1}
+{"type": "message_delta", "seq": 18, "ts": 1778523983.3381474, "role": "executor", "delta": "executor", "iteration": 1}
+{"type": "role_end", "seq": 19, "ts": 1778523983.3387353, "role": "executor", "status": "done", "duration_ms": 0, "iteration": 1}
+{"type": "executor", "seq": 20, "ts": 1778523983.3392832, "iteration": 1, "raw": "executor", "action": {"status": "done", "summary": "Nothing to change", "changed_files": []}}
+{"type": "role_start", "seq": 21, "ts": 1778523983.3397808, "role": "verifier", "model": "gl-fake", "iteration": null}
+{"type": "message_delta", "seq": 22, "ts": 1778523983.340274, "role": "verifier", "delta": "verifier", "iteration": null}
+{"type": "role_end", "seq": 23, "ts": 1778523983.3407772, "role": "verifier", "status": "done", "duration_ms": 0, "iteration": null}
+{"type": "verifier", "seq": 24, "ts": 1778523983.3412888, "raw": "verifier", "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}}
+{"type": "final_summary", "seq": 25, "ts": 1778523983.34179, "verification": {"status": "done", "summary": "Verified", "checks": ["read ok"], "risks": []}, "changed_files": [], "transcript_path": "C:\\Users\\ASUS\\unifiedme-ai\\_tmp_gumloop_omo_mcp\\outputs\\omo_runs\\run_read_hello_1778523983.jsonl"}
+{"type": "session_end", "seq": 26, "ts": 1778523983.3423629, "changed_files": []}
