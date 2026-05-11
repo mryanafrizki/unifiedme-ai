@@ -216,6 +216,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     model       TEXT DEFAULT '',
     endpoint    TEXT DEFAULT '',
     api_key     TEXT DEFAULT '',
+    gumloop_account_id INTEGER DEFAULT 0,
     gumloop_interaction_id TEXT DEFAULT '',
     created_at  TEXT DEFAULT (datetime('now')),
     updated_at  TEXT DEFAULT (datetime('now'))
@@ -259,6 +260,7 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN cb_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN ws_verified INTEGER DEFAULT 0",
         # Gumloop chat session persistence
+        "ALTER TABLE chat_sessions ADD COLUMN gumloop_account_id INTEGER DEFAULT 0",
         "ALTER TABLE chat_sessions ADD COLUMN gumloop_interaction_id TEXT DEFAULT ''",
         # Last test error for review
         "ALTER TABLE accounts ADD COLUMN kiro_test_error TEXT DEFAULT ''",
@@ -325,6 +327,13 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
             await conn.execute(sql)
         except Exception:
             pass  # Column already exists
+    try:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_gumloop_account "
+            "ON chat_sessions(gumloop_account_id) WHERE gumloop_account_id > 0"
+        )
+    except Exception:
+        pass
     await conn.commit()
 
 
@@ -1467,10 +1476,15 @@ async def delete_mcp_instance(mcp_id: int) -> bool:
 # Chat Sessions + Messages
 # ---------------------------------------------------------------------------
 
-async def create_chat_session(title: str = "New Chat", model: str = "") -> int:
+async def create_chat_session(
+    title: str = "New Chat",
+    model: str = "",
+    gumloop_account_id: int = 0,
+) -> int:
     conn = await get_db()
     cur = await conn.execute(
-        "INSERT INTO chat_sessions (title, model) VALUES (?, ?)", (title, model),
+        "INSERT INTO chat_sessions (title, model, gumloop_account_id) VALUES (?, ?, ?)",
+        (title, model, gumloop_account_id),
     )
     await conn.commit()
     return cur.lastrowid
@@ -1487,6 +1501,38 @@ async def get_chat_session(session_id: int) -> Optional[dict]:
     cur = await conn.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
     row = await cur.fetchone()
     return dict(row) if row else None
+
+
+async def get_gumloop_session_for_account(account_id: int) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT * FROM chat_sessions WHERE gumloop_account_id = ? ORDER BY id ASC LIMIT 1",
+        (account_id,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_or_create_gumloop_session_for_account(account_id: int, model: str = "gl-claude-sonnet-4-5") -> int:
+    """Return the durable persistent chat session for a Gumloop account."""
+    existing = await get_gumloop_session_for_account(account_id)
+    if existing:
+        return existing["id"]
+
+    conn = await get_db()
+    title = f"Persistent Session (Account {account_id})"
+    try:
+        cur = await conn.execute(
+            "INSERT INTO chat_sessions (title, model, gumloop_account_id) VALUES (?, ?, ?)",
+            (title, model, account_id),
+        )
+        await conn.commit()
+        return cur.lastrowid
+    except aiosqlite.IntegrityError:
+        existing = await get_gumloop_session_for_account(account_id)
+        if existing:
+            return existing["id"]
+        raise
 
 
 async def get_or_create_gumloop_interaction_id(session_id: int) -> str:
