@@ -445,9 +445,134 @@ async def click_google_account_choice(page, expected_email: str = "") -> bool:
         return False
 
 
+async def _close_popup_safe(popup_page) -> None:
+    """Close a Google popup page if it's still open."""
+    if popup_page is None:
+        return
+    try:
+        if not popup_page.is_closed():
+            await popup_page.close()
+    except Exception:
+        pass
+
+
+async def _try_google_login_flow(page, email: str, password: str) -> tuple:
+    """Single attempt at the Google OAuth flow inside an already-open browser.
+
+    Returns (tokens_dict | None, error_str | None, popup_page_to_close).
+    On success: (tokens, None, popup).
+    On failure: (None, "reason", popup).
+    """
+    popup_page = None
+    popup_future = asyncio.get_event_loop().create_future()
+
+    def on_popup(p):
+        nonlocal popup_page
+        popup_page = p
+        if not popup_future.done():
+            popup_future.set_result(p)
+
+    page.context.on("page", on_popup)
+    try:
+        clicked = await click_google_login(page)
+        if not clicked:
+            return None, "Could not find Google sign-in button", popup_page
+
+        try:
+            await asyncio.wait_for(popup_future, timeout=10)
+        except asyncio.TimeoutError:
+            pass
+
+        google_page = popup_page or page
+        if popup_page:
+            try:
+                await popup_page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                return None, "Google popup failed to load", popup_page
+        await asyncio.sleep(2)
+
+        # Account chooser
+        try:
+            chooser_url = google_page.url if not google_page.is_closed() else ""
+        except Exception:
+            chooser_url = ""
+        if "accounts.google.com" in chooser_url and "accountchooser" in chooser_url:
+            log("Google account chooser detected — clicking saved account...")
+            chosen = await click_google_account_choice(google_page, email)
+            if not chosen:
+                log("WARNING: Could not auto-click account chooser; continuing")
+            else:
+                await asyncio.sleep(3)
+
+        # Email
+        log(f"Filling email: {email}")
+        ok = await fill_google_email(google_page, email)
+        if not ok:
+            return None, "Failed to fill Google email", popup_page
+
+        try:
+            after_email_url = google_page.url if not google_page.is_closed() else ""
+        except Exception:
+            after_email_url = ""
+        if "accounts.google.com" in after_email_url:
+            log("Checking for account chooser after email entry...")
+            chosen_after = await click_google_account_choice(google_page, email)
+            if chosen_after:
+                log("Clicked account in post-email chooser")
+                await asyncio.sleep(3)
+
+        # Password
+        log("Filling password...")
+        ok = await fill_google_password(google_page, password)
+        if not ok:
+            return None, "Failed to fill Google password", popup_page
+
+        # Consent & redirect
+        log("Handling consent & redirect...")
+        redirected = await handle_consent(google_page, page)
+        if not redirected:
+            if "gumloop.com" not in page.url:
+                return None, "Failed to redirect to Gumloop after consent", popup_page
+
+        await asyncio.sleep(3)
+
+        # Extract tokens
+        log("Extracting Firebase tokens...")
+        try:
+            await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
+            await asyncio.sleep(4)
+        except Exception:
+            pass
+
+        tokens = None
+        for tok_attempt in range(8):
+            tokens = await extract_firebase_tokens(page)
+            if tokens and tokens.get("idToken"):
+                break
+            log(f"Token attempt {tok_attempt+1}/8...")
+            await asyncio.sleep(3)
+
+        if not tokens or not tokens.get("idToken"):
+            return None, "Failed to extract Firebase tokens", popup_page
+
+        return tokens, None, popup_page
+
+    finally:
+        # Remove the popup listener to avoid stacking on retries
+        try:
+            page.context.remove_listener("page", on_popup)
+        except Exception:
+            pass
+
+
 async def browser_login(email: str, password: str) -> tuple:
     """
-    Full browser login flow via Camoufox.
+    Full browser login flow via Camoufox with in-session retry.
+
+    On error at any Google auth step, closes the login dialog/popup,
+    navigates back to Gumloop home, and clicks "Login by Google" again.
+    Up to 3 retries WITHOUT restarting the browser.
+
     Returns (tokens_dict, manager, page) — caller is responsible for closing browser.
     On error returns ({"error": ...}, None, None).
     """
@@ -466,116 +591,50 @@ async def browser_login(email: str, password: str) -> tuple:
     page = await browser.new_page()
     page.set_default_timeout(30000)
 
+    max_in_session_retries = 3
+    last_error = "Unknown error"
+
     try:
         log("Opening Gumloop...")
         await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(3)
 
-        log("Clicking Google sign-in...")
-        popup_page = None
-        popup_future = asyncio.get_event_loop().create_future()
+        for attempt in range(1, max_in_session_retries + 1):
+            log(f"Google login attempt {attempt}/{max_in_session_retries}...")
 
-        def on_popup(p):
-            nonlocal popup_page
-            popup_page = p
-            if not popup_future.done():
-                popup_future.set_result(p)
+            tokens, error, popup = await _try_google_login_flow(page, email, password)
 
-        page.context.on("page", on_popup)
-        clicked = await click_google_login(page)
-        if not clicked:
-            await manager.__aexit__(None, None, None)
-            return {"error": "Could not find Google sign-in button"}, None, None
+            if tokens and not error:
+                # Success
+                await _close_popup_safe(popup)
+                log(f"Got tokens (uid={tokens.get('uid', '?')[:8]}...)")
+                result = {
+                    "id_token": tokens["idToken"],
+                    "refresh_token": tokens.get("refreshToken", ""),
+                    "user_id": tokens.get("uid", ""),
+                    "email": tokens.get("email", email),
+                    "display_name": tokens.get("displayName", ""),
+                }
+                return result, manager, page
 
-        try:
-            await asyncio.wait_for(popup_future, timeout=10)
-        except asyncio.TimeoutError:
-            pass
+            # Failed — close popup, go back to Gumloop, try again
+            last_error = error or "Unknown error"
+            log(f"Attempt {attempt} failed: {last_error}")
 
-        google_page = popup_page or page
-        if popup_page:
-            await popup_page.wait_for_load_state("domcontentloaded", timeout=15000)
-        await asyncio.sleep(2)
+            await _close_popup_safe(popup)
 
-        # If Google shows an account chooser, click the existing account first.
-        try:
-            chooser_url = google_page.url if not google_page.is_closed() else ""
-        except Exception:
-            chooser_url = ""
-        if "accounts.google.com" in chooser_url and "accountchooser" in chooser_url:
-            log("Google account chooser detected — clicking saved account...")
-            chosen = await click_google_account_choice(google_page, email)
-            if not chosen:
-                log("WARNING: Could not auto-click account chooser; continuing with current page state")
-            else:
-                await asyncio.sleep(3)
+            if attempt < max_in_session_retries:
+                log("Closing login dialog, navigating back to Gumloop home...")
+                try:
+                    await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(3)
+                except Exception as nav_err:
+                    log(f"Navigation back failed: {nav_err}")
+                log("Retrying — clicking Login by Google again...")
 
-        log(f"Filling email: {email}")
-        ok = await fill_google_email(google_page, email)
-        if not ok:
-            await manager.__aexit__(None, None, None)
-            return {"error": "Failed to fill Google email"}, None, None
-
-        try:
-            after_email_url = google_page.url if not google_page.is_closed() else ""
-        except Exception:
-            after_email_url = ""
-        if "accounts.google.com" in after_email_url:
-            log("Checking for account chooser after email entry...")
-            chosen_after = await click_google_account_choice(google_page, email)
-            if chosen_after:
-                log("Clicked account in post-email chooser")
-                await asyncio.sleep(3)
-
-        log("Filling password...")
-        ok = await fill_google_password(google_page, password)
-        if not ok:
-            await manager.__aexit__(None, None, None)
-            return {"error": "Failed to fill Google password"}, None, None
-
-        log("Handling consent & redirect...")
-        redirected = await handle_consent(google_page, page)
-        if not redirected:
-            if "gumloop.com" not in page.url:
-                await manager.__aexit__(None, None, None)
-                return {"error": "Failed to redirect to Gumloop"}, None, None
-
-        await asyncio.sleep(3)
-
-        log("Extracting Firebase tokens...")
-        try:
-            await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
-            await asyncio.sleep(4)
-        except Exception:
-            pass
-
-        tokens = None
-        for attempt in range(8):
-            tokens = await extract_firebase_tokens(page)
-            if tokens and tokens.get("idToken"):
-                break
-            log(f"Token attempt {attempt+1}/8...")
-            await asyncio.sleep(3)
-
-        if not tokens or not tokens.get("idToken"):
-            log("IndexedDB token extraction failed after all attempts — retry cycle will handle")
-            # No fallback: user explicitly requires IndexedDB only (hard gate).
-            # The 3-attempt retry in main() will redo the full login.
-
-        if not tokens or not tokens.get("idToken"):
-            await manager.__aexit__(None, None, None)
-            return {"error": "Failed to extract Firebase tokens"}, None, None
-
-        log(f"Got tokens (uid={tokens.get('uid', '?')[:8]}...)")
-        result = {
-            "id_token": tokens["idToken"],
-            "refresh_token": tokens.get("refreshToken", ""),
-            "user_id": tokens.get("uid", ""),
-            "email": tokens.get("email", email),
-            "display_name": tokens.get("displayName", ""),
-        }
-        # Return browser alive — caller closes it after university flow
-        return result, manager, page
+        # All in-session retries exhausted
+        await manager.__aexit__(None, None, None)
+        return {"error": f"All {max_in_session_retries} in-session retries failed: {last_error}"}, None, None
 
     except Exception as e:
         try:
@@ -1022,11 +1081,13 @@ async def answer_quiz(page, answer_index: int, force_mark_complete: bool = False
             if not force_mark_complete:
                 log("Not advancing")
                 return False
+            log("force_mark_complete=True, proceeding despite wrong answer...")
         elif quiz_result != "correct":
             log(f"WARNING: Quiz result not confirmed (got {quiz_result!r})")
             if not force_mark_complete:
                 log("Not advancing")
                 return False
+            log("force_mark_complete=True, proceeding despite unconfirmed result...")
         else:
             log("Quiz result confirmed CORRECT")
 
@@ -1036,8 +1097,11 @@ async def answer_quiz(page, answer_index: int, force_mark_complete: bool = False
             completed = await wait_for_completion_confirmation(page)
             if not completed:
                 log("WARNING: Mark Complete clicked but completion state was not confirmed")
-                return False
-            log("Lesson completion confirmed")
+                if not force_mark_complete:
+                    return False
+                log("force_mark_complete=True, treating as completed anyway")
+            else:
+                log("Lesson completion confirmed")
         else:
             log("No 'Mark Complete' button found; assuming lesson auto-completes")
 
@@ -1049,7 +1113,16 @@ async def answer_quiz(page, answer_index: int, force_mark_complete: bool = False
 
 
 async def detect_correct_answer(page) -> dict | None:
-    """Detect the correct quiz answer from DOM markers, independent of option ordering."""
+    """Detect the correct quiz answer from DOM markers, independent of option ordering.
+
+    Enhanced to handle cases where the correct answer is identified by:
+    - CSS class 'quiz-correct' on the option element
+    - 'quiz-explain-correct' explanation text matching an option
+    - data-correct attribute on the option or its radio input
+    - aria-label / aria-checked state after checking
+    - Hidden input or sibling element marking the correct option
+    - The checked radio input inside a correct-class parent
+    """
     try:
         result = await page.evaluate(r"""() => {
             const normalize = (text) => (text || '').trim().replace(/\s+/g, ' ');
@@ -1057,6 +1130,7 @@ async def detect_correct_answer(page) -> dict | None:
                 .filter(el => el && el.offsetParent !== null);
             if (!options.length) return null;
 
+            // Strategy 1: quiz-correct class on option
             for (let i = 0; i < options.length; i++) {
                 const option = options[i];
                 const cls = option.className || '';
@@ -1069,9 +1143,31 @@ async def detect_correct_answer(page) -> dict | None:
                 }
             }
 
+            // Strategy 2: data-correct attribute on option or child input
+            for (let i = 0; i < options.length; i++) {
+                const option = options[i];
+                if (option.dataset && (option.dataset.correct === 'true' || option.dataset.correct === '1' || option.getAttribute('data-correct') === 'true')) {
+                    return {
+                        index: i + 1,
+                        text: normalize(option.textContent || option.innerText || ''),
+                        source: 'data-correct-attr'
+                    };
+                }
+                const radio = option.querySelector('input[type="radio"]');
+                if (radio && (radio.dataset.correct === 'true' || radio.getAttribute('data-correct') === 'true')) {
+                    return {
+                        index: i + 1,
+                        text: normalize(option.textContent || option.innerText || ''),
+                        source: 'radio-data-correct'
+                    };
+                }
+            }
+
+            // Strategy 3: explanation text match (original)
             const correctExplain = document.querySelector('.quiz-explain-correct');
             if (correctExplain) {
                 const explanationText = normalize(correctExplain.textContent || '');
+                // Exact substring match
                 for (let i = 0; i < options.length; i++) {
                     const optionText = normalize(options[i].textContent || options[i].innerText || '');
                     if (optionText && explanationText && explanationText.toLowerCase().includes(optionText.toLowerCase())) {
@@ -1079,6 +1175,60 @@ async def detect_correct_answer(page) -> dict | None:
                             index: i + 1,
                             text: optionText,
                             source: 'explanation-text-match'
+                        };
+                    }
+                }
+                // Partial keyword overlap (for cases where explanation paraphrases the answer)
+                for (let i = 0; i < options.length; i++) {
+                    const optionText = normalize(options[i].textContent || options[i].innerText || '');
+                    if (!optionText) continue;
+                    const optionWords = optionText.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+                    const explainLower = explanationText.toLowerCase();
+                    const matchCount = optionWords.filter(w => explainLower.includes(w)).length;
+                    if (optionWords.length > 0 && matchCount >= Math.ceil(optionWords.length * 0.6)) {
+                        return {
+                            index: i + 1,
+                            text: optionText,
+                            source: 'explanation-keyword-overlap'
+                        };
+                    }
+                }
+            }
+
+            // Strategy 4: Look for correct answer in hidden elements or script data
+            const scripts = document.querySelectorAll('script[type="application/json"], script[type="application/ld+json"]');
+            for (const script of scripts) {
+                try {
+                    const data = JSON.parse(script.textContent || '{}');
+                    const correctIdx = data.correctAnswer || data.correct_answer || data.answer;
+                    if (typeof correctIdx === 'number' && correctIdx >= 0 && correctIdx < options.length) {
+                        return {
+                            index: correctIdx + 1,
+                            text: normalize(options[correctIdx].textContent || ''),
+                            source: 'script-json-data'
+                        };
+                    }
+                } catch(e) {}
+            }
+
+            // Strategy 5: CSS color / style hints (correct answers often have green styling)
+            for (let i = 0; i < options.length; i++) {
+                const style = window.getComputedStyle(options[i]);
+                const color = style.color || '';
+                const bg = style.backgroundColor || '';
+                // Green color typically indicates correct
+                if ((color.includes('rgb(0') || color.includes('rgb(34') || color.includes('rgb(22') || color.includes('#0') || color.includes('#2'))
+                    && (bg.includes('rgb(') || bg === '')) {
+                    // Only use this if other options don't share the same color
+                    const othersSame = options.some((opt, j) => {
+                        if (j === i) return false;
+                        return window.getComputedStyle(opt).color === color;
+                    });
+                    if (!othersSame) {
+                        return {
+                            index: i + 1,
+                            text: normalize(options[i].textContent || options[i].innerText || ''),
+                            source: 'css-color-hint'
                         };
                     }
                 }
@@ -1279,7 +1429,7 @@ async def run_course(page, context, course: dict, answers: list[int] | None = No
             answer = int(auto_detected["index"])
             log(f"Auto-detected correct answer: option {answer} ({auto_detected.get('source', 'unknown-source')})")
             log(f"Auto-detected answer text: {auto_detected.get('text', '')[:120]}")
-            ok = await answer_quiz(page, answer, force_mark_complete=False)
+            ok = await answer_quiz(page, answer, force_mark_complete=True)
         elif i < len(default_answers):
             answer = default_answers[i]
             log(f"Using course default answer (force-complete): {answer}")
@@ -1302,7 +1452,17 @@ async def run_course(page, context, course: dict, answers: list[int] | None = No
                 break
 
         if not ok:
-            log(f"WARNING: Failed to answer lesson {i + 1}")
+            log(f"WARNING: Failed to answer lesson {i + 1}, force-clicking Mark Complete as fallback...")
+            # Force mark complete even on failure
+            try:
+                clicked_mark = await click_mark_complete(page)
+                if clicked_mark:
+                    log(f"Fallback: clicked '{clicked_mark}'")
+                    await asyncio.sleep(2)
+                else:
+                    log("Fallback: no Mark Complete button found, continuing anyway")
+            except Exception as fallback_err:
+                log(f"Fallback mark complete error: {fallback_err}")
         await asyncio.sleep(2)
 
     await claim_course_credits(page, course["expected_reward_credits"])

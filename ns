@@ -1,0 +1,17 @@
+HTTP/1.1 404 Not Found
+Date: Fri, 08 May 2026 07:21:44 GMT
+Content-Type: application/json; charset=utf-8
+Content-Length: 85
+Connection: keep-alive
+Nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+access-control-allow-credentials: true
+access-control-expose-headers: x-router-request-id, x-router-model, x-router-provider, x-router-upstream-model, x-router-fallback-count, x-router-latency-ms, x-router-traffic-mode, X-Cache, X-Cache-Model
+vary: Origin
+x-request-id: f9b5180e-ea19-4cb6-a6ef-028395a4dd46
+Report-To: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=c5p7JnYu2Zxfbf%2FgtQytz504flxl0Wa37Lv1qnOxRLaJ44556dM6ZIB9APKvVfZKNZN%2ByN8X%2ByELj2EcbsBTQ5SdR9Zn9i2wbaJroem4E2cUljmptnTJBwU1PwQeZXKQQMU6"}]}
+cf-cache-status: DYNAMIC
+Server: cloudflare
+CF-RAY: 9f86b58e4cbdce5d-SIN
+alt-svc: h3=":443"; ma=86400
+
+{"message":"Route GET:/v1/chat/compl not found","error":"Not Found","statusCode":404}

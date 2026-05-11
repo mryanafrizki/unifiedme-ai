@@ -142,9 +142,93 @@ async def click_google_login(page) -> bool:
     return False
 
 
+async def click_google_account_choice(page, expected_email: str = "") -> bool:
+    """Click the visible Google account on the account chooser screen."""
+    try:
+        result = await page.evaluate(r"""(expectedEmail) => {
+            const normalize = (text) => (text || '').trim().toLowerCase();
+            const expected = normalize(expectedEmail);
+
+            // Strategy 1: data-identifier attributes (Google's standard)
+            const identified = Array.from(document.querySelectorAll('[data-identifier]'))
+                .filter(el => el && el.offsetParent !== null);
+
+            for (const el of identified) {
+                const idVal = normalize(el.getAttribute('data-identifier') || '');
+                if (!idVal) continue;
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (expected && (idVal === expected || idVal.includes(expected) || txt.includes(expected))) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            // Fallback: click first visible data-identifier that isn't "Use another account"
+            for (const el of identified) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (txt.includes('use another account')) continue;
+                el.click();
+                return true;
+            }
+
+            // Strategy 2: broader account row selectors
+            const candidates = Array.from(document.querySelectorAll(
+                'li[data-identifier], div[role="link"], div[class*="account"], ' +
+                '[class*="accountChooser"] li, [jsname] li, ul[class*="account"] li'
+            )).filter(el => el && el.offsetParent !== null);
+
+            for (const el of candidates) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (!txt || txt.includes('use another account') || txt.includes('help') || txt.includes('privacy')) continue;
+                if (expected && (txt.includes(expected) || txt.includes('@'))) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            // Last resort: any visible clickable item with an @ sign
+            const allVisible = Array.from(document.querySelectorAll(
+                'button, a, div[role="button"], li, [tabindex]:not([tabindex="-1"])'
+            )).filter(el => el && el.offsetParent !== null);
+
+            for (const el of allVisible) {
+                const txt = normalize(el.textContent || el.innerText || '');
+                if (txt.includes('@') && !txt.includes('use another account')) {
+                    el.click();
+                    return true;
+                }
+            }
+
+            return false;
+        }""", expected_email)
+        return bool(result)
+    except Exception as e:
+        emit({"type": "debug", "message": f"click_google_account_choice error: {e}"})
+        return False
+
+
+async def _handle_account_chooser(page, email: str) -> None:
+    """Detect and handle Google account chooser screen if present."""
+    try:
+        current_url = page.url
+    except Exception:
+        return
+    if "accounts.google.com" in current_url and "accountchooser" in current_url:
+        emit({"type": "debug", "message": "Account chooser detected, clicking saved account..."})
+        chosen = await click_google_account_choice(page, email)
+        if chosen:
+            emit({"type": "debug", "message": "Clicked account in chooser"})
+            await asyncio.sleep(3)
+        else:
+            emit({"type": "debug", "message": "WARNING: Could not click account in chooser"})
+
+
 async def fill_google_email(page, email: str) -> bool:
     """Fill Google email step."""
     try:
+        # Handle account chooser if it appeared instead of email input
+        await _handle_account_chooser(page, email)
+
         await page.wait_for_selector("#identifierId", state="visible", timeout=10000)
         locator = page.locator("#identifierId").first
         await locator.click(force=True)
@@ -166,9 +250,12 @@ async def fill_google_email(page, email: str) -> bool:
         return False
 
 
-async def fill_google_password(page, password: str) -> bool:
+async def fill_google_password(page, password: str, email: str = "") -> bool:
     """Fill Google password step."""
     try:
+        # Account chooser can appear after email entry too
+        await _handle_account_chooser(page, email)
+
         await page.wait_for_selector('input[name="Passwd"]', state="visible", timeout=10000)
         locator = page.locator('input[name="Passwd"]').first
         await locator.click(force=True)
@@ -319,6 +406,30 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
 
             emit({"type": "debug", "message": f"consent tick={tick} popup={'closed' if popup_closed else gurl[:60]} main={main_url[:60]} clicked={clicked_consent}"})
 
+            # ── Account chooser on popup ────────────────────────────
+            if not popup_closed and "accounts.google.com" in gurl and "accountchooser" in gurl:
+                emit({"type": "debug", "message": "Account chooser detected during consent, clicking account..."})
+                chosen = await click_google_account_choice(google_page)
+                if chosen:
+                    emit({"type": "debug", "message": "Clicked account in chooser during consent"})
+                    failed_click_count = 0
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    failed_click_count += 1
+
+            # ── Account chooser on main page ────────────────────────
+            if "accounts.google.com" in main_url and "accountchooser" in main_url:
+                emit({"type": "debug", "message": "Account chooser detected on main page during consent, clicking account..."})
+                chosen = await click_google_account_choice(main_page)
+                if chosen:
+                    emit({"type": "debug", "message": "Clicked account on main page chooser"})
+                    failed_click_count = 0
+                    await asyncio.sleep(3)
+                    continue
+                else:
+                    failed_click_count += 1
+
             # ── Too many failed clicks — bail ───────────────────────
             if failed_click_count >= _MAX_FAILED_CLICKS:
                 emit({"type": "debug", "message": f"consent: bailing after {failed_click_count} failed click attempts"})
@@ -408,6 +519,111 @@ async def handle_consent_and_redirect(google_page, main_page) -> bool:
     return False
 
 
+async def _close_popup_safe(popup_page) -> None:
+    """Close a Google popup page if it's still open."""
+    if popup_page is None:
+        return
+    try:
+        if not popup_page.is_closed():
+            await popup_page.close()
+    except Exception:
+        pass
+
+
+async def _single_login_attempt(page, email: str, password: str) -> tuple:
+    """Single Google login attempt inside an already-open browser.
+
+    Returns (tokens_dict | None, error_str | None, popup_page).
+    """
+    popup_page = None
+    popup_future = asyncio.get_event_loop().create_future()
+
+    def on_popup(p):
+        nonlocal popup_page
+        popup_page = p
+        if not popup_future.done():
+            popup_future.set_result(p)
+
+    page.context.on("page", on_popup)
+
+    try:
+        clicked = await click_google_login(page)
+        if not clicked:
+            return None, "Could not find Google sign-in button", popup_page
+
+        try:
+            await asyncio.wait_for(popup_future, timeout=8)
+        except asyncio.TimeoutError:
+            pass
+
+        if popup_page:
+            emit({"type": "debug", "message": f"Google login opened in popup: {popup_page.url[:80]}"})
+            try:
+                await popup_page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                return None, "Google popup failed to load", popup_page
+            google_page = popup_page
+        else:
+            emit({"type": "debug", "message": f"Google login in same page: {page.url[:80]}"})
+            google_page = page
+
+        await asyncio.sleep(2)
+
+        # Handle account chooser if present
+        await _handle_account_chooser(google_page, email)
+
+        # Fill email
+        emit({"type": "progress", "provider": "gumloop", "step": "email", "message": f"Filling email: {email}"})
+        ok = await fill_google_email(google_page, email)
+        if not ok:
+            return None, "Failed to fill Google email", popup_page
+
+        # Check for account chooser after email entry
+        await _handle_account_chooser(google_page, email)
+
+        # Fill password
+        emit({"type": "progress", "provider": "gumloop", "step": "password", "message": "Filling password..."})
+        ok = await fill_google_password(google_page, password, email)
+        if not ok:
+            return None, "Failed to fill Google password", popup_page
+
+        # Handle consent + redirect
+        emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Handling consent & waiting for redirect..."})
+        redirected = await handle_consent_and_redirect(google_page, page)
+        if not redirected:
+            if "gumloop.com" not in page.url:
+                return None, "Failed to redirect to Gumloop after consent", popup_page
+
+        await asyncio.sleep(3)
+
+        # Extract Firebase tokens
+        emit({"type": "progress", "provider": "gumloop", "step": "extract_tokens", "message": "Extracting Firebase tokens..."})
+        try:
+            await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
+            await asyncio.sleep(4)
+        except Exception:
+            pass
+
+        tokens = None
+        for tok_attempt in range(8):
+            tokens = await extract_firebase_tokens(page)
+            if tokens and tokens.get("idToken"):
+                break
+            emit({"type": "debug", "message": f"Token extraction attempt {tok_attempt+1}/8 - not found yet, waiting..."})
+            await asyncio.sleep(3)
+
+        if not tokens or not tokens.get("idToken"):
+            return None, "Failed to extract Firebase tokens", popup_page
+
+        return tokens, None, popup_page
+
+    finally:
+        try:
+            page.context.remove_listener("page", on_popup)
+        except Exception:
+            pass
+
+
 async def run_login(email: str, password: str) -> dict:
     from app.browser import create_stealth_browser
 
@@ -419,108 +635,62 @@ async def run_login(email: str, password: str) -> dict:
         humanize=True,
     )
 
+    MAX_LOGIN_ATTEMPTS = 3
+    last_error = "Unknown error"
+
     try:
         # Step 1: Go to Gumloop login
         emit({"type": "progress", "provider": "gumloop", "step": "navigate", "message": "Opening Gumloop..."})
         await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=20000)
         await asyncio.sleep(3)
 
-        # Step 2: Click Google sign-in (may open popup)
-        emit({"type": "progress", "provider": "gumloop", "step": "google_click", "message": "Clicking Google sign-in..."})
+        for attempt in range(1, MAX_LOGIN_ATTEMPTS + 1):
+            emit({"type": "progress", "provider": "gumloop", "step": "login_attempt", "message": f"Login attempt {attempt}/{MAX_LOGIN_ATTEMPTS}..."})
 
-        # Listen for popup before clicking
-        popup_page = None
-        popup_future = asyncio.get_event_loop().create_future()
+            tokens, error, popup = await _single_login_attempt(page, email, password)
 
-        def on_popup(p):
-            nonlocal popup_page
-            popup_page = p
-            if not popup_future.done():
-                popup_future.set_result(p)
+            if tokens and not error:
+                await _close_popup_safe(popup)
+                emit({"type": "progress", "provider": "gumloop", "step": "tokens_ok", "message": f"Got tokens (uid={tokens.get('uid', '?')[:8]}...)"})
 
-        page.context.on("page", on_popup)
+                # Extract gummie_id
+                emit({"type": "progress", "provider": "gumloop", "step": "find_agent", "message": "Looking for default agent..."})
+                gummie_id = await extract_gummie_id(page)
 
-        clicked = await click_google_login(page)
-        if not clicked:
-            return {"success": False, "error": "Could not find Google sign-in button"}
+                return {
+                    "success": True,
+                    "credentials": {
+                        "id_token": tokens["idToken"],
+                        "refresh_token": tokens.get("refreshToken", ""),
+                        "user_id": tokens.get("uid", ""),
+                        "email": tokens.get("email", email),
+                        "display_name": tokens.get("displayName", ""),
+                        "gummie_id": gummie_id or "",
+                    },
+                }
 
-        # Wait for popup or check if navigated in same page
-        try:
-            await asyncio.wait_for(popup_future, timeout=8)
-        except asyncio.TimeoutError:
-            pass
+            # Failed -- close popup, refresh page, retry
+            last_error = error or "Unknown error"
+            emit({"type": "debug", "message": f"Attempt {attempt} failed: {last_error}"})
+            await _close_popup_safe(popup)
 
-        # Determine which page has the Google login
-        if popup_page:
-            emit({"type": "debug", "message": f"Google login opened in popup: {popup_page.url[:80]}"})
-            await popup_page.wait_for_load_state("domcontentloaded", timeout=10000)
-            google_page = popup_page
-        else:
-            emit({"type": "debug", "message": f"Google login in same page: {page.url[:80]}"})
-            google_page = page
+            if attempt < MAX_LOGIN_ATTEMPTS:
+                emit({"type": "progress", "provider": "gumloop", "step": "retry", "message": f"Refreshing login page for retry {attempt+1}..."})
+                try:
+                    await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=20000)
+                    await asyncio.sleep(3)
+                except Exception as nav_err:
+                    emit({"type": "debug", "message": f"Navigation back failed: {nav_err}"})
 
-        await asyncio.sleep(2)
-
-        # Step 3: Fill Google email
-        emit({"type": "progress", "provider": "gumloop", "step": "email", "message": f"Filling email: {email}"})
-        ok = await fill_google_email(google_page, email)
-        if not ok:
-            return {"success": False, "error": "Failed to fill Google email"}
-
-        # Step 4: Fill Google password
-        emit({"type": "progress", "provider": "gumloop", "step": "password", "message": "Filling password..."})
-        ok = await fill_google_password(google_page, password)
-        if not ok:
-            return {"success": False, "error": "Failed to fill Google password"}
-
-        # Step 5: Handle consent screens + wait for redirect
-        emit({"type": "progress", "provider": "gumloop", "step": "consent", "message": "Handling consent & waiting for redirect..."})
-        redirected = await handle_consent_and_redirect(google_page, page)
-        if not redirected:
-            # Last resort: check if we're already on gumloop
-            if "gumloop.com" not in page.url:
-                return {"success": False, "error": "Failed to redirect to Gumloop after consent"}
-
-        await asyncio.sleep(3)  # Let Firebase settle
-
-        # Step 7: Extract Firebase tokens (from main page, not popup)
-        emit({"type": "progress", "provider": "gumloop", "step": "extract_tokens", "message": "Extracting Firebase tokens..."})
-
-        # Reload main page to ensure Firebase is initialized
+        # All attempts exhausted -- navigate to gumloop.com/home as fallback
+        emit({"type": "progress", "provider": "gumloop", "step": "fallback", "message": "All login attempts failed, navigating to gumloop.com/home..."})
         try:
             await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
-            await asyncio.sleep(4)
+            await asyncio.sleep(2)
         except Exception:
             pass
 
-        tokens = None
-        for attempt in range(8):
-            tokens = await extract_firebase_tokens(page)
-            if tokens and tokens.get("idToken"):
-                break
-            emit({"type": "debug", "message": f"Token extraction attempt {attempt+1}/8 - not found yet, waiting..."})
-            await asyncio.sleep(3)
-
-        if not tokens or not tokens.get("idToken"):
-            return {"success": False, "error": "Failed to extract Firebase tokens"}
-
-        emit({"type": "progress", "provider": "gumloop", "step": "tokens_ok", "message": f"Got tokens (uid={tokens.get('uid', '?')[:8]}...)"})
-
-        # Step 8: Try to find gummie_id
-        emit({"type": "progress", "provider": "gumloop", "step": "find_agent", "message": "Looking for default agent..."})
-        gummie_id = await extract_gummie_id(page)
-
-        return {
-            "success": True,
-            "credentials": {
-                "id_token": tokens["idToken"],
-                "refresh_token": tokens.get("refreshToken", ""),
-                "user_id": tokens.get("uid", ""),
-                "email": tokens.get("email", email),
-                "display_name": tokens.get("displayName", ""),
-                "gummie_id": gummie_id or "",
-            },
-        }
+        return {"success": False, "error": f"All {MAX_LOGIN_ATTEMPTS} login attempts failed: {last_error}"}
 
     except Exception as exc:
         return {"success": False, "error": str(exc)}
