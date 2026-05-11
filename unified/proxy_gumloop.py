@@ -255,14 +255,10 @@ async def _get_or_create_session_for_account(account_id: int, db) -> int:
             return session_id
         # Session was deleted, remove from cache
         del _session_cache[account_id]
-    
-    # Create new persistent session
-    session_id = await db.create_chat_session(
-        title=f"Persistent Session (Account {account_id})",
-        model="gl-claude-sonnet-4-5"
-    )
+
+    session_id = await db.get_or_create_gumloop_session_for_account(account_id)
     _session_cache[account_id] = session_id
-    log.info("Created persistent session %s for account %s", session_id, account_id)
+    log.info("Using persistent session %s for account %s", session_id, account_id)
     return session_id
 
 
@@ -745,8 +741,9 @@ def get_captcha_stats() -> dict:
 
 async def close_all_clients() -> None:
     """Cleanup auth cache and turnstile solver."""
-    global _auth_cache, _turnstile
+    global _auth_cache, _session_cache, _turnstile
     _auth_cache.clear()
+    _session_cache.clear()
     if _turnstile:
         _turnstile.close()
         _turnstile = None

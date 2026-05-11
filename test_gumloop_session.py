@@ -5,6 +5,7 @@ Tests:
 1. Database helper function get_or_create_gumloop_interaction_id
 2. Interaction ID persistence across multiple calls
 3. Different sessions have different interaction IDs
+4. Same Gumloop account reuses the same persistent chat session
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from unified import database as db
+from unified import proxy_gumloop
 
 
 async def test_database_helper():
@@ -110,6 +112,39 @@ async def test_nonexistent_session():
     print("✅ TEST 4 PASSED: Handles non-existent sessions gracefully!\n")
 
 
+async def test_account_session_reuse():
+    """Test durable per-account Gumloop session reuse."""
+    print("=" * 70)
+    print("TEST 5: Per-Account Session Reuse")
+    print("=" * 70)
+
+    account_id = 4242
+    session_1 = await db.get_or_create_gumloop_session_for_account(account_id)
+    session_2 = await db.get_or_create_gumloop_session_for_account(account_id)
+
+    print(f"✓ First lookup returned session: {session_1}")
+    print(f"✓ Second lookup returned session: {session_2}")
+    assert session_1 == session_2, "Same account should reuse same chat session"
+
+    session = await db.get_chat_session(session_1)
+    assert session is not None, "Persistent session should exist"
+    assert session["gumloop_account_id"] == account_id, "Session should be bound to the Gumloop account"
+
+    proxy_gumloop._session_cache.clear()
+    session_3 = await proxy_gumloop._get_or_create_session_for_account(account_id, db)
+    print(f"✓ Cache miss lookup returned session: {session_3}")
+    assert session_3 == session_1, "Cache miss should still recover same session from DB"
+
+    interaction_1 = await db.get_or_create_gumloop_interaction_id(session_1)
+    interaction_2 = await db.get_or_create_gumloop_interaction_id(session_3)
+    assert interaction_1 == interaction_2, "Recovered session should keep same Gumloop interaction"
+
+    other_account_session = await db.get_or_create_gumloop_session_for_account(account_id + 1)
+    assert other_account_session != session_1, "Different account should not share session"
+
+    print("✅ TEST 5 PASSED: Per-account session reuse is durable!\n")
+
+
 async def main():
     """Run all tests."""
     print("\n")
@@ -123,6 +158,7 @@ async def main():
         await test_multiple_sessions()
         await test_session_retrieval()
         await test_nonexistent_session()
+        await test_account_session_reuse()
         
         print("=" * 70)
         print("*** ALL TESTS PASSED! ***")
