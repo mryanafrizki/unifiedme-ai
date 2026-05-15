@@ -161,6 +161,8 @@ async def chat_completions(request: Request, _: bool = Depends(verify_admin)):
         "messages": messages,
         "stream": stream,
     }
+    if session_id:
+        payload["chat_session_id"] = session_id
 
     if not stream:
         # Non-streaming

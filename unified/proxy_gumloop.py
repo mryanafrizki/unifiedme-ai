@@ -295,36 +295,30 @@ async def proxy_chat_completions(
     # Convert messages — strip tools, simple format
     messages, system_prompt = _convert_openai_messages_simple(body)
 
-    # Handle persistent chat session via chat_session_id
-    # AUTO-PERSISTENT: If no chat_session_id provided, auto-create one per account
-    # This ensures conversation context is maintained across requests
+    account_id = account.get("id", 0)
     interaction_id = None
     chat_session_id = body.get("chat_session_id")
-    
-    # Auto-assign persistent session if not provided
-    if not chat_session_id:
-        account_id = account.get("id")
-        if account_id:
-            try:
-                session_id = await _get_or_create_session_for_account(account_id, db)
-                chat_session_id = session_id
-                log.info("Auto-assigned persistent session %s for account %s", session_id, account_id)
-            except Exception as e:
-                log.warning("Failed to auto-create session for account %s: %s", account_id, e)
-    
-    # Get or create interaction_id for the session
-    if chat_session_id:
+
+    if not chat_session_id and account_id:
         try:
-            session_id_int = int(chat_session_id)
-            interaction_id = await db.get_or_create_gumloop_interaction_id(session_id_int)
-            log.info("Using persistent interaction_id for chat_session_id=%s: %s", chat_session_id, interaction_id)
+            session_id = await _get_or_create_session_for_account(account_id, db)
+            chat_session_id = session_id
+            log.info("Auto-assigned persistent session %s for account %s", session_id, account_id)
+        except Exception as e:
+            log.warning("Failed to auto-create session for account %s: %s", account_id, e)
+
+    if chat_session_id and account_id:
+        try:
+            interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(
+                int(chat_session_id), account_id
+            )
+            log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
         except (ValueError, TypeError) as e:
             log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
-    
+
     if not interaction_id:
-        # Fallback: Generate new interaction_id (should rarely happen now)
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
-        log.warning("Generated one-off interaction_id: %s (no session assigned)", interaction_id)
+        log.warning("Generated one-off interaction_id: %s (no session binding)", interaction_id)
     for msg in messages:
         image_urls = msg.pop("_images", None)
         if not image_urls or msg.get("role") != "user":

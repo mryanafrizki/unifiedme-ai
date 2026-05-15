@@ -97,15 +97,29 @@ async def proxy_chat_completions(
     gumloop_tools = _openai_tools_to_gumloop(body.get("tools", []))
     converted_messages = convert_messages_with_tools(messages, tools=gumloop_tools, system=system_prompt)
 
+    account_id = account.get("id", 0)
     interaction_id = None
     chat_session_id = body.get("chat_session_id")
-    if chat_session_id:
+
+    if not chat_session_id and account_id:
         try:
-            interaction_id = await db.get_or_create_gumloop_interaction_id(int(chat_session_id))
-        except (TypeError, ValueError):
-            interaction_id = None
+            chat_session_id = await db.get_or_create_gumloop_session_for_account(account_id)
+            log.info("Auto-assigned persistent session %s for account %s", chat_session_id, account_id)
+        except Exception as e:
+            log.warning("Failed to auto-create session for account %s: %s", account_id, e)
+
+    if chat_session_id and account_id:
+        try:
+            interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(
+                int(chat_session_id), account_id
+            )
+            log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
+        except (TypeError, ValueError) as e:
+            log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
+
     if not interaction_id:
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
+        log.warning("Generated one-off interaction_id: %s (no session binding)", interaction_id)
 
     try:
         await update_gummie_config(
@@ -148,6 +162,16 @@ async def proxy_chat_completions(
     )
 
 
+def _safe_flush_point(text: str, start: int) -> int:
+    idx = text.find("<tool_use", start)
+    if idx >= 0:
+        return idx
+    for prefix in ("<tool_us", "<tool_u", "<tool_", "<tool", "<too", "<to", "<t", "<"):
+        if text.endswith(prefix):
+            return len(text) - len(prefix)
+    return len(text)
+
+
 def _stream_gumloop_v2(
     gummie_id: str,
     messages: list[dict[str, Any]],
@@ -161,6 +185,7 @@ def _stream_gumloop_v2(
 ) -> StreamingResponse:
     async def stream_sse() -> AsyncIterator[bytes]:
         full_text = ""
+        streamed_pos = 0
         usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         yield build_openai_chunk(stream_id, display_model, content="", role="assistant", created=created).encode()
         async for event in send_chat(gummie_id, messages, auth, turnstile, interaction_id=interaction_id, proxy_url=proxy_url):
@@ -169,6 +194,11 @@ def _stream_gumloop_v2(
                 delta = event.get("delta", "")
                 if delta:
                     full_text += delta
+                    safe_until = _safe_flush_point(full_text, streamed_pos)
+                    if safe_until > streamed_pos:
+                        chunk_text = full_text[streamed_pos:safe_until]
+                        yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
+                        streamed_pos = safe_until
             elif etype == "finish":
                 event_usage = event.get("usage") or {}
                 usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
@@ -184,12 +214,10 @@ def _stream_gumloop_v2(
                 yield build_openai_done().encode()
                 return
 
-        remaining_text, tool_uses = parse_tool_calls(full_text)
+        unstreamed = full_text[streamed_pos:]
+        remaining_text, tool_uses = parse_tool_calls(unstreamed)
         if remaining_text:
-            for i, word in enumerate(remaining_text.split(" ")):
-                chunk_text = word if i == 0 else " " + word
-                if chunk_text:
-                    yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
+            yield build_openai_chunk(stream_id, display_model, content=remaining_text, created=created).encode()
 
         for idx, tc in enumerate(_tool_uses_to_openai(tool_uses)):
             yield build_openai_tool_call_chunk(
@@ -212,6 +240,7 @@ def _stream_gumloop_v2(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
 
 
 async def _accumulate_gumloop_v2(

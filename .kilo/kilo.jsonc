@@ -1,0 +1,22 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "disabled_providers": [],
+  "provider": {
+    "Agentrouter": {
+      "name": "agentrouter",
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "https://agentrouter.org/v1"
+      },
+      "models": {
+        "gdeepseek-v4-pro": {
+          "name": "deepseek-v4-pro",
+          "reasoning": true
+        }
+      }
+    }
+  },
+  "permission": {
+    "bash": "allow"
+  }
+}

@@ -223,14 +223,27 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
 );
 
 CREATE TABLE IF NOT EXISTS chat_messages (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id  INTEGER NOT NULL,
-    role        TEXT NOT NULL,           -- system, user, assistant, thinking
-    content     TEXT NOT NULL DEFAULT '',
-    model       TEXT DEFAULT '',
-    created_at  TEXT DEFAULT (datetime('now')),
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL,
+    role TEXT NOT NULL,                       -- system, user, assistant, thinking
+    content TEXT NOT NULL DEFAULT '',
+    model TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now')),
     FOREIGN KEY (session_id) REFERENCES chat_sessions(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS gumloop_interaction_bindings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_session_id INTEGER NOT NULL,
+    account_id INTEGER NOT NULL,
+    interaction_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(chat_session_id, account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_gl_bindings_session ON gumloop_interaction_bindings(chat_session_id);
+CREATE INDEX IF NOT EXISTS idx_gl_bindings_account ON gumloop_interaction_bindings(account_id);
 """
 
 
@@ -1541,14 +1554,80 @@ async def get_or_create_gumloop_interaction_id(session_id: int) -> str:
     session = await get_chat_session(session_id)
     if not session:
         return ""
-    
+
     interaction_id = session.get("gumloop_interaction_id", "")
     if not interaction_id:
         # Generate new interaction_id and save it
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
         await update_chat_session(session_id, gumloop_interaction_id=interaction_id)
-    
+
     return interaction_id
+
+
+# ---------------------------------------------------------------------------
+# Gumloop interaction bindings (per session × account for emulated continuity)
+# ---------------------------------------------------------------------------
+
+
+async def get_gumloop_binding(chat_session_id: int, account_id: int) -> str:
+    """Get interaction_id for a (chat_session, account) pair. Returns '' if not found."""
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT interaction_id FROM gumloop_interaction_bindings WHERE chat_session_id =? AND account_id =?",
+        (chat_session_id, account_id),
+    )
+    row = await cur.fetchone()
+    return row["interaction_id"] if row else ""
+
+
+async def create_gumloop_binding(chat_session_id: int, account_id: int, interaction_id: str) -> None:
+    """Create a (chat_session, account) -> interaction_id binding. Ignores duplicates."""
+    conn = await get_db()
+    try:
+        await conn.execute(
+            "INSERT INTO gumloop_interaction_bindings (chat_session_id, account_id, interaction_id) VALUES (?,?,?)",
+            (chat_session_id, account_id, interaction_id),
+        )
+        await conn.commit()
+    except Exception:
+        # UNIQUE constraint violation — binding already exists, update it
+        await conn.execute(
+            "UPDATE gumloop_interaction_bindings SET interaction_id =?, updated_at = datetime('now') WHERE chat_session_id =? AND account_id =?",
+            (interaction_id, chat_session_id, account_id),
+        )
+        await conn.commit()
+
+
+async def get_or_create_gumloop_interaction_for_session_account(
+    chat_session_id: int, account_id: int
+) -> str:
+    """Get or create interaction_id for a (chat_session, account) pair.
+
+    This is the core of emulated continuity:
+    - If a binding exists for this (session, account), reuse its interaction_id
+    - If not, create a new interaction_id and bind it
+    - When account rotates, a new binding is created for the new account,
+      but the same logical chat_session continues seamlessly.
+    """
+    import uuid
+
+    existing = await get_gumloop_binding(chat_session_id, account_id)
+    if existing:
+        return existing
+
+    interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
+    await create_gumloop_binding(chat_session_id, account_id, interaction_id)
+    return interaction_id
+
+
+async def get_all_gumloop_bindings_for_session(chat_session_id: int) -> list[dict]:
+    """Get all account bindings for a chat session. Useful for debugging."""
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT * FROM gumloop_interaction_bindings WHERE chat_session_id =? ORDER BY created_at ASC",
+        (chat_session_id,),
+    )
+    return [dict(r) for r in await cur.fetchall()]
 
 
 async def update_chat_session(session_id: int, **fields: Any) -> bool:
