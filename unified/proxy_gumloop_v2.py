@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .gumloop.client import send_chat, update_gummie_config
 from .gumloop.parser import build_openai_chunk, build_openai_done, build_openai_tool_call_chunk
 from .gumloop.tool_converter import convert_messages_with_tools, parse_tool_calls
-from .proxy_gumloop import _ensure_turnstile_key, _get_auth, _get_turnstile
+from .proxy_gumloop import _ensure_turnstile_key, _get_auth, _get_turnstile, _rehydrate_openai_messages_if_needed
 
 log = logging.getLogger("unified.proxy_gumloop_v2")
 
@@ -116,6 +116,14 @@ async def proxy_chat_completions(
             log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
         except (TypeError, ValueError) as e:
             log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
+
+    messages = await _rehydrate_openai_messages_if_needed(
+        db,
+        int(chat_session_id) if chat_session_id else None,
+        account_id,
+        messages,
+    )
+    converted_messages = convert_messages_with_tools(messages, tools=gumloop_tools, system=system_prompt)
 
     if not interaction_id:
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]

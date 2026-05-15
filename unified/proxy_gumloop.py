@@ -241,6 +241,59 @@ def _convert_openai_messages_simple(body: dict) -> tuple[list[dict], str | None]
     return merged, system_prompt
 
 
+def _message_text_for_overlap(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return "\n".join(parts)
+    return str(content or "")
+
+
+def _persisted_rows_to_openai_messages(rows: list[dict]) -> list[dict]:
+    result = []
+    for row in rows:
+        role = row.get("role", "")
+        if role not in ("system", "user", "assistant"):
+            continue
+        result.append({"role": role, "content": row.get("content", "")})
+    return result
+
+
+def _merge_persisted_and_current_messages(persisted: list[dict], current: list[dict]) -> list[dict]:
+    if not persisted:
+        return current
+    if not current:
+        return persisted
+
+    def sig(msg: dict) -> tuple[str, str]:
+        return (str(msg.get("role", "")), _message_text_for_overlap(msg.get("content", "")))
+
+    max_overlap = min(len(persisted), len(current))
+    overlap = 0
+    for size in range(max_overlap, 0, -1):
+        if [sig(m) for m in persisted[-size:]] == [sig(m) for m in current[:size]]:
+            overlap = size
+            break
+    return persisted + current[overlap:]
+
+
+async def _rehydrate_openai_messages_if_needed(db, chat_session_id: int | None, account_id: int, current_messages: list[dict]) -> list[dict]:
+    if not chat_session_id or not account_id:
+        return current_messages
+    existing_binding = await db.get_gumloop_binding(chat_session_id, account_id)
+    if existing_binding:
+        return current_messages
+    persisted_rows = await db.get_chat_messages(chat_session_id)
+    persisted_messages = _persisted_rows_to_openai_messages(persisted_rows)
+    if not persisted_messages:
+        return current_messages
+    return _merge_persisted_and_current_messages(persisted_messages, current_messages)
+
+
 async def _get_or_create_session_for_account(account_id: int, db) -> int:
     """Get or create persistent chat session for account.
     
@@ -315,6 +368,13 @@ async def proxy_chat_completions(
             log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
         except (ValueError, TypeError) as e:
             log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
+
+    messages = await _rehydrate_openai_messages_if_needed(
+        db,
+        int(chat_session_id) if chat_session_id else None,
+        account_id,
+        messages,
+    )
 
     if not interaction_id:
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
