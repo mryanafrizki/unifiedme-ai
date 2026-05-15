@@ -1170,16 +1170,33 @@ async def _run_gumloop_login(
             })
             # Fall through to browser signup
 
-    # Browser signup path: run gumloop_login.py as subprocess
+    # Browser signup path: run intercept_gumloop_university.py as subprocess
     env = {**os.environ, "BATCHER_CAMOUFOX_HEADLESS": "true" if batch_state.headless else "false"}
     python_bin = str(PYTHON_BIN)
     gl_script = str(GUMLOOP_SCRIPT)
+
+    log.info("GL script path: %s (exists=%s)", gl_script, os.path.exists(gl_script))
+    batch_state.broadcast({
+        "type": "job_log", "job_id": job.id, "email": job.email,
+        "log_type": "info", "provider": "gumloop",
+        "step": "script", "message": f"Using script: {os.path.basename(gl_script)}",
+        "proxy_used": proxy_url_used,
+    })
 
     if not os.path.exists(gl_script):
         log.error("Gumloop script not found: %s", gl_script)
         return {"gumloop": {"success": False, "error": f"Script not found: {gl_script}"}}, ""
 
     cmd_args = [python_bin, gl_script, "--email", job.email, "--password", job.password]
+
+    # Pass MCP URL so the script creates + attaches MCP during browser session
+    if job.mcp_urls:
+        cmd_args.extend(["--mcp-url", job.mcp_urls[0]])
+
+    # Pass default answers so university quizzes don't block on input()
+    cmd_args.extend(["--answers", "2,1,3,2,1,3"])
+
+    log.info("GL cmd_args: %s", " ".join(cmd_args))
 
     proc = await asyncio.create_subprocess_exec(
         *cmd_args,
@@ -1221,7 +1238,7 @@ async def _run_gumloop_login(
                 })
             job.logs.append({"ts": time.time(), "raw": text})
 
-    GL_TIMEOUT = 180
+    GL_TIMEOUT = 600  # 10 min — includes university flow (login + MCP + 2 courses + quizzes)
     try:
         await asyncio.wait_for(
             asyncio.gather(

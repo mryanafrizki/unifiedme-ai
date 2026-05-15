@@ -536,24 +536,44 @@ async def _try_google_login_flow(page, email: str, password: str) -> tuple:
 
         await asyncio.sleep(3)
 
-        # Extract tokens
+        # Extract tokens - MUST be on /home page
         log("Extracting Firebase tokens...")
+        
+        # Handle /boarding redirect for new accounts
+        try:
+            current_url = page.url
+            if "/boarding" in current_url:
+                log("🆕 New account detected - redirecting from /boarding to /home")
+            elif "gumloop.com" in current_url:
+                log(f"✅ Redirected to: {current_url[:60]}")
+        except Exception:
+            pass
+        
+        # Force navigation to /home (required for token extraction)
+        log("Navigating to /home...")
         try:
             await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
             await asyncio.sleep(4)
-        except Exception:
-            pass
+            log("✅ On /home page")
+        except Exception as e:
+            log(f"⚠️  Failed to navigate to /home: {e}")
+            # Try to continue anyway - tokens might already be available
 
+        # Retry token extraction with clear logging
         tokens = None
         for tok_attempt in range(8):
+            log(f"Token extraction attempt {tok_attempt+1}/8...")
             tokens = await extract_firebase_tokens(page)
             if tokens and tokens.get("idToken"):
+                log(f"✅ Got tokens! (uid={tokens.get('uid', '?')[:10]}...)")
                 break
-            log(f"Token attempt {tok_attempt+1}/8...")
             await asyncio.sleep(3)
 
         if not tokens or not tokens.get("idToken"):
+            log("❌ FAILED: No tokens after 8 attempts")
             return None, "Failed to extract Firebase tokens", popup_page
+        
+        log("✅ Token extraction complete")
 
         return tokens, None, popup_page
 
@@ -581,7 +601,7 @@ async def browser_login(email: str, password: str) -> tuple:
 
     log("Launching browser (visible)...")
     manager = AsyncCamoufox(
-        headless=False,
+        headless=os.environ.get("BATCHER_CAMOUFOX_HEADLESS", "false").lower() in ("true", "1"),
         os="windows",
         block_webrtc=True,
         humanize=False,
@@ -1439,17 +1459,23 @@ async def run_course(page, context, course: dict, answers: list[int] | None = No
             log(f"Using provided answer (force-complete): {answer}")
             ok = await answer_quiz(page, answer, force_mark_complete=True)
         else:
-            print()
-            print(f"  ┌─ MANUAL INPUT NEEDED ─────────────────────")
-            print(f"  │ Lesson {i + 1} quiz is visible in the browser.")
-            print(f"  │ Enter the answer number (1, 2, or 3):")
-            print(f"  └──────────────────────────────────────────────")
-            try:
-                user_answer = input(f"  Answer for lesson {i + 1}: ").strip()
-                ok = user_answer.isdigit() and await answer_quiz(page, int(user_answer))
-            except (EOFError, KeyboardInterrupt):
-                log("Input cancelled, skipping remaining lessons")
-                break
+            # In subprocess/headless mode (no TTY), use fallback answer instead of blocking on input()
+            if not sys.stdin.isatty():
+                fallback = 2  # safe default
+                log(f"No TTY — using fallback answer {fallback} for lesson {i + 1} (force-complete)")
+                ok = await answer_quiz(page, fallback, force_mark_complete=True)
+            else:
+                print()
+                print(f"  ┌─ MANUAL INPUT NEEDED ─────────────────────")
+                print(f"  │ Lesson {i + 1} quiz is visible in the browser.")
+                print(f"  │ Enter the answer number (1, 2, or 3):")
+                print(f"  └──────────────────────────────────────────────")
+                try:
+                    user_answer = input(f"  Answer for lesson {i + 1}: ").strip()
+                    ok = user_answer.isdigit() and await answer_quiz(page, int(user_answer))
+                except (EOFError, KeyboardInterrupt):
+                    log("Input cancelled, skipping remaining lessons")
+                    break
 
         if not ok:
             log(f"WARNING: Failed to answer lesson {i + 1}, force-clicking Mark Complete as fallback...")
@@ -1635,6 +1661,21 @@ async def _main_with_browser(
         json.dump(full_output, f, indent=2, ensure_ascii=False)
     log(f"Credentials saved to {out_file}")
 
+    # Emit JSON result for batch_runner (must be before university so credentials are captured early)
+    import json as _json
+    _batch_result = {
+        "type": "result",
+        "gumloop": {
+            "success": True,
+            "credentials": {
+                "id_token": id_token,
+                "refresh_token": refresh_tok,
+                "user_id": user_id,
+                "gummie_id": gummie_id,
+            },
+        },
+    }
+    print(_json.dumps(_batch_result), flush=True)
 
     # -- PHASE 2: University Flow (reuse same browser -- session intact) --
 

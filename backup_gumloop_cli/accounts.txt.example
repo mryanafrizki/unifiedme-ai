@@ -1,0 +1,12 @@
+# Example batch accounts file
+# Format: email:password (one per line)
+# Lines starting with # are ignored
+
+# Test accounts
+test1@example.com:password123
+test2@example.com:password456
+test3@example.com:password789
+
+# Production accounts
+# user@domain.com:secretpass
+# another@domain.com:anotherpass

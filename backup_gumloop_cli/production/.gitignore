@@ -1,0 +1,27 @@
+# Sensitive credentials
+result.json
+
+# Debug outputs
+screenshots/
+*.log
+*_log.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Environment
+.env
+.venv
+env/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
