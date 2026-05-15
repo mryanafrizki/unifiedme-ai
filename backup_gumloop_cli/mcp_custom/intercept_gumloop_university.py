@@ -34,6 +34,12 @@ import base64
 
 import httpx
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 # ─── Config ──────────────────────────────────────────────────────────
 
 API_BASE = "https://api.gumloop.com"
@@ -536,44 +542,43 @@ async def _try_google_login_flow(page, email: str, password: str) -> tuple:
 
         await asyncio.sleep(3)
 
-        # Extract tokens - MUST be on /home page
-        log("Extracting Firebase tokens...")
-        
-        # Handle /boarding redirect for new accounts
+        log("Extracting Firebase tokens.")
+
         try:
             current_url = page.url
-            if "/boarding" in current_url:
-                log("🆕 New account detected - redirecting from /boarding to /home")
+            if "/onboarding" in current_url or "/boarding" in current_url:
+                log("New account detected at onboarding page")
             elif "gumloop.com" in current_url:
-                log(f"✅ Redirected to: {current_url[:60]}")
+                log(f"Redirected to: {current_url[:60]}")
         except Exception:
             pass
-        
-        # Force navigation to /home (required for token extraction)
-        log("Navigating to /home...")
-        try:
-            await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
-            await asyncio.sleep(4)
-            log("✅ On /home page")
-        except Exception as e:
-            log(f"⚠️  Failed to navigate to /home: {e}")
-            # Try to continue anyway - tokens might already be available
 
-        # Retry token extraction with clear logging
         tokens = None
         for tok_attempt in range(8):
-            log(f"Token extraction attempt {tok_attempt+1}/8...")
+            log(f"Token extraction attempt {tok_attempt+1}/8")
             tokens = await extract_firebase_tokens(page)
+            if not tokens or not tokens.get("idToken"):
+                tokens = await extract_gumloop_auth_fallback(page)
             if tokens and tokens.get("idToken"):
-                log(f"✅ Got tokens! (uid={tokens.get('uid', '?')[:10]}...)")
+                log(f"Got tokens (uid={tokens.get('uid', '?')[:10]}.)")
                 break
+
+            if tok_attempt == 3:
+                log("Tokens not found yet, trying /home navigation.")
+                try:
+                    await page.goto("https://www.gumloop.com/home", wait_until="domcontentloaded", timeout=15000)
+                    await asyncio.sleep(4)
+                    log("Navigated to /home")
+                except Exception as e:
+                    log(f"Navigation to /home failed: {e}")
+
             await asyncio.sleep(3)
 
         if not tokens or not tokens.get("idToken"):
-            log("❌ FAILED: No tokens after 8 attempts")
+            log("FAILED: No tokens after 8 attempts")
             return None, "Failed to extract Firebase tokens", popup_page
-        
-        log("✅ Token extraction complete")
+
+        log("Token extraction complete")
 
         return tokens, None, popup_page
 

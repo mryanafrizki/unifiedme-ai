@@ -66,13 +66,45 @@ def _is_windows() -> bool:
     return platform.system() == "Windows"
 
 
+def _run_git(install_dir: Path, *args: str, timeout: int = 30) -> subprocess.CompletedProcess:
+ return subprocess.run(
+ ["git", *args],
+ capture_output=True,
+ text=True,
+ timeout=timeout,
+ cwd=str(install_dir),
+ )
+
+
+def _current_git_branch(install_dir: Path) -> str:
+ result = _run_git(install_dir, "branch", "--show-current")
+ return result.stdout.strip() if result.returncode == 0 else ""
+
+
+def _remote_branch_exists(install_dir: Path, remote: str, branch: str) -> bool:
+ result = _run_git(install_dir, "ls-remote", "--heads", remote, branch, timeout=60)
+ return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _git_has_changes(install_dir: Path) -> bool | None:
+ inside = _run_git(install_dir, "rev-parse", "--is-inside-work-tree")
+ if inside.returncode!= 0:
+  print(" Git repository not found.")
+  return None
+
+ status = _run_git(install_dir, "status", "--porcelain")
+ if status.returncode!= 0:
+  print(f" Git status failed: {status.stderr.strip()}")
+  return None
+ return bool(status.stdout.strip())
+
 def _get_pid() -> int | None:
-    if PID_FILE.exists():
-        try:
-            return int(PID_FILE.read_text().strip())
-        except (ValueError, OSError):
-            pass
-    return None
+ if PID_FILE.exists():
+  try:
+   return int(PID_FILE.read_text().strip())
+  except (ValueError, OSError):
+   pass
+ return None
 
 
 def _is_running(pid: int) -> bool:
@@ -2499,6 +2531,84 @@ def cmd_windsurf():
         print()
 
 
+
+def _git_commit_current_tree(install_dir: Path) -> bool:
+ has_changes = _git_has_changes(install_dir)
+ if has_changes is None:
+  return False
+ if not has_changes:
+  return True
+
+ result = _run_git(install_dir, "add", "-A")
+ if result.returncode!= 0:
+  print(f" Git add failed: {result.stderr.strip()}")
+  return False
+
+ message = f"upload repo {time.strftime('%Y-%m-%d %H:%M:%S')}"
+ result = _run_git(install_dir, "commit", "-m", message, timeout=120)
+ if result.returncode!= 0:
+  print(f" Git commit failed: {result.stderr.strip()}")
+  return False
+ print(f" Local commit created: {message}")
+ return True
+
+
+def cmd_upload_repo():
+ install_dir = Path(__file__).resolve().parent.parent
+ remote = os.environ.get("UNIFIEDME_GIT_REMOTE", "origin")
+ main_branch = os.environ.get("UNIFIEDME_MAIN_BRANCH", "main")
+ backup_branch = f"backup/{main_branch}-before-upload-{time.strftime('%Y%m%d-%H%M%S')}"
+
+ inside = _run_git(install_dir, "rev-parse", "--is-inside-work-tree")
+ if inside.returncode!= 0:
+  print(" Git repository not found.")
+  return
+
+ if not _git_commit_current_tree(install_dir):
+  return
+
+ print(f" Fetching {remote}/{main_branch}.")
+ fetch = _run_git(install_dir, "fetch", remote, main_branch, timeout=120)
+ remote_exists = fetch.returncode == 0 and _remote_branch_exists(install_dir, remote, main_branch)
+ remote_hash = ""
+ if remote_exists:
+  rev = _run_git(install_dir, "rev-parse", f"{remote}/{main_branch}")
+  remote_hash = rev.stdout.strip() if rev.returncode == 0 else ""
+  print(f" Backing up current remote {main_branch} to {backup_branch}.")
+  backup = _run_git(install_dir, "push", remote, f"{remote}/{main_branch}:refs/heads/{backup_branch}", timeout=120)
+  if backup.returncode!= 0:
+   print(f" Backup push failed: {backup.stderr.strip()}")
+   return
+ else:
+  print(f" Remote {main_branch} not found; backup branch skipped.")
+
+ print(f" Uploading current HEAD to {remote}/{main_branch}.")
+ if remote_hash:
+  lease = f"--force-with-lease={main_branch}:{remote_hash}"
+  push = _run_git(install_dir, "push", lease, remote, f"HEAD:{main_branch}", timeout=120)
+ else:
+  push = _run_git(install_dir, "push", "-u", remote, f"HEAD:{main_branch}", timeout=120)
+
+ if push.returncode!= 0:
+  print(f" Upload failed: {push.stderr.strip()}")
+  if remote_exists:
+   print(f" Previous main is still backed up at: {backup_branch}")
+  return
+
+ if remote_exists:
+  print(f" Backup branch: {backup_branch}")
+ print(f" Upload complete: current HEAD is now {remote}/{main_branch}")
+
+
+def cmd_upload():
+ args = sys.argv[2:]
+ subcmd = args[0] if args else ""
+ if subcmd == "repo":
+  cmd_upload_repo()
+  return
+ print("\n Usage:")
+ print(f" {CMD} upload repo Push current files to main and backup previous main")
+
 def cli_main():
     """CLI entry point."""
     args = sys.argv[1:]
@@ -2510,6 +2620,7 @@ def cli_main():
         "run": cmd_run,
         "status": cmd_status,
         "update": cmd_update,
+"upload": cmd_upload,
         "fix": cmd_fix,
         "kill-port": cmd_kill_port,
         "logout": cmd_logout,
