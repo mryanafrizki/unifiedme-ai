@@ -20,6 +20,8 @@ TURNSTILE_SITEKEY = "0x4AAAAAACMum7HpvvFmcf2r"
 TURNSTILE_URL = "https://www.gumloop.com"
 TURNSTILE_ACTION = "websocket_connect"
 TOKEN_TTL = 250  # seconds, safe margin under ~280s actual validity
+MAX_SOLVE_ATTEMPTS = 3
+SOLVE_RETRY_DELAY = 5
 
 
 class TurnstileSolver:
@@ -125,12 +127,19 @@ class TurnstileSolver:
                     self._start_prefetch()
                     return token
 
-            # 3. Solve fresh
-            log.info("[turnstile] Solving fresh token...")
-            token = await self._solve()
-            if token:
-                self._start_prefetch()
-            return token
+            # 3. Solve fresh with retry
+            for attempt in range(1, MAX_SOLVE_ATTEMPTS + 1):
+                log.info("[turnstile] Solving fresh token (attempt %d/%d)...", attempt, MAX_SOLVE_ATTEMPTS)
+                token = await self._solve()
+                if token:
+                    self._start_prefetch()
+                    return token
+                if attempt < MAX_SOLVE_ATTEMPTS:
+                    log.warning("[turnstile] Solve failed on attempt %d, retrying in %ds...", attempt, SOLVE_RETRY_DELAY)
+                    await asyncio.sleep(SOLVE_RETRY_DELAY)
+
+            log.error("[turnstile] All %d solve attempts failed — giving up", MAX_SOLVE_ATTEMPTS)
+            return None
 
     def close(self) -> None:
         """Cancel prefetch task if running."""
