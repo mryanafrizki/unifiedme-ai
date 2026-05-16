@@ -31,7 +31,8 @@ import base64
 import re
 import httpx as _httpx
 
-from .gumloop.parser import build_openai_chunk, build_openai_done
+from .gumloop.parser import build_openai_chunk, build_openai_done, build_openai_tool_call_chunk
+from .gumloop.tool_converter import convert_messages_with_tools, parse_tool_calls
 
 log = logging.getLogger("unified.proxy_gumloop")
 
@@ -104,6 +105,63 @@ def _map_gl_model(model: str) -> str:
     if bare in GUMLOOP_MODELS:
         return bare
     return bare
+
+
+def _extract_system_prompt(messages: list[dict]) -> str:
+    """Extract system prompt from messages list."""
+    parts = []
+    for msg in messages:
+        if msg.get("role") != "system":
+            continue
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            parts.append(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    parts.append(block.get("text", ""))
+    return "\n\n".join(p for p in parts if p)
+
+
+def _openai_tools_to_gumloop(tools: list[dict]) -> list[dict]:
+    """Convert OpenAI function-calling tools to Gumloop's tool format."""
+    result = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        func = tool.get("function", {})
+        result.append({
+            "name": func.get("name", ""),
+            "description": func.get("description", ""),
+            "input_schema": func.get("parameters", {"type": "object", "properties": {}}),
+        })
+    return result
+
+
+def _tool_uses_to_openai(tool_uses: list[dict]) -> list[dict]:
+    """Convert parsed tool_use blocks to OpenAI tool_calls format."""
+    result = []
+    for item in tool_uses:
+        result.append({
+            "id": item.get("id", f"call_{uuid.uuid4().hex[:24]}"),
+            "type": "function",
+            "function": {
+                "name": item.get("name", ""),
+                "arguments": json.dumps(item.get("input", {}), ensure_ascii=False),
+            },
+        })
+    return result
+
+
+def _safe_flush_point(text: str, start: int) -> int:
+    """Find safe point to flush text without splitting a <tool_use> tag."""
+    idx = text.find("<tool_use", start)
+    if idx >= 0:
+        return idx
+    for prefix in ("<tool_us", "<tool_u", "<tool_", "<tool", "<too", "<to", "<t", "<"):
+        if text.endswith(prefix):
+            return len(text) - len(prefix)
+    return len(text)
 
 
 def _detect_media_type(data: bytes, fallback: str = "image/png") -> str:
@@ -375,8 +433,17 @@ async def proxy_chat_completions(
     raw_model = body.get("model", "gl-claude-sonnet-4-5")
     gl_model = _map_gl_model(raw_model)
 
-    # Convert messages — strip tools, simple format
-    messages, system_prompt = _convert_openai_messages_simple(body)
+    # Detect if client sent tools (OpenCode agent mode)
+    has_client_tools = bool(body.get("tools"))
+    gumloop_tools = _openai_tools_to_gumloop(body.get("tools", [])) if has_client_tools else []
+
+    if has_client_tools:
+        # OpenCode mode: convert messages with tool context, preserve tool_use/tool_result
+        system_prompt = _extract_system_prompt(body.get("messages", []))
+        messages = convert_messages_with_tools(body.get("messages", []), tools=gumloop_tools, system=system_prompt)
+    else:
+        # Legacy MCP mode: strip tools, simple format
+        messages, system_prompt = _convert_openai_messages_simple(body)
 
     account_id = account.get("id", 0)
     interaction_id = None
@@ -462,44 +529,48 @@ async def proxy_chat_completions(
             status_code=400,
         ), 0.0
 
-    # Prepend MCP rules to system prompt so agent uses MCP tools, not sandbox
-    mcp_rules = (
-        "You are a coding assistant. You have MCP tools connected to the user's LOCAL workspace.\n\n"
-        "MANDATORY RULES (never violate):\n"
-        "1. For ALL file operations: ONLY use MCP tools. NEVER use sandbox_python, sandbox_file, sandbox_download, or ANY sandbox tool.\n"
-        "2. Sandbox tools run on a remote server, NOT the user's machine. MCP tools operate on the user's LOCAL filesystem.\n"
-        "3. ALL output files (code, html, text) → write_file.\n"
-        "4. ALL shell commands → bash.\n"
-        "5. WORKSPACE: ALWAYS use RELATIVE paths (e.g. 'file.txt', 'folder/file.py'). NEVER use absolute paths like D:\\, C:\\, /root/, etc. The MCP workspace root is '.' — all files go there.\n"
-        "6. IMAGE WORKFLOW (critical):\n"
-        "   a. Generate image with image_generator tool → you get a response with storage_link (gl:// URL)\n"
-        "   b. Immediately call download_file with the EXACT gl:// URL and a filename\n"
-        "   c. Example: download_file(url=\"gl://uid-xxx/custom_agent_interactions/.../image.png\", filename=\"output.png\")\n"
-        "   d. NEVER use sandbox_download. NEVER convert gl:// URLs to gumloop.com/files/ URLs.\n"
-        "   e. The download_file MCP tool handles gl:// authentication internally.\n"
-        "7. Respond in the same language as the user.\n"
-        "8. FORGET any previous workspace paths from earlier sessions. Your workspace is '.' (current directory). Use list_directory('.') to see what's there.\n\n"
-        "AVAILABLE MCP TOOLS:\n"
-        "- File: read_file, write_file, edit_file, delete_file, rename_file, copy_file, file_info, read_image\n"
-        "- Directory: list_directory, tree, create_directory\n"
-        "- Search: glob_search, grep\n"
-        "- Shell: bash, run_python\n"
-        "- Git: git (run any git subcommand)\n"
-        "- Network: http_request, download_file (supports gl:// and http/https)\n"
-        "- Archive: zip_files, unzip_file\n"
-        "- Text: diff, patch\n"
-        "- Research: search_docs (library documentation via Context7), web_search (DuckDuckGo), fetch_url (read web pages), search_github_code (grep.app)\n\n"
-        "IMPORTANT: To VIEW/ANALYZE images, use read_image (returns visual content you can see). Do NOT use read_file for images.\n"
-    )
-    full_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
+    if has_client_tools:
+        # OpenCode mode: pass system prompt as-is, no MCP rules injection
+        config_system = system_prompt or None
+    else:
+        # Legacy MCP mode: prepend MCP rules to system prompt
+        mcp_rules = (
+            "You are a coding assistant. You have MCP tools connected to the user's LOCAL workspace.\n\n"
+            "MANDATORY RULES (never violate):\n"
+            "1. For ALL file operations: ONLY use MCP tools. NEVER use sandbox_python, sandbox_file, sandbox_download, or ANY sandbox tool.\n"
+            "2. Sandbox tools run on a remote server, NOT the user's machine. MCP tools operate on the user's LOCAL filesystem.\n"
+            "3. ALL output files (code, html, text) → write_file.\n"
+            "4. ALL shell commands → bash.\n"
+            "5. WORKSPACE: ALWAYS use RELATIVE paths (e.g. 'file.txt', 'folder/file.py'). NEVER use absolute paths like D:\\, C:\\, /root/, etc. The MCP workspace root is '.' — all files go there.\n"
+            "6. IMAGE WORKFLOW (critical):\n"
+            "   a. Generate image with image_generator tool → you get a response with storage_link (gl:// URL)\n"
+            "   b. Immediately call download_file with the EXACT gl:// URL and a filename\n"
+            "   c. Example: download_file(url=\"gl://uid-xxx/custom_agent_interactions/.../image.png\", filename=\"output.png\")\n"
+            "   d. NEVER use sandbox_download. NEVER convert gl:// URLs to gumloop.com/files/ URLs.\n"
+            "   e. The download_file MCP tool handles gl:// authentication internally.\n"
+            "7. Respond in the same language as the user.\n"
+            "8. FORGET any previous workspace paths from earlier sessions. Your workspace is '.' (current directory). Use list_directory('.') to see what's there.\n\n"
+            "AVAILABLE MCP TOOLS:\n"
+            "- File: read_file, write_file, edit_file, delete_file, rename_file, copy_file, file_info, read_image\n"
+            "- Directory: list_directory, tree, create_directory\n"
+            "- Search: glob_search, grep\n"
+            "- Shell: bash, run_python\n"
+            "- Git: git (run any git subcommand)\n"
+            "- Network: http_request, download_file (supports gl:// and http/https)\n"
+            "- Archive: zip_files, unzip_file\n"
+            "- Text: diff, patch\n"
+            "- Research: search_docs (library documentation via Context7), web_search (DuckDuckGo), fetch_url (read web pages), search_github_code (grep.app)\n\n"
+            "IMPORTANT: To VIEW/ANALYZE images, use read_image (returns visual content you can see). Do NOT use read_file for images.\n"
+        )
+        config_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
 
-    # Update gummie config — model + system prompt only, NO tools
+    # Update gummie config
     try:
         await update_gummie_config(
             gummie_id=gummie_id,
             auth=auth,
-            system_prompt=full_system,
-            tools=None,  # Don't touch tools — MCP handles them
+            system_prompt=config_system,
+            tools=None,  # Don't touch Gumloop's native tools config
             model_name=gl_model,
             proxy_url=proxy_url,
         )
@@ -518,8 +589,24 @@ async def proxy_chat_completions(
     stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
-    # Always pass interaction_id to maintain session continuity
-    # (previously only passed when has_images, which broke session persistence)
+    if has_client_tools:
+        # OpenCode mode: parse <tool_use> XML into proper OpenAI tool_calls
+        if client_wants_stream:
+            return _stream_gumloop_toolaware(
+                gummie_id, messages, auth, turnstile, raw_model,
+                stream_id, created, proxy_url,
+                interaction_id=interaction_id,
+                account_id=account.get("id", 0),
+                account_email=account.get("email", "?"),
+            ), 0.0
+        else:
+            return await _accumulate_gumloop_toolaware(
+                gummie_id, messages, auth, turnstile, raw_model,
+                stream_id, created, proxy_url,
+                interaction_id=interaction_id,
+            )
+
+    # Legacy MCP mode: stream everything as text
     if client_wants_stream:
         return _stream_gumloop(
             gummie_id, messages, auth, turnstile, gl_model, raw_model,
@@ -534,6 +621,211 @@ async def proxy_chat_completions(
             stream_id, created, proxy_url,
             interaction_id=interaction_id,
         )
+
+
+def _stream_gumloop_toolaware(
+    gummie_id: str,
+    messages: list[dict],
+    auth: GumloopAuth,
+    turnstile: TurnstileSolver,
+    display_model: str,
+    stream_id: str,
+    created: int,
+    proxy_url: str | None,
+    interaction_id: str | None = None,
+    account_id: int = 0,
+    account_email: str = "?",
+) -> StreamingResponse:
+    """Stream Gumloop response with proper OpenAI tool_calls parsing.
+
+    Buffers text near <tool_use> tags, parses them at stream end,
+    and emits OpenAI-compatible tool_calls SSE chunks so OpenCode
+    can execute tools autonomously.
+    """
+    _stream_state = {
+        "cost": 0.0,
+        "content": "",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "done": False,
+        "_account_id": account_id,
+        "_account_email": account_email,
+    }
+
+    async def stream_sse() -> AsyncIterator[bytes]:
+        try:
+            full_text = ""
+            streamed_pos = 0
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
+            yield build_openai_chunk(
+                stream_id, display_model, content="", role="assistant", created=created,
+            ).encode()
+
+            async for event in send_chat(
+                gummie_id, messages, auth, turnstile,
+                interaction_id=interaction_id, proxy_url=proxy_url,
+            ):
+                etype = event.get("type", "")
+
+                if etype == "text-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        full_text += delta
+                        safe_until = _safe_flush_point(full_text, streamed_pos)
+                        if safe_until > streamed_pos:
+                            chunk_text = full_text[streamed_pos:safe_until]
+                            yield build_openai_chunk(
+                                stream_id, display_model, content=chunk_text, created=created,
+                            ).encode()
+                            streamed_pos = safe_until
+
+                elif etype == "error":
+                    error_msg = event.get("error", "Unknown Gumloop error")
+                    error_type = event.get("errorType", "")
+                    log.error("[GL stream-tool] error: %s (%s)", error_msg, error_type)
+
+                    is_credit_error = "credit" in error_type.lower() or "credit" in error_msg.lower()
+                    if is_credit_error:
+                        _stream_state["error"] = f"CREDIT_EXHAUSTED: {error_msg}"
+                        from . import database as _db
+                        try:
+                            acct_id = _stream_state.get("_account_id", 0)
+                            await _db.mark_gl_exhausted_temporary(acct_id, 3600, f"Credit exhausted: {error_msg[:150]}")
+                            try:
+                                from . import license_client as _lc
+                                updated_acct = await _db.get_account(acct_id)
+                                if updated_acct:
+                                    await _lc.push_account_now(updated_acct)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                    else:
+                        _stream_state["error"] = error_msg
+
+                    err = {"error": {"message": error_msg, "type": "proxy_error"}}
+                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
+                    yield build_openai_done().encode()
+                    _stream_state["done"] = True
+                    return
+
+                elif etype == "finish":
+                    event_usage = event.get("usage") or {}
+                    usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
+                    usage["completion_tokens"] += event_usage.get("output_tokens", 0)
+                    usage["total_tokens"] += event_usage.get("total_tokens", 0)
+                    if not event.get("final", True):
+                        continue
+                    break
+
+            # Parse remaining buffered text for tool_use blocks
+            unstreamed = full_text[streamed_pos:]
+            remaining_text, tool_uses = parse_tool_calls(unstreamed)
+            if remaining_text:
+                yield build_openai_chunk(
+                    stream_id, display_model, content=remaining_text, created=created,
+                ).encode()
+
+            # Emit tool_calls as proper OpenAI SSE chunks
+            for idx, tc in enumerate(_tool_uses_to_openai(tool_uses)):
+                yield build_openai_tool_call_chunk(
+                    stream_id, display_model, idx,
+                    tc["id"], tc["function"]["name"], tc["function"]["arguments"],
+                    created=created,
+                ).encode()
+
+            finish_reason = "tool_calls" if tool_uses else "stop"
+            yield build_openai_chunk(
+                stream_id, display_model,
+                finish_reason=finish_reason, created=created, usage=usage,
+            ).encode()
+            yield build_openai_done().encode()
+
+            _stream_state["content"] = full_text
+            _stream_state["prompt_tokens"] = usage["prompt_tokens"]
+            _stream_state["completion_tokens"] = usage["completion_tokens"]
+            _stream_state["total_tokens"] = usage["total_tokens"]
+            _stream_state["done"] = True
+
+        except Exception as e:
+            log.error("Gumloop tool-aware streaming error: %s", e, exc_info=True)
+            err = {"error": {"message": str(e) or "Stream error", "type": "proxy_error"}}
+            yield f"data: {json.dumps(err)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+            _stream_state["done"] = True
+
+    resp = StreamingResponse(
+        stream_sse(),
+        status_code=200,
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
+    resp._gl_stream_state = _stream_state  # type: ignore[attr-defined]
+    return resp
+
+
+async def _accumulate_gumloop_toolaware(
+    gummie_id: str,
+    messages: list[dict],
+    auth: GumloopAuth,
+    turnstile: TurnstileSolver,
+    display_model: str,
+    stream_id: str,
+    created: int,
+    proxy_url: str | None,
+    interaction_id: str | None = None,
+) -> tuple[JSONResponse, float]:
+    """Accumulate Gumloop response with proper tool_calls parsing."""
+    try:
+        full_text = ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        total_tokens = 0
+
+        async for event in send_chat(
+            gummie_id, messages, auth, turnstile,
+            interaction_id=interaction_id, proxy_url=proxy_url,
+        ):
+            etype = event.get("type", "")
+            if etype == "text-delta":
+                full_text += event.get("delta", "")
+            elif etype == "finish":
+                event_usage = event.get("usage") or {}
+                prompt_tokens += event_usage.get("input_tokens", 0)
+                completion_tokens += event_usage.get("output_tokens", 0)
+                total_tokens += event_usage.get("total_tokens", 0)
+                if event.get("final", True):
+                    break
+            elif etype == "error":
+                return JSONResponse(
+                    {"error": {"message": event.get("error", "Unknown Gumloop error"), "type": "proxy_error"}},
+                    status_code=502,
+                ), 0.0
+
+        remaining_text, tool_uses = parse_tool_calls(full_text)
+        tool_calls = _tool_uses_to_openai(tool_uses)
+        message: dict = {"role": "assistant", "content": remaining_text or None}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        finish_reason = "tool_calls" if tool_calls else "stop"
+        response = {
+            "id": stream_id,
+            "object": "chat.completion",
+            "created": created,
+            "model": display_model,
+            "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": total_tokens},
+        }
+        return JSONResponse(response, status_code=200), 0.0
+
+    except Exception as e:
+        log.error("Gumloop tool-aware non-streaming error: %s", e, exc_info=True)
+        return JSONResponse(
+            {"error": {"message": f"Gumloop error: {e}", "type": "proxy_error"}},
+            status_code=502,
+        ), 0.0
 
 
 def _stream_gumloop(

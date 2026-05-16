@@ -170,6 +170,8 @@ async def proxy_chat_completions(
             created,
             interaction_id,
             proxy_url,
+            account_id=account.get("id", 0),
+            account_email=account.get("email", "?"),
         ), 0.0
 
     return await _accumulate_gumloop_v2(
@@ -205,64 +207,131 @@ def _stream_gumloop_v2(
     created: int,
     interaction_id: str,
     proxy_url: str | None,
+    account_id: int = 0,
+    account_email: str = "?",
 ) -> StreamingResponse:
+    _stream_state: dict[str, Any] = {
+        "cost": 0.0,
+        "content": "",
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "done": False,
+        "_account_id": account_id,
+        "_account_email": account_email,
+    }
+
     async def stream_sse() -> AsyncIterator[bytes]:
-        full_text = ""
-        streamed_pos = 0
-        usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        yield build_openai_chunk(stream_id, display_model, content="", role="assistant", created=created).encode()
-        async for event in send_chat(gummie_id, messages, auth, turnstile, interaction_id=interaction_id, proxy_url=proxy_url):
-            etype = event.get("type", "")
-            if etype == "text-delta":
-                delta = event.get("delta", "")
-                if delta:
-                    full_text += delta
-                    safe_until = _safe_flush_point(full_text, streamed_pos)
-                    if safe_until > streamed_pos:
-                        chunk_text = full_text[streamed_pos:safe_until]
-                        yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
-                        streamed_pos = safe_until
-            elif etype == "finish":
-                event_usage = event.get("usage") or {}
-                usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
-                usage["completion_tokens"] += event_usage.get("output_tokens", 0)
-                usage["total_tokens"] += event_usage.get("total_tokens", 0)
-                if not event.get("final", True):
-                    continue
-                break
-            elif etype == "error":
-                error_msg = event.get("error", "Unknown Gumloop v2 error")
-                err = {"error": {"message": error_msg, "type": "proxy_error"}}
-                yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
-                yield build_openai_done().encode()
-                return
+        try:
+            full_text = ""
+            streamed_pos = 0
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
-        unstreamed = full_text[streamed_pos:]
-        remaining_text, tool_uses = parse_tool_calls(unstreamed)
-        if remaining_text:
-            yield build_openai_chunk(stream_id, display_model, content=remaining_text, created=created).encode()
+            yield build_openai_chunk(stream_id, display_model, content="", role="assistant", created=created).encode()
 
-        for idx, tc in enumerate(_tool_uses_to_openai(tool_uses)):
-            yield build_openai_tool_call_chunk(
-                stream_id,
-                display_model,
-                idx,
-                tc["id"],
-                tc["function"]["name"],
-                tc["function"]["arguments"],
-                created=created,
-            ).encode()
+            async for event in send_chat(gummie_id, messages, auth, turnstile, interaction_id=interaction_id, proxy_url=proxy_url):
+                etype = event.get("type", "")
+                if etype not in ("keepalive",):
+                    if etype == "error":
+                        log.warning("[GL2 stream] ERROR event: %s", json.dumps(event, ensure_ascii=False)[:500])
+                    else:
+                        delta_preview = str(event.get("delta", ""))[:50]
+                        log.info("[GL2 stream] event: %s | delta: %s", etype, delta_preview)
 
-        finish_reason = "tool_calls" if tool_uses else "stop"
-        yield build_openai_chunk(stream_id, display_model, finish_reason=finish_reason, created=created, usage=usage).encode()
-        yield build_openai_done().encode()
+                if etype == "text-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        full_text += delta
+                        safe_until = _safe_flush_point(full_text, streamed_pos)
+                        if safe_until > streamed_pos:
+                            chunk_text = full_text[streamed_pos:safe_until]
+                            yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
+                            streamed_pos = safe_until
 
-    return StreamingResponse(
+                elif etype == "reasoning-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        yield build_openai_chunk(
+                            stream_id, display_model, reasoning_content=delta, created=created,
+                        ).encode()
+
+                elif etype == "error":
+                    error_msg = event.get("error", "Unknown Gumloop v2 error")
+                    error_type = event.get("errorType", "")
+                    log.error("[GL2 stream] error: %s (%s)", error_msg, error_type)
+
+                    is_credit_error = "credit" in error_type.lower() or "credit" in error_msg.lower()
+                    if is_credit_error:
+                        _stream_state["error"] = f"CREDIT_EXHAUSTED: {error_msg}"
+                        from . import database as _db
+                        try:
+                            acct_id = _stream_state.get("_account_id", 0)
+                            await _db.mark_gl_exhausted_temporary(acct_id, 3600, f"Credit exhausted: {error_msg[:150]}")
+                            try:
+                                from . import license_client as _lc
+                                updated_acct = await _db.get_account(acct_id)
+                                if updated_acct:
+                                    await _lc.push_account_now(updated_acct)
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                    else:
+                        _stream_state["error"] = error_msg
+
+                    err = {"error": {"message": error_msg, "type": "proxy_error"}}
+                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n".encode()
+                    yield build_openai_done().encode()
+                    _stream_state["done"] = True
+                    return
+
+                elif etype == "finish":
+                    event_usage = event.get("usage") or {}
+                    usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
+                    usage["completion_tokens"] += event_usage.get("output_tokens", 0)
+                    usage["total_tokens"] += event_usage.get("total_tokens", 0)
+                    if not event.get("final", True):
+                        continue
+                    break
+
+            unstreamed = full_text[streamed_pos:]
+            remaining_text, tool_uses = parse_tool_calls(unstreamed)
+            if remaining_text:
+                yield build_openai_chunk(stream_id, display_model, content=remaining_text, created=created).encode()
+
+            for idx, tc in enumerate(_tool_uses_to_openai(tool_uses)):
+                yield build_openai_tool_call_chunk(
+                    stream_id, display_model, idx,
+                    tc["id"], tc["function"]["name"], tc["function"]["arguments"],
+                    created=created,
+                ).encode()
+
+            finish_reason = "tool_calls" if tool_uses else "stop"
+            yield build_openai_chunk(stream_id, display_model, finish_reason=finish_reason, created=created, usage=usage).encode()
+            yield build_openai_done().encode()
+
+            _stream_state["content"] = full_text
+            _stream_state["prompt_tokens"] = usage["prompt_tokens"]
+            _stream_state["completion_tokens"] = usage["completion_tokens"]
+            _stream_state["total_tokens"] = usage["total_tokens"]
+            _stream_state["done"] = True
+
+        except Exception as e:
+            log.error("Gumloop v2 streaming error: %s", e, exc_info=True)
+            _stream_state["error"] = str(e)
+            err = {"error": {"message": str(e) or "Stream error", "type": "proxy_error"}}
+            yield f"data: {json.dumps(err)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+            _stream_state["done"] = True
+
+    resp = StreamingResponse(
         stream_sse(),
         status_code=200,
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+    resp._gl_stream_state = _stream_state  # type: ignore[attr-defined]
+    return resp
 
 
 
