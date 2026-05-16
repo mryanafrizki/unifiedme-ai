@@ -141,6 +141,9 @@ _MAX_GL_MODELS = [
     "gl-gpt-5.3-code",
     "gl-gpt-5.2",
     "gl-gpt-5.2-codex",
+    "gl-gpt-5.5",
+    "gl-gemini-3.1-pro-preview",
+    "gl-kimi-k2.6",
 ]
 
 _MAX_GL2_MODELS = [m.replace("gl-", "gl2-", 1) for m in _MAX_GL_MODELS]

@@ -58,11 +58,16 @@ Your output is parsed by a proxy that converts <tool_use> XML into OpenAI tool_c
 """
 
 
+# Aliases for models that need provider prefix on Gumloop
+_GL2_MODEL_ALIASES = {
+    "kimi-k2.6": "moonshotai/kimi-k2.6",
+}
+
 def _map_gl2_model(model: str) -> str:
     bare = model.removeprefix("gl2-")
     if any(x in bare for x in ("claude", "haiku", "sonnet", "opus")):
         bare = bare.replace(".", "-")
-    return bare
+    return _GL2_MODEL_ALIASES.get(bare, bare)
 
 
 def _extract_system(messages: list[dict[str, Any]]) -> str:
