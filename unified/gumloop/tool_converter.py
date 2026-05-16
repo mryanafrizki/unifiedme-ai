@@ -142,6 +142,7 @@ def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, An
     """
     Convert messages without embedding tools (tools are set via REST API).
     Only converts tool_use/tool_result blocks to text format.
+    Handles both Claude-native and OpenAI tool formats.
     """
     result = []
     seen_tool_result_ids = set()
@@ -156,11 +157,39 @@ def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, An
             parts = []
             if text_content:
                 parts.append(text_content)
+            # Handle Claude-native tool_use blocks in content
             for block in tool_blocks:
                 if block.get("type") == "tool_use":
                     parts.append(tool_use_to_text(block))
+            # Handle OpenAI format tool_calls field
+            for tc in msg.get("tool_calls", []):
+                func = tc.get("function", {})
+                tc_id = tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                try:
+                    input_data = json.loads(func.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    input_data = {"raw": func.get("arguments", "")}
+                parts.append(tool_use_to_text({
+                    "id": tc_id,
+                    "name": func.get("name", ""),
+                    "input": input_data,
+                }))
             if parts:
                 result.append({"role": "assistant", "content": "\n".join(parts)})
+
+        elif role == "tool":
+            # OpenAI format: role="tool" with tool_call_id
+            tool_call_id = msg.get("tool_call_id", "")
+            if tool_call_id and tool_call_id in seen_tool_result_ids:
+                continue
+            if tool_call_id:
+                seen_tool_result_ids.add(tool_call_id)
+            tool_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False) if content else ""
+            result.append({"role": "user", "content": tool_result_to_text({
+                "tool_use_id": tool_call_id,
+                "content": tool_content,
+                "is_error": msg.get("is_error", False),
+            })})
 
         elif role == "user":
             parts = []
@@ -187,6 +216,7 @@ def convert_messages_with_tools(
 ) -> List[Dict[str, Any]]:
     """
     Convert messages with tool_use/tool_result to plain text format.
+    Handles both Claude-native and OpenAI tool formats.
     Includes deduplication of tool_results to prevent infinite loops.
     """
     result = []
@@ -213,12 +243,40 @@ def convert_messages_with_tools(
             parts = []
             if text_content:
                 parts.append(text_content)
+            # Claude-native: tool_use blocks in content
             for block in tool_blocks:
                 if block.get("type") == "tool_use":
                     parts.append(tool_use_to_text(block))
+            # OpenAI format: tool_calls field on message
+            for tc in msg.get("tool_calls", []):
+                func = tc.get("function", {})
+                tc_id = tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
+                try:
+                    input_data = json.loads(func.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    input_data = {"raw": func.get("arguments", "")}
+                parts.append(tool_use_to_text({
+                    "id": tc_id,
+                    "name": func.get("name", ""),
+                    "input": input_data,
+                }))
 
             if parts:
                 result.append({"role": "assistant", "content": "\n".join(parts)})
+
+        elif role == "tool":
+            # OpenAI format: role="tool" with tool_call_id and content
+            tool_call_id = msg.get("tool_call_id", "")
+            if tool_call_id and tool_call_id in seen_tool_result_ids:
+                continue
+            if tool_call_id:
+                seen_tool_result_ids.add(tool_call_id)
+            tool_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False) if content else ""
+            result.append({"role": "user", "content": tool_result_to_text({
+                "tool_use_id": tool_call_id,
+                "content": tool_content,
+                "is_error": msg.get("is_error", False),
+            })})
 
         elif role == "user":
             # Convert tool_result blocks to text, with deduplication

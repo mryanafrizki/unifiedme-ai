@@ -12,10 +12,50 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .gumloop.client import send_chat, update_gummie_config
 from .gumloop.parser import build_openai_chunk, build_openai_done, build_openai_tool_call_chunk
-from .gumloop.tool_converter import convert_messages_with_tools, parse_tool_calls
+from .gumloop.tool_converter import convert_messages_with_tools, parse_tool_calls, tools_to_system_prompt
 from .proxy_gumloop import _ensure_turnstile_key, _get_auth, _get_turnstile, _rehydrate_openai_messages_if_needed
 
 log = logging.getLogger("unified.proxy_gumloop_v2")
+
+# System prompt override: forces LLM to use <tool_use> XML instead of Gumloop platform tools.
+# Gumloop injects ~14 platform tools (sandbox_*, trigger_*, invoke_agent) that can't be
+# disabled via tools=[]. This override redirects the LLM to output XML for OpenCode.
+LLM_ONLY_OVERRIDE = """<CRITICAL_INSTRUCTION priority="absolute">
+You are operating as a PURE LLM text generator. You are NOT an agent. You do NOT have access to any tools.
+
+## ABSOLUTE PROHIBITIONS — VIOLATION = IMMEDIATE FAILURE
+
+You MUST NEVER use, call, invoke, or reference ANY of these platform tools:
+- sandbox_shell, sandbox_python, sandbox_file, sandbox_match, sandbox_upload, sandbox_download
+- invoke_agent, add_server_awaiter
+- trigger_discovery, list_trigger_options, create_integration_trigger, manage_integration_trigger
+- create_schedule, manage_schedule, create_mcp_trigger
+
+These tools exist in your context but they are DISABLED. They connect to a remote sandbox that has NO access to the user's files, codebase, or MCP servers. Using them will ALWAYS fail and produce wrong results.
+
+## WHAT YOU MUST DO INSTEAD
+
+When you need to perform ANY action (read files, run commands, search, edit, etc.), output the tool call in this EXACT XML format:
+
+<tool_use>
+<name>tool_name_here</name>
+<input>{"param": "value"}</input>
+</tool_use>
+
+The available tools are defined below in this system prompt. ONLY use tools defined here via the XML format above.
+
+## WHY THIS MATTERS
+
+Your output is parsed by a proxy that converts <tool_use> XML into OpenAI tool_calls. The CLIENT (OpenCode) executes these tools on the user's LOCAL machine with access to their real filesystem, MCP servers, and local tools. If you use sandbox_* tools instead, the operation runs on a remote server where the user's files DON'T EXIST.
+
+## VERIFICATION CHECKLIST (before every response)
+- Am I about to use sandbox_shell/sandbox_python/sandbox_file? STOP. Use <tool_use> XML instead.
+- Am I about to use invoke_agent? STOP. Use <tool_use> XML instead.
+- Am I about to use any trigger_*/schedule tool? STOP. Use <tool_use> XML instead.
+- Am I outputting <tool_use> XML blocks? CORRECT. Continue.
+- Am I generating plain text response? CORRECT. Continue.
+</CRITICAL_INSTRUCTION>
+"""
 
 
 def _map_gl2_model(model: str) -> str:
@@ -54,6 +94,27 @@ def _openai_tools_to_gumloop(tools: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     return result
+
+
+# MCP tool prefixes to strip from tool injection.
+# These are custom MCP servers whose tools duplicate standard OpenCode tools.
+# In pure-LLM mode, OpenCode handles all tool execution locally, so the
+# standard tools (read, grep, bash, etc.) are sufficient.
+_MCP_STRIP_PREFIXES = ("cloudflare-mcp_",)
+
+
+def _filter_duplicate_mcp_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove MCP-prefixed tools that duplicate standard OpenCode tools.
+
+    Custom MCP tools (like cloudflare-mcp_read_file) are designed for
+    Gumloop's native agent mode. In pure-LLM mode, OpenCode provides
+    equivalent tools (read, grep, bash) that execute locally.
+    Keeping both confuses the LLM into preferring the MCP variants.
+    """
+    return [
+        tool for tool in tools
+        if not any(tool.get("name", "").startswith(prefix) for prefix in _MCP_STRIP_PREFIXES)
+    ]
 
 
 def _tool_uses_to_openai(tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -95,7 +156,13 @@ async def proxy_chat_completions(
 
     system_prompt = _extract_system(messages)
     gumloop_tools = _openai_tools_to_gumloop(body.get("tools", []))
-    converted_messages = convert_messages_with_tools(messages, tools=gumloop_tools, system=system_prompt)
+    # Remove MCP-prefixed tools that duplicate standard OpenCode tools.
+    # In pure-LLM mode, the LLM should use standard tool names (read, grep, bash)
+    # instead of MCP variants (cloudflare-mcp_read_file, cloudflare-mcp_bash).
+    gumloop_tools = _filter_duplicate_mcp_tools(gumloop_tools)
+    # History-only conversion: convert tool_use/tool_result blocks to plain text
+    # Tool definitions go in system_prompt via update_gummie_config, NOT in messages
+    converted_messages = convert_messages_with_tools(messages)
 
     account_id = account.get("id", 0)
     interaction_id = None
@@ -138,18 +205,34 @@ async def proxy_chat_completions(
         )
         log.info("Created new interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
     system_prompt = _extract_system(messages)
-    converted_messages = convert_messages_with_tools(messages, tools=gumloop_tools, system=system_prompt)
+    # Re-convert after rehydration, history-only (no system/tools injection)
+    converted_messages = convert_messages_with_tools(messages)
 
     if not interaction_id:
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]
         log.warning("Generated one-off interaction_id: %s (no session binding)", interaction_id)
 
+    # Disable Gumloop's native tool execution — act as pure LLM.
+    # Tool definitions are embedded in system prompt via convert_messages_with_tools,
+    # so LLM outputs <tool_use> XML that we parse into OpenAI tool_calls.
+    has_client_tools = bool(body.get("tools"))
+    config_tools = [] if has_client_tools else None
+
+    # Build combined system prompt: LLM-only override + original system + tool definitions
+    combined_system = system_prompt or ""
+    if has_client_tools and gumloop_tools:
+        tool_prompt = tools_to_system_prompt(gumloop_tools)
+        combined_system = (combined_system + "\n\n" + tool_prompt) if combined_system else tool_prompt
+    # Prepend aggressive override to prevent Gumloop from using platform tools
+    if has_client_tools:
+        combined_system = LLM_ONLY_OVERRIDE + "\n\n" + combined_system
+
     try:
         await update_gummie_config(
             gummie_id=gummie_id,
             auth=auth,
-            system_prompt=system_prompt or None,
-            tools=None,
+            system_prompt=combined_system or None,
+            tools=config_tools,
             model_name=gl_model,
             proxy_url=proxy_url,
         )
@@ -226,6 +309,7 @@ def _stream_gumloop_v2(
             full_text = ""
             streamed_pos = 0
             usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            buffering_notified = False
 
             yield build_openai_chunk(stream_id, display_model, content="", role="assistant", created=created).encode()
 
@@ -238,6 +322,7 @@ def _stream_gumloop_v2(
                         delta_preview = str(event.get("delta", ""))[:50]
                         log.info("[GL2 stream] event: %s | delta: %s", etype, delta_preview)
 
+                # --- Text content (buffered near <tool_use> tags) ---
                 if etype == "text-delta":
                     delta = event.get("delta", "")
                     if delta:
@@ -247,7 +332,15 @@ def _stream_gumloop_v2(
                             chunk_text = full_text[streamed_pos:safe_until]
                             yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
                             streamed_pos = safe_until
+                            buffering_notified = False
+                        elif not buffering_notified and (len(full_text) - streamed_pos) > 10:
+                            yield build_openai_chunk(
+                                stream_id, display_model,
+                                content="\n_Preparing tool call..._\n", created=created,
+                            ).encode()
+                            buffering_notified = True
 
+                # --- Reasoning (streamed as reasoning_content) ---
                 elif etype == "reasoning-delta":
                     delta = event.get("delta", "")
                     if delta:
@@ -255,6 +348,42 @@ def _stream_gumloop_v2(
                             stream_id, display_model, reasoning_content=delta, created=created,
                         ).encode()
 
+                # --- Tool call from Gumloop agent (streamed as visible content) ---
+                elif etype == "tool-call":
+                    tool_name = event.get("toolName", "?")
+                    tool_input = event.get("input", {})
+                    input_preview = json.dumps(tool_input, ensure_ascii=False)
+                    if len(input_preview) > 200:
+                        input_preview = input_preview[:200] + "..."
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content=f"\n> **[Tool]** `{tool_name}({input_preview})`\n", created=created,
+                    ).encode()
+
+                # --- Tool result from Gumloop agent (streamed as visible content) ---
+                elif etype == "tool-result":
+                    tool_name = event.get("toolName", "?")
+                    output = event.get("output", "")
+                    if isinstance(output, dict):
+                        result_text = output.get("stdout", "") or output.get("stderr", "") or json.dumps(output, ensure_ascii=False)
+                    elif isinstance(output, str):
+                        result_text = output
+                    else:
+                        result_text = str(output)
+                    preview = result_text[:300] + "..." if len(result_text) > 300 else result_text
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content=f"\n> **[Result]** `{tool_name}` \u2192\n> ```\n> {preview}\n> ```\n", created=created,
+                    ).encode()
+
+                # --- Step boundary (visible progress) ---
+                elif etype == "step-start":
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content="\n---\n_Processing next step..._\n", created=created,
+                    ).encode()
+
+                # --- Error ---
                 elif etype == "error":
                     error_msg = event.get("error", "Unknown Gumloop v2 error")
                     error_type = event.get("errorType", "")
@@ -285,14 +414,23 @@ def _stream_gumloop_v2(
                     _stream_state["done"] = True
                     return
 
+                # --- Finish ---
                 elif etype == "finish":
                     event_usage = event.get("usage") or {}
                     usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
                     usage["completion_tokens"] += event_usage.get("output_tokens", 0)
                     usage["total_tokens"] += event_usage.get("total_tokens", 0)
                     if not event.get("final", True):
+                        yield build_openai_chunk(
+                            stream_id, display_model,
+                            content="\n_Agent processing..._\n", created=created,
+                        ).encode()
                         continue
                     break
+
+                # --- Keepalive ---
+                elif etype == "keepalive":
+                    yield b": keepalive\n\n"
 
             unstreamed = full_text[streamed_pos:]
             remaining_text, tool_uses = parse_tool_calls(unstreamed)

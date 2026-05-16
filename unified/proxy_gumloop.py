@@ -565,12 +565,18 @@ async def proxy_chat_completions(
         config_system = f"{mcp_rules}\n{system_prompt}" if system_prompt else mcp_rules
 
     # Update gummie config
+    # OpenCode mode: tools=[] disables Gumloop's native tool execution,
+    # forcing it to act as pure LLM. Tool definitions are in system prompt
+    # via convert_messages_with_tools, so LLM outputs <tool_use> XML that
+    # we parse into OpenAI tool_calls for client-side execution.
+    # Legacy MCP mode: tools=None preserves whatever tools are configured in Gumloop UI.
+    config_tools = [] if has_client_tools else None
     try:
         await update_gummie_config(
             gummie_id=gummie_id,
             auth=auth,
             system_prompt=config_system,
-            tools=None,  # Don't touch Gumloop's native tools config
+            tools=config_tools,
             model_name=gl_model,
             proxy_url=proxy_url,
         )
@@ -641,6 +647,9 @@ def _stream_gumloop_toolaware(
     Buffers text near <tool_use> tags, parses them at stream end,
     and emits OpenAI-compatible tool_calls SSE chunks so OpenCode
     can execute tools autonomously.
+
+    All reasoning, tool-call, tool-result, and step events are streamed
+    via reasoning_content so the user sees full process progress.
     """
     _stream_state = {
         "cost": 0.0,
@@ -658,6 +667,7 @@ def _stream_gumloop_toolaware(
             full_text = ""
             streamed_pos = 0
             usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            buffering_notified = False
 
             yield build_openai_chunk(
                 stream_id, display_model, content="", role="assistant", created=created,
@@ -669,6 +679,7 @@ def _stream_gumloop_toolaware(
             ):
                 etype = event.get("type", "")
 
+                # --- Text content (buffered near <tool_use> tags) ---
                 if etype == "text-delta":
                     delta = event.get("delta", "")
                     if delta:
@@ -680,7 +691,58 @@ def _stream_gumloop_toolaware(
                                 stream_id, display_model, content=chunk_text, created=created,
                             ).encode()
                             streamed_pos = safe_until
+                            buffering_notified = False
+                        elif not buffering_notified and (len(full_text) - streamed_pos) > 10:
+                            yield build_openai_chunk(
+                                stream_id, display_model,
+                                content="\n_Preparing tool call..._\n", created=created,
+                            ).encode()
+                            buffering_notified = True
 
+                # --- Reasoning (actual LLM thinking only) ---
+                elif etype == "reasoning-delta":
+                    delta = event.get("delta", "")
+                    if delta:
+                        yield build_openai_chunk(
+                            stream_id, display_model, reasoning_content=delta, created=created,
+                        ).encode()
+
+                # --- Tool call from Gumloop agent (streamed as visible content) ---
+                elif etype == "tool-call":
+                    tool_name = event.get("toolName", "?")
+                    tool_input = event.get("input", {})
+                    input_preview = json.dumps(tool_input, ensure_ascii=False)
+                    if len(input_preview) > 200:
+                        input_preview = input_preview[:200] + "..."
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content=f"\n> **[Tool]** `{tool_name}({input_preview})`\n", created=created,
+                    ).encode()
+
+                # --- Tool result from Gumloop agent (streamed as visible content) ---
+                elif etype == "tool-result":
+                    tool_name = event.get("toolName", "?")
+                    output = event.get("output", "")
+                    if isinstance(output, dict):
+                        result_text = output.get("stdout", "") or output.get("stderr", "") or json.dumps(output, ensure_ascii=False)
+                    elif isinstance(output, str):
+                        result_text = output
+                    else:
+                        result_text = str(output)
+                    preview = result_text[:300] + "..." if len(result_text) > 300 else result_text
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content=f"\n> **[Result]** `{tool_name}` →\n> ```\n> {preview}\n> ```\n", created=created,
+                    ).encode()
+
+                # --- Step boundary (visible progress) ---
+                elif etype == "step-start":
+                    yield build_openai_chunk(
+                        stream_id, display_model,
+                        content="\n---\n_Processing next step..._\n", created=created,
+                    ).encode()
+
+                # --- Error ---
                 elif etype == "error":
                     error_msg = event.get("error", "Unknown Gumloop error")
                     error_type = event.get("errorType", "")
@@ -711,14 +773,23 @@ def _stream_gumloop_toolaware(
                     _stream_state["done"] = True
                     return
 
+                # --- Finish ---
                 elif etype == "finish":
                     event_usage = event.get("usage") or {}
                     usage["prompt_tokens"] += event_usage.get("input_tokens", 0)
                     usage["completion_tokens"] += event_usage.get("output_tokens", 0)
                     usage["total_tokens"] += event_usage.get("total_tokens", 0)
                     if not event.get("final", True):
+                        yield build_openai_chunk(
+                            stream_id, display_model,
+                            content="\n_Agent processing..._\n", created=created,
+                        ).encode()
                         continue
                     break
+
+                # --- Keepalive ---
+                elif etype == "keepalive":
+                    yield b": keepalive\n\n"
 
             # Parse remaining buffered text for tool_use blocks
             unstreamed = full_text[streamed_pos:]
