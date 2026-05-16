@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Request, Depends
 from fastapi.responses import JSONResponse
@@ -94,6 +96,37 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
             {"error": {"message": "Missing 'model' field", "type": "invalid_request_error"}},
             status_code=400,
         )
+
+    opencode_session_key = (
+        str(body.get("opencode_session_id", "")).strip()
+        or str(body.get("opencode_session_key", "")).strip()
+        or str(request.headers.get("x-opencode-session-id", "")).strip()
+        or str(request.headers.get("x-opencode-session-key", "")).strip()
+    )
+    if not opencode_session_key:
+        workspace_dir = (
+            str(body.get("working_directory", "")).strip()
+            or str(body.get("working_dir", "")).strip()
+            or str(body.get("directory", "")).strip()
+            or str(request.headers.get("x-opencode-working-directory", "")).strip()
+            or str(request.headers.get("x-opencode-working-dir", "")).strip()
+            or str(Path.cwd())
+        )
+        try:
+            opencode_session_key = await db.find_opencode_session_key_for_workspace(workspace_dir)
+        except Exception:
+            opencode_session_key = ""
+    if opencode_session_key and not body.get("chat_session_id"):
+        try:
+            chat_session_id = await db.get_or_create_chat_session_for_opencode_session(
+                opencode_session_key,
+                title=body.get("session_title", "New Chat"),
+                model=model,
+            )
+            body["chat_session_id"] = chat_session_id
+            log.info("Bound OpenCode session %s -> chat_session_id=%s", opencode_session_key, chat_session_id)
+        except Exception as e:
+            log.warning("Failed to bind OpenCode session %s: %s", opencode_session_key, e)
 
     tier = get_tier(model)
     if tier is None:
@@ -333,6 +366,50 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
         max_retries = 5
         tried_gl_ids: list[int] = []
 
+        if not body.get("chat_session_id"):
+            opencode_session_key = (
+                str(body.get("opencode_session_id", "")).strip()
+                or str(body.get("opencode_session_key", "")).strip()
+                or str(request.headers.get("x-opencode-session-id", "")).strip()
+                or str(request.headers.get("x-opencode-session-key", "")).strip()
+            )
+            try:
+                if opencode_session_key:
+                    chat_session_id = await db.get_or_create_chat_session_for_opencode_session(
+                        opencode_session_key,
+                        title=body.get("session_title", "New Chat"),
+                        model=model,
+                    )
+                else:
+                    chat_session_id = await db.get_or_create_chat_session_for_api_key(
+                        key_info["id"],
+                        title=body.get("session_title", "New Chat"),
+                        model=model,
+                    )
+                body["chat_session_id"] = chat_session_id
+                log.info("Sticky session resolved for api_key_id=%s -> chat_session_id=%s", key_info["id"], chat_session_id)
+            except Exception as e:
+                log.warning("Failed to resolve sticky session for api_key_id=%s: %s", key_info["id"], e)
+
+        chat_session_id = 0
+        try:
+            chat_session_id = int(body.get("chat_session_id") or 0)
+        except Exception:
+            chat_session_id = 0
+
+        if chat_session_id:
+            try:
+                req_messages = body.get("messages", []) or []
+                last_user = req_messages[-1] if req_messages and isinstance(req_messages[-1], dict) else None
+                if last_user and last_user.get("role") == "user":
+                    last_content = last_user.get("content", "")
+                    if isinstance(last_content, str) and last_content.strip():
+                        prev = await db.get_last_chat_message(chat_session_id)
+                        if not prev or prev.get("role") != "user" or prev.get("content") != last_content:
+                            await db.add_chat_message(chat_session_id, "user", last_content, model)
+            except Exception as e:
+                log.warning("Failed to persist direct Gumloop user message for session %s: %s", chat_session_id, e)
+
         for attempt in range(max_retries):
             account = await get_next_account(tier, exclude_ids=tried_gl_ids)
             if account is None:
@@ -394,6 +471,8 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                 _acct_id = account["id"]
                 _key_id = key_info["id"]
                 _proxy_url = proxy_url or ""
+                _chat_session_id = chat_session_id
+                _model = model
 
                 async def _post_gl_stream_log():
                     import asyncio as _asyncio
@@ -433,6 +512,14 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                         error_message=stream_error or error_msg,
                         proxy_url=_proxy_url,
                     )
+                    if _chat_session_id and gl_stream_state.get("content"):
+                        try:
+                            prev = await db.get_last_chat_message(_chat_session_id)
+                            content = gl_stream_state["content"]
+                            if not prev or prev.get("role") != "assistant" or prev.get("content") != content:
+                                await db.add_chat_message(_chat_session_id, "assistant", content, _model)
+                        except Exception as e:
+                            log.warning("Failed to persist direct Gumloop assistant stream for session %s: %s", _chat_session_id, e)
 
                 response.background = BackgroundTask(_post_gl_stream_log)
             else:
@@ -444,6 +531,17 @@ async def chat_completions(request: Request, key_info: dict = Depends(verify_api
                     error_message=error_msg,
                     proxy_url=proxy_url or "",
                 )
+                if chat_session_id and status < 400:
+                    try:
+                        raw_body = getattr(response, 'body', b'')
+                        data = json.loads(raw_body.decode('utf-8', errors='replace')) if raw_body else {}
+                        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                        if content:
+                            prev = await db.get_last_chat_message(chat_session_id)
+                            if not prev or prev.get("role") != "assistant" or prev.get("content") != content:
+                                await db.add_chat_message(chat_session_id, "assistant", content, model)
+                    except Exception as e:
+                        log.warning("Failed to persist direct Gumloop assistant response for session %s: %s", chat_session_id, e)
             return response
 
         return JSONResponse(

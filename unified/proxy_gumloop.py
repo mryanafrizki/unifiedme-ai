@@ -281,17 +281,47 @@ def _merge_persisted_and_current_messages(persisted: list[dict], current: list[d
     return persisted + current[overlap:]
 
 
+def _render_transcript_context(messages: list[dict]) -> str:
+    lines = [
+        "You are continuing an existing conversation from the same OpenCode session.",
+        "The transcript below is authoritative prior context. Continue naturally and consistently with it.",
+        "",
+        "<conversation_history>",
+    ]
+    for msg in messages:
+        role = str(msg.get("role", "")).strip().upper() or "USER"
+        content = _message_text_for_overlap(msg.get("content", ""))
+        if not content:
+            continue
+        lines.append(f"{role}: {content}")
+    lines.append("</conversation_history>")
+    return "\n".join(lines)
+
+
 async def _rehydrate_openai_messages_if_needed(db, chat_session_id: int | None, account_id: int, current_messages: list[dict]) -> list[dict]:
     if not chat_session_id or not account_id:
         return current_messages
+    session_row = await db.get_chat_session(chat_session_id)
+    opencode_session_key = (session_row or {}).get("opencode_session_key", "")
     existing_binding = await db.get_gumloop_binding(chat_session_id, account_id)
     if existing_binding:
         return current_messages
-    persisted_rows = await db.get_chat_messages(chat_session_id)
-    persisted_messages = _persisted_rows_to_openai_messages(persisted_rows)
+    if opencode_session_key:
+        transcript = await db.load_opencode_transcript(opencode_session_key)
+        persisted_messages = transcript.get("messages", []) or []
+    else:
+        transcript = await db.get_chat_session_transcript(chat_session_id)
+        persisted_messages = _persisted_rows_to_openai_messages(transcript.get("messages", []))
     if not persisted_messages:
         return current_messages
-    return _merge_persisted_and_current_messages(persisted_messages, current_messages)
+    merged = _merge_persisted_and_current_messages(persisted_messages, current_messages)
+    if not current_messages or len(merged) <= len(current_messages):
+        return current_messages
+    prior_messages = merged[:-len(current_messages)]
+    if not prior_messages:
+        return current_messages
+    context_message = {"role": "system", "content": _render_transcript_context(prior_messages)}
+    return [context_message, *current_messages]
 
 
 async def _get_or_create_session_for_account(account_id: int, db) -> int:
@@ -352,6 +382,12 @@ async def proxy_chat_completions(
     interaction_id = None
     chat_session_id = body.get("chat_session_id")
 
+    if not chat_session_id:
+        inferred_session_id = await db.infer_chat_session_id_from_messages(messages, raw_model)
+        if inferred_session_id:
+            chat_session_id = inferred_session_id
+            log.info("Inferred OpenCode session_id=%s for Gumloop routing", chat_session_id)
+
     if not chat_session_id and account_id:
         try:
             session_id = await _get_or_create_session_for_account(account_id, db)
@@ -360,21 +396,28 @@ async def proxy_chat_completions(
         except Exception as e:
             log.warning("Failed to auto-create session for account %s: %s", account_id, e)
 
+    existing_binding = ""
+    session_id_int = 0
     if chat_session_id and account_id:
         try:
-            interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(
-                int(chat_session_id), account_id
-            )
-            log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
+            session_id_int = int(chat_session_id)
+            existing_binding = await db.get_gumloop_binding(session_id_int, account_id)
+            if existing_binding:
+                interaction_id = existing_binding
+                log.info("Using existing interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
         except (ValueError, TypeError) as e:
             log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
 
     messages = await _rehydrate_openai_messages_if_needed(
         db,
-        int(chat_session_id) if chat_session_id else None,
+        session_id_int if session_id_int else None,
         account_id,
         messages,
     )
+
+    if not interaction_id and session_id_int and account_id:
+        interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(session_id_int, account_id)
+        log.info("Created new interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
 
     if not interaction_id:
         interaction_id = str(uuid.uuid4()).replace("-", "")[:22]

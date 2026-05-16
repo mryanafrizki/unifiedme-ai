@@ -101,6 +101,12 @@ async def proxy_chat_completions(
     interaction_id = None
     chat_session_id = body.get("chat_session_id")
 
+    if not chat_session_id:
+        inferred_session_id = await db.infer_chat_session_id_from_messages(messages, raw_model)
+        if inferred_session_id:
+            chat_session_id = inferred_session_id
+            log.info("Inferred OpenCode session_id=%s for Gumloop v2 routing", chat_session_id)
+
     if not chat_session_id and account_id:
         try:
             chat_session_id = await db.get_or_create_gumloop_session_for_account(account_id)
@@ -108,21 +114,30 @@ async def proxy_chat_completions(
         except Exception as e:
             log.warning("Failed to auto-create session for account %s: %s", account_id, e)
 
+    session_id_int = 0
     if chat_session_id and account_id:
         try:
-            interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(
-                int(chat_session_id), account_id
-            )
-            log.info("Using interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
+            session_id_int = int(chat_session_id)
+            existing_binding = await db.get_gumloop_binding(session_id_int, account_id)
+            if existing_binding:
+                interaction_id = existing_binding
+                log.info("Using existing interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
         except (TypeError, ValueError) as e:
             log.warning("Invalid chat_session_id '%s': %s", chat_session_id, e)
 
     messages = await _rehydrate_openai_messages_if_needed(
         db,
-        int(chat_session_id) if chat_session_id else None,
+        session_id_int if session_id_int else None,
         account_id,
         messages,
     )
+
+    if not interaction_id and session_id_int and account_id:
+        interaction_id = await db.get_or_create_gumloop_interaction_for_session_account(
+            session_id_int, account_id
+        )
+        log.info("Created new interaction_id %s for session=%s account=%s", interaction_id, chat_session_id, account_id)
+    system_prompt = _extract_system(messages)
     converted_messages = convert_messages_with_tools(messages, tools=gumloop_tools, system=system_prompt)
 
     if not interaction_id:

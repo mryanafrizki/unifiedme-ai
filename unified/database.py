@@ -7,6 +7,7 @@ import logging
 import os
 import secrets
 import time
+import json
 from pathlib import Path
 from typing import Any, Optional
 
@@ -135,6 +136,15 @@ CREATE TABLE IF NOT EXISTS api_keys (
     usage_count INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS opencode_session_registry (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    api_key_id       INTEGER NOT NULL UNIQUE,
+    chat_session_id  INTEGER NOT NULL,
+    last_model       TEXT DEFAULT '',
+    created_at       TEXT DEFAULT (datetime('now')),
+    updated_at       TEXT DEFAULT (datetime('now'))
+);
+
 CREATE TABLE IF NOT EXISTS usage_logs (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     api_key_id       INTEGER,
@@ -216,6 +226,7 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     model       TEXT DEFAULT '',
     endpoint    TEXT DEFAULT '',
     api_key     TEXT DEFAULT '',
+    opencode_session_key TEXT DEFAULT '',
     gumloop_account_id INTEGER DEFAULT 0,
     gumloop_interaction_id TEXT DEFAULT '',
     created_at  TEXT DEFAULT (datetime('now')),
@@ -273,6 +284,7 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE accounts ADD COLUMN cb_verified INTEGER DEFAULT 0",
         "ALTER TABLE accounts ADD COLUMN ws_verified INTEGER DEFAULT 0",
         # Gumloop chat session persistence
+        "ALTER TABLE chat_sessions ADD COLUMN opencode_session_key TEXT DEFAULT ''",
         "ALTER TABLE chat_sessions ADD COLUMN gumloop_account_id INTEGER DEFAULT 0",
         "ALTER TABLE chat_sessions ADD COLUMN gumloop_interaction_id TEXT DEFAULT ''",
         # Last test error for review
@@ -334,6 +346,8 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         "ALTER TABLE proxies ADD COLUMN checked INTEGER DEFAULT 0",
         # Proxy URL logging on usage_logs
         "ALTER TABLE usage_logs ADD COLUMN proxy_url TEXT DEFAULT ''",
+        # OpenCode session registry
+        "ALTER TABLE opencode_session_registry ADD COLUMN last_model TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -344,6 +358,20 @@ async def _run_migrations(conn: aiosqlite.Connection) -> None:
         await conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_gumloop_account "
             "ON chat_sessions(gumloop_account_id) WHERE gumloop_account_id > 0"
+        )
+    except Exception:
+        pass
+    try:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_sessions_opencode_session_key "
+            "ON chat_sessions(opencode_session_key) WHERE opencode_session_key <> ''"
+        )
+    except Exception:
+        pass
+    try:
+        await conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_opencode_session_registry_api_key_id "
+            "ON opencode_session_registry(api_key_id)"
         )
     except Exception:
         pass
@@ -1526,6 +1554,213 @@ async def get_gumloop_session_for_account(account_id: int) -> Optional[dict]:
     return dict(row) if row else None
 
 
+async def get_chat_session_by_opencode_session_key(opencode_session_key: str) -> Optional[dict]:
+    if not opencode_session_key:
+        return None
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT * FROM chat_sessions WHERE opencode_session_key = ? LIMIT 1",
+        (opencode_session_key,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_or_create_chat_session_for_opencode_session(
+    opencode_session_key: str,
+    title: str = "New Chat",
+    model: str = "",
+) -> int:
+    existing = await get_chat_session_by_opencode_session_key(opencode_session_key)
+    if existing:
+        return int(existing["id"])
+
+    conn = await get_db()
+    cur = await conn.execute(
+        "INSERT INTO chat_sessions (title, model, opencode_session_key) VALUES (?, ?, ?)",
+        (title, model, opencode_session_key),
+    )
+    await conn.commit()
+    return cur.lastrowid
+
+
+async def get_chat_session_by_api_key_id(api_key_id: int) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute(
+        """
+        SELECT cs.*
+        FROM opencode_session_registry r
+        JOIN chat_sessions cs ON cs.id = r.chat_session_id
+        WHERE r.api_key_id = ?
+        LIMIT 1
+        """,
+        (api_key_id,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_or_create_chat_session_for_api_key(api_key_id: int, title: str = "New Chat", model: str = "") -> int:
+    existing = await get_chat_session_by_api_key_id(api_key_id)
+    if existing:
+        return int(existing["id"])
+
+    conn = await get_db()
+    cur = await conn.execute(
+        "INSERT INTO chat_sessions (title, model) VALUES (?, ?)",
+        (title, model),
+    )
+    session_id = cur.lastrowid
+    await conn.execute(
+        "INSERT INTO opencode_session_registry (api_key_id, chat_session_id, last_model) VALUES (?, ?, ?)",
+        (api_key_id, session_id, model),
+    )
+    await conn.commit()
+    return session_id
+
+
+def _opencode_session_dirs() -> list[Path]:
+    candidates = []
+    xdg = os.getenv("XDG_CONFIG_HOME", "")
+    if xdg:
+        candidates.append(Path(xdg) / "opencode" / "sessions")
+    candidates.extend([
+        Path.home() / ".config" / "opencode" / "sessions",
+        Path.home() / ".opencode" / "sessions",
+        Path.home() / "AppData" / "Roaming" / "opencode" / "sessions",
+    ])
+    seen = []
+    for p in candidates:
+        if p not in seen:
+            seen.append(p)
+    return seen
+
+
+def _normalize_path_for_match(path_str: str) -> str:
+    try:
+        return str(Path(path_str).resolve()).replace("\\", "/").rstrip("/").lower()
+    except Exception:
+        return str(path_str).replace("\\", "/").rstrip("/").lower()
+
+
+def _opencode_session_file_candidates(session_key: str) -> list[Path]:
+    files = []
+    for base in _opencode_session_dirs():
+        files.append(base / f"{session_key}.json")
+        files.append(base / f"{session_key}.jsonl")
+    return files
+
+
+def _load_json_file(path: Path) -> Optional[dict]:
+    try:
+        if not path.exists() or not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _opencode_message_to_openai(msg: dict) -> dict | None:
+    role = str(msg.get("role", "")).strip()
+    if role not in ("system", "user", "assistant", "tool"):
+        return None
+    content = msg.get("content", "")
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(str(part.get("text", "")))
+        content = "\n".join(text_parts)
+    elif content is None:
+        content = ""
+    result = {"role": role, "content": content}
+    if role == "tool" and msg.get("tool_call_id"):
+        result["tool_call_id"] = msg.get("tool_call_id")
+    if role == "assistant" and msg.get("tool_calls"):
+        result["tool_calls"] = msg.get("tool_calls")
+    return result
+
+
+def _opencode_transcript_to_openai_messages(payload: dict) -> list[dict]:
+    msgs = payload.get("messages", []) if isinstance(payload, dict) else []
+    out = []
+    for msg in msgs:
+        if isinstance(msg, dict):
+            m = _opencode_message_to_openai(msg)
+            if m:
+                out.append(m)
+    return out
+
+
+async def find_opencode_session_key_for_workspace(workspace_dir: str) -> str:
+    """Find the most likely OpenCode session ID for a workspace directory."""
+    if not workspace_dir:
+        return ""
+    target = _normalize_path_for_match(workspace_dir)
+    best_key = ""
+    best_mtime = -1.0
+
+    for base in _opencode_session_dirs():
+        if not base.exists():
+            continue
+        for path in base.glob("*.json"):
+            data = _load_json_file(path)
+            if not isinstance(data, dict):
+                continue
+            wd = data.get("working_directory") or data.get("working_dir") or data.get("directory") or ""
+            if _normalize_path_for_match(str(wd)) != target:
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except Exception:
+                mtime = 0.0
+            if mtime > best_mtime:
+                best_mtime = mtime
+                best_key = str(data.get("id") or path.stem)
+    return best_key
+
+
+async def load_opencode_transcript(session_key: str) -> dict:
+    """Load an OpenCode session JSON file and normalize it to a structured transcript."""
+    if not session_key:
+        return {"session": None, "messages": [], "count": 0}
+
+    payload = None
+    for candidate in _opencode_session_file_candidates(session_key):
+        payload = _load_json_file(candidate)
+        if payload:
+            break
+
+    if not payload:
+        for base in _opencode_session_dirs():
+            if not base.exists():
+                continue
+            for path in base.glob("*.json"):
+                data = _load_json_file(path)
+                if isinstance(data, dict) and str(data.get("id", "")) == session_key:
+                    payload = data
+                    break
+            if payload:
+                break
+
+    if not isinstance(payload, dict):
+        return {"session": None, "messages": [], "count": 0}
+
+    return {
+        "session": {
+            "id": payload.get("id", session_key),
+            "title": payload.get("title", ""),
+            "model": payload.get("model", ""),
+            "created_at": payload.get("created_at", ""),
+            "updated_at": payload.get("updated_at", ""),
+            "working_directory": payload.get("working_directory") or payload.get("working_dir") or payload.get("directory", ""),
+        },
+        "messages": _opencode_transcript_to_openai_messages(payload),
+        "count": len(payload.get("messages", []) or []),
+    }
+
+
 async def get_or_create_gumloop_session_for_account(account_id: int, model: str = "gl-claude-sonnet-4-5") -> int:
     """Return the durable persistent chat session for a Gumloop account."""
     existing = await get_gumloop_session_for_account(account_id)
@@ -1675,6 +1910,114 @@ async def get_chat_messages(session_id: int) -> list[dict]:
         "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY id ASC", (session_id,),
     )
     return [dict(r) for r in await cur.fetchall()]
+
+
+async def get_last_chat_message(session_id: int) -> Optional[dict]:
+    conn = await get_db()
+    cur = await conn.execute(
+        "SELECT * FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT 1", (session_id,),
+    )
+    row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def get_chat_session_transcript(session_id: int) -> dict:
+    """Return a structured JSON transcript for one chat session.
+
+    This is the canonical payload used for Gumloop rehydration/replay.
+    """
+    session = await get_chat_session(session_id)
+    if not session:
+        return {"session": None, "messages": [], "count": 0}
+
+    messages = await get_chat_messages(session_id)
+    transcript = []
+    for idx, msg in enumerate(messages, start=1):
+        transcript.append({
+            "seq": idx,
+            "id": msg.get("id"),
+            "role": msg.get("role", ""),
+            "content": msg.get("content", ""),
+            "model": msg.get("model", ""),
+            "created_at": msg.get("created_at", ""),
+        })
+
+    return {
+        "session": {
+            "id": session.get("id"),
+            "title": session.get("title", ""),
+            "model": session.get("model", ""),
+            "created_at": session.get("created_at", ""),
+            "updated_at": session.get("updated_at", ""),
+            "gumloop_account_id": session.get("gumloop_account_id", 0),
+            "gumloop_interaction_id": session.get("gumloop_interaction_id", ""),
+        },
+        "messages": transcript,
+        "count": len(transcript),
+    }
+
+
+def _normalize_message_content(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    parts.append(str(item.get("text", "")))
+                elif item.get("type") == "tool_result":
+                    parts.append(str(item.get("content", "")))
+        return "\n".join(parts).strip()
+    return str(content or "").strip()
+
+
+def _normalize_messages_for_match(messages: list[dict]) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    for msg in messages:
+        role = str(msg.get("role", "")).strip()
+        if role not in ("system", "user", "assistant", "tool", "thinking"):
+            continue
+        result.append({"role": role, "content": _normalize_message_content(msg.get("content", ""))})
+    return result
+
+
+async def infer_chat_session_id_from_messages(messages: list[dict], model: str = "") -> int:
+    """Infer the most likely existing chat session from the incoming message transcript.
+
+    Used when OpenCode doesn't send an explicit chat_session_id.
+    Matches by prefix so a growing transcript still maps to the same logical session.
+    Returns 0 if no match is found.
+    """
+    incoming = _normalize_messages_for_match(messages)
+    if not incoming:
+        return 0
+
+    sessions = await get_chat_sessions()
+    # Prefer most recently updated sessions first, but only those matching model if provided.
+    if model:
+        sessions = [s for s in sessions if str(s.get("model", "")).strip() == str(model).strip() or not s.get("model")]
+    sessions.sort(key=lambda s: str(s.get("updated_at", "")), reverse=True)
+
+    best_session_id = 0
+    best_score = 0
+
+    for session in sessions:
+        sid = int(session.get("id", 0) or 0)
+        if not sid:
+            continue
+        transcript = await get_chat_messages(sid)
+        stored = _normalize_messages_for_match(transcript)
+        if not stored or len(stored) > len(incoming):
+            continue
+        if incoming[: len(stored)] != stored:
+            continue
+        score = len(stored)
+        if score > best_score:
+            best_score = score
+            best_session_id = sid
+
+    return best_session_id
 
 
 async def delete_all_chat_sessions() -> int:
