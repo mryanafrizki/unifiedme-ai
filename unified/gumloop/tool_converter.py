@@ -36,19 +36,20 @@ You can use multiple tools in one response. After outputting tool_use blocks, wa
 """)
     return "\n".join(lines)
 
-def convert_message_content(content: Any) -> Tuple[str, List[Dict[str, Any]]]:
+def convert_message_content(content: Any) -> Tuple[str, List[Dict[str, Any]], List[str]]:
     """
-    Convert message content to text, extracting tool_use and tool_result blocks.
-    Returns (text_content, tool_blocks)
+    Convert message content to text, extracting tool_use/tool_result blocks and image URLs.
+    Returns (text_content, tool_blocks, image_urls)
     """
     if isinstance(content, str):
-        return content, []
+        return content, [], []
 
     if not isinstance(content, list):
-        return str(content), []
+        return str(content), [], []
 
     text_parts = []
     tool_blocks = []
+    image_urls = []
 
     for block in content:
         if not isinstance(block, dict):
@@ -75,7 +76,13 @@ def convert_message_content(content: Any) -> Tuple[str, List[Dict[str, Any]]]:
                 "is_error": block.get("is_error", False)
             })
 
-    return "\n".join(text_parts), tool_blocks
+        elif btype == "image_url":
+            img_url = block.get("image_url", {})
+            url = img_url.get("url", "") if isinstance(img_url, dict) else str(img_url)
+            if url:
+                image_urls.append(url)
+
+    return "\n".join(text_parts), tool_blocks, image_urls
 
 def tool_result_to_text(tool_result: Dict[str, Any]) -> str:
     """Convert tool_result block to text format."""
@@ -106,36 +113,33 @@ def tool_use_to_text(tool_use: Dict[str, Any]) -> str:
     return f"<tool_use id=\"{tool_id}\">\n<name>{name}</name>\n<input>{input_json}</input>\n</tool_use>"
 
 def merge_consecutive_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """
-    Merge consecutive messages with the same role to ensure strict alternation.
-    This prevents infinite loops caused by multiple user messages in a row.
-    """
-    if not messages:
-        return []
-
     result = []
-    pending_contents = []
     pending_role = None
+    pending_contents = []
+    pending_images: List[str] = []
+
+    def _flush():
+        if pending_role and pending_contents:
+            entry = {"role": pending_role, "content": "\n\n".join(pending_contents)}
+            if pending_images:
+                entry["_images"] = list(pending_images)
+            result.append(entry)
 
     for msg in messages:
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
         if role == pending_role:
-            # Same role, accumulate content
             if content:
                 pending_contents.append(content)
+            pending_images.extend(msg.get("_images", []))
         else:
-            # Different role, flush pending
-            if pending_role and pending_contents:
-                result.append({"role": pending_role, "content": "\n\n".join(pending_contents)})
+            _flush()
             pending_role = role
             pending_contents = [content] if content else []
+            pending_images = list(msg.get("_images", []))
 
-    # Flush remaining
-    if pending_role and pending_contents:
-        result.append({"role": pending_role, "content": "\n\n".join(pending_contents)})
-
+    _flush()
     return result
 
 def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -151,17 +155,15 @@ def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, An
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
-        text_content, tool_blocks = convert_message_content(content)
+        text_content, tool_blocks, image_urls = convert_message_content(content)
 
         if role == "assistant":
             parts = []
             if text_content:
                 parts.append(text_content)
-            # Handle Claude-native tool_use blocks in content
             for block in tool_blocks:
                 if block.get("type") == "tool_use":
                     parts.append(tool_use_to_text(block))
-            # Handle OpenAI format tool_calls field
             for tc in msg.get("tool_calls", []):
                 func = tc.get("function", {})
                 tc_id = tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
@@ -178,7 +180,6 @@ def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                 result.append({"role": "assistant", "content": "\n".join(parts)})
 
         elif role == "tool":
-            # OpenAI format: role="tool" with tool_call_id
             tool_call_id = msg.get("tool_call_id", "")
             if tool_call_id and tool_call_id in seen_tool_result_ids:
                 continue
@@ -204,9 +205,11 @@ def convert_messages_simple(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                         seen_tool_result_ids.add(tool_use_id)
                     parts.append(tool_result_to_text(block))
             if parts:
-                result.append({"role": "user", "content": "\n".join(parts)})
+                msg_entry: Dict[str, Any] = {"role": "user", "content": "\n".join(parts)}
+                if image_urls:
+                    msg_entry["_images"] = image_urls
+                result.append(msg_entry)
 
-    # Merge consecutive messages with same role to ensure strict alternation
     return merge_consecutive_messages(result)
 
 def convert_messages_with_tools(
@@ -236,18 +239,15 @@ def convert_messages_with_tools(
         role = msg.get("role", "user")
         content = msg.get("content", "")
 
-        text_content, tool_blocks = convert_message_content(content)
+        text_content, tool_blocks, image_urls = convert_message_content(content)
 
         if role == "assistant":
-            # Convert tool_use blocks to text
             parts = []
             if text_content:
                 parts.append(text_content)
-            # Claude-native: tool_use blocks in content
             for block in tool_blocks:
                 if block.get("type") == "tool_use":
                     parts.append(tool_use_to_text(block))
-            # OpenAI format: tool_calls field on message
             for tc in msg.get("tool_calls", []):
                 func = tc.get("function", {})
                 tc_id = tc.get("id", f"toolu_{uuid.uuid4().hex[:24]}")
@@ -265,7 +265,6 @@ def convert_messages_with_tools(
                 result.append({"role": "assistant", "content": "\n".join(parts)})
 
         elif role == "tool":
-            # OpenAI format: role="tool" with tool_call_id and content
             tool_call_id = msg.get("tool_call_id", "")
             if tool_call_id and tool_call_id in seen_tool_result_ids:
                 continue
@@ -279,14 +278,12 @@ def convert_messages_with_tools(
             })})
 
         elif role == "user":
-            # Convert tool_result blocks to text, with deduplication
             parts = []
             if text_content:
                 parts.append(text_content)
             for block in tool_blocks:
                 if block.get("type") == "tool_result":
                     tool_use_id = block.get("tool_use_id", "")
-                    # Skip duplicate tool_results
                     if tool_use_id and tool_use_id in seen_tool_result_ids:
                         continue
                     if tool_use_id:
@@ -294,9 +291,11 @@ def convert_messages_with_tools(
                     parts.append(tool_result_to_text(block))
 
             if parts:
-                result.append({"role": "user", "content": "\n".join(parts)})
+                msg_entry: Dict[str, Any] = {"role": "user", "content": "\n".join(parts)}
+                if image_urls:
+                    msg_entry["_images"] = image_urls
+                result.append(msg_entry)
 
-    # Merge consecutive messages with same role to ensure strict alternation
     return merge_consecutive_messages(result)
 
 # Regex patterns for parsing tool calls
@@ -350,7 +349,7 @@ def detect_tool_loop(messages: List[Dict[str, Any]], threshold: int = 3) -> Opti
         content = msg.get("content", "")
         role = msg.get("role", "")
 
-        _, tool_blocks = convert_message_content(content)
+        _, tool_blocks, _ = convert_message_content(content)
 
         if role == "assistant":
             for block in tool_blocks:

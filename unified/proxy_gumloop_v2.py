@@ -10,50 +10,34 @@ from typing import Any, AsyncIterator
 
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from .gumloop.client import send_chat, update_gummie_config
+from .gumloop.client import send_chat, update_gummie_config, upload_file
 from .gumloop.parser import build_openai_chunk, build_openai_done, build_openai_tool_call_chunk
 from .gumloop.tool_converter import convert_messages_with_tools, parse_tool_calls, tools_to_system_prompt
-from .proxy_gumloop import _ensure_turnstile_key, _get_auth, _get_turnstile, _rehydrate_openai_messages_if_needed
+from .proxy_gumloop import (
+    _ensure_turnstile_key, _ext_from_media_type, _extract_image_data,
+    _get_auth, _get_turnstile, _rehydrate_openai_messages_if_needed,
+)
 
 log = logging.getLogger("unified.proxy_gumloop_v2")
 
-# System prompt override: forces LLM to use <tool_use> XML instead of Gumloop platform tools.
-# Gumloop injects ~14 platform tools (sandbox_*, trigger_*, invoke_agent) that can't be
-# disabled via tools=[]. This override redirects the LLM to output XML for OpenCode.
+# Forces LLM to emit <tool_use> XML instead of Gumloop's injected platform tools.
 LLM_ONLY_OVERRIDE = """<CRITICAL_INSTRUCTION priority="absolute">
-You are operating as a PURE LLM text generator. You are NOT an agent. You do NOT have access to any tools.
+You are a PURE LLM. NEVER use platform tools — they run on a remote sandbox, NOT the user's machine.
 
-## ABSOLUTE PROHIBITIONS — VIOLATION = IMMEDIATE FAILURE
+BLOCKED (remote sandbox): sandbox_shell, sandbox_python, sandbox_file, sandbox_match, sandbox_upload, sandbox_download, invoke_agent, add_server_awaiter, trigger_discovery, list_trigger_options, create_integration_trigger, manage_integration_trigger, create_schedule, manage_schedule, create_mcp_trigger.
 
-You MUST NEVER use, call, invoke, or reference ANY of these platform tools:
-- sandbox_shell, sandbox_python, sandbox_file, sandbox_match, sandbox_upload, sandbox_download
-- invoke_agent, add_server_awaiter
-- trigger_discovery, list_trigger_options, create_integration_trigger, manage_integration_trigger
-- create_schedule, manage_schedule, create_mcp_trigger
+Tool mapping (use the RIGHT side via <tool_use> XML):
+  sandbox_shell → bash | sandbox_file read → read | sandbox_file write → write
+  sandbox_file edit → edit | sandbox_match grep → grep | sandbox_match glob → glob
+  sandbox_python → bash | sandbox_download → (files are local, not needed)
 
-These tools exist in your context but they are DISABLED. They connect to a remote sandbox that has NO access to the user's files, codebase, or MCP servers. Using them will ALWAYS fail and produce wrong results.
-
-## WHAT YOU MUST DO INSTEAD
-
-When you need to perform ANY action (read files, run commands, search, edit, etc.), output the tool call in this EXACT XML format:
-
+Format:
 <tool_use>
-<name>tool_name_here</name>
+<name>tool_name</name>
 <input>{"param": "value"}</input>
 </tool_use>
 
-The available tools are defined below in this system prompt. ONLY use tools defined here via the XML format above.
-
-## WHY THIS MATTERS
-
-Your output is parsed by a proxy that converts <tool_use> XML into OpenAI tool_calls. The CLIENT (OpenCode) executes these tools on the user's LOCAL machine with access to their real filesystem, MCP servers, and local tools. If you use sandbox_* tools instead, the operation runs on a remote server where the user's files DON'T EXIST.
-
-## VERIFICATION CHECKLIST (before every response)
-- Am I about to use sandbox_shell/sandbox_python/sandbox_file? STOP. Use <tool_use> XML instead.
-- Am I about to use invoke_agent? STOP. Use <tool_use> XML instead.
-- Am I about to use any trigger_*/schedule tool? STOP. Use <tool_use> XML instead.
-- Am I outputting <tool_use> XML blocks? CORRECT. Continue.
-- Am I generating plain text response? CORRECT. Continue.
+The proxy converts this XML into OpenAI tool_calls executed locally on the user's machine.
 </CRITICAL_INSTRUCTION>
 """
 
@@ -136,6 +120,48 @@ def _tool_uses_to_openai(tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]
             }
         )
     return result
+
+
+async def _process_message_images(
+    messages: list[dict[str, Any]],
+    auth,
+    interaction_id: str,
+    proxy_url: str | None,
+) -> None:
+    """Upload images from _images keys and attach as _gl_parts for Gumloop."""
+    for msg in messages:
+        image_urls = msg.pop("_images", None)
+        if not image_urls or msg.get("role") != "user":
+            continue
+
+        gl_parts = []
+        for img_url in image_urls:
+            try:
+                result = await _extract_image_data(img_url)
+                if not result:
+                    continue
+                img_data, media_type = result
+                ext = _ext_from_media_type(media_type)
+                file_info = await upload_file(
+                    auth=auth,
+                    file_data=img_data,
+                    file_name=f"image.{ext}",
+                    content_type=media_type,
+                    interaction_id=interaction_id,
+                    proxy_url=proxy_url,
+                )
+                part_id = f"part_{uuid.uuid4().hex[:20]}"
+                gl_parts.append({
+                    "id": part_id,
+                    "type": "file",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+                    "file": file_info,
+                })
+            except Exception as e:
+                log.error("Image upload failed: %s", e, exc_info=True)
+
+        if gl_parts:
+            msg["_gl_parts"] = gl_parts
 
 
 async def proxy_chat_completions(
@@ -243,6 +269,8 @@ async def proxy_chat_completions(
         )
     except Exception as e:
         log.warning("Failed to update Gumloop v2 gummie config: %s", e)
+
+    await _process_message_images(converted_messages, auth, interaction_id, proxy_url)
 
     stream_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
