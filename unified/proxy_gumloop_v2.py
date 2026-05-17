@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
 from typing import Any, AsyncIterator
@@ -106,16 +107,27 @@ def _filter_duplicate_mcp_tools(tools: list[dict[str, Any]]) -> list[dict[str, A
     ]
 
 
+_TOOL_ROOT_KEY: dict[str, str] = {
+    "question": "questions",
+    "todowrite": "todos",
+}
+
+
 def _tool_uses_to_openai(tool_uses: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = []
     for item in tool_uses:
+        name = item.get("name", "")
+        args = item.get("input", {})
+        root_key = _TOOL_ROOT_KEY.get(name)
+        if root_key and isinstance(args, dict) and root_key not in args:
+            args = {root_key: [args]}
         result.append(
             {
                 "id": item.get("id", f"call_{uuid.uuid4().hex[:24]}"),
                 "type": "function",
                 "function": {
-                    "name": item.get("name", ""),
-                    "arguments": json.dumps(item.get("input", {}), ensure_ascii=False),
+                    "name": name,
+                    "arguments": json.dumps(args, ensure_ascii=False),
                 },
             }
         )
@@ -303,12 +315,40 @@ async def proxy_chat_completions(
     )
 
 
+_CONTENT_PARTIAL_PREFIXES = (
+    "<thinking", "<thinkin", "<thinki",
+    "<tool_us", "<tool_u",
+    "<think", "<tool_",
+    "<thin", "<tool",
+    "<thi", "<too",
+    "<th", "<to",
+    "<t", "<",
+)
+
+_THINKING_CLOSE_PREFIXES = (
+    "</thinking", "</thinkin", "</thinki",
+    "</think", "</thin", "</thi",
+    "</th", "</t", "</",
+)
+
+
 def _safe_flush_point(text: str, start: int) -> int:
-    idx = text.find("<tool_use", start)
+    for tag in ("<tool_use", "<thinking>"):
+        idx = text.find(tag, start)
+        if idx >= 0:
+            return idx
+    for prefix in _CONTENT_PARTIAL_PREFIXES:
+        if text.endswith(prefix) and len(text) - len(prefix) >= start:
+            return len(text) - len(prefix)
+    return len(text)
+
+
+def _safe_thinking_flush(text: str, start: int) -> int:
+    idx = text.find("</thinking>", start)
     if idx >= 0:
         return idx
-    for prefix in ("<tool_us", "<tool_u", "<tool_", "<tool", "<too", "<to", "<t", "<"):
-        if text.endswith(prefix):
+    for prefix in _THINKING_CLOSE_PREFIXES:
+        if text.endswith(prefix) and len(text) - len(prefix) >= start:
             return len(text) - len(prefix)
     return len(text)
 
@@ -341,6 +381,7 @@ def _stream_gumloop_v2(
         try:
             full_text = ""
             streamed_pos = 0
+            in_thinking = False
             usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             buffering_notified = False
 
@@ -355,23 +396,49 @@ def _stream_gumloop_v2(
                         delta_preview = str(event.get("delta", ""))[:50]
                         log.info("[GL2 stream] event: %s | delta: %s", etype, delta_preview)
 
-                # --- Text content (buffered near <tool_use> tags) ---
                 if etype == "text-delta":
                     delta = event.get("delta", "")
                     if delta:
                         full_text += delta
-                        safe_until = _safe_flush_point(full_text, streamed_pos)
-                        if safe_until > streamed_pos:
-                            chunk_text = full_text[streamed_pos:safe_until]
-                            yield build_openai_chunk(stream_id, display_model, content=chunk_text, created=created).encode()
-                            streamed_pos = safe_until
-                            buffering_notified = False
-                        elif not buffering_notified and (len(full_text) - streamed_pos) > 10:
-                            yield build_openai_chunk(
-                                stream_id, display_model,
-                                content="\n_Preparing tool call..._\n", created=created,
-                            ).encode()
-                            buffering_notified = True
+                        while streamed_pos < len(full_text):
+                            if not in_thinking:
+                                tag_pos = full_text.find("<thinking>", streamed_pos)
+                                if tag_pos >= 0:
+                                    if tag_pos > streamed_pos:
+                                        yield build_openai_chunk(stream_id, display_model, content=full_text[streamed_pos:tag_pos], created=created).encode()
+                                    streamed_pos = tag_pos + len("<thinking>")
+                                    if streamed_pos < len(full_text) and full_text[streamed_pos] == "\n":
+                                        streamed_pos += 1
+                                    in_thinking = True
+                                    buffering_notified = False
+                                    continue
+                                safe_until = _safe_flush_point(full_text, streamed_pos)
+                                if safe_until > streamed_pos:
+                                    yield build_openai_chunk(stream_id, display_model, content=full_text[streamed_pos:safe_until], created=created).encode()
+                                    streamed_pos = safe_until
+                                    buffering_notified = False
+                                elif not buffering_notified and (len(full_text) - streamed_pos) > 10:
+                                    yield build_openai_chunk(
+                                        stream_id, display_model,
+                                        content="\n_Preparing tool call..._\n", created=created,
+                                    ).encode()
+                                    buffering_notified = True
+                                break
+                            else:
+                                close_pos = full_text.find("</thinking>", streamed_pos)
+                                if close_pos >= 0:
+                                    if close_pos > streamed_pos:
+                                        yield build_openai_chunk(stream_id, display_model, reasoning_content=full_text[streamed_pos:close_pos], created=created).encode()
+                                    streamed_pos = close_pos + len("</thinking>")
+                                    if streamed_pos < len(full_text) and full_text[streamed_pos] == "\n":
+                                        streamed_pos += 1
+                                    in_thinking = False
+                                    continue
+                                safe_until = _safe_thinking_flush(full_text, streamed_pos)
+                                if safe_until > streamed_pos:
+                                    yield build_openai_chunk(stream_id, display_model, reasoning_content=full_text[streamed_pos:safe_until], created=created).encode()
+                                    streamed_pos = safe_until
+                                break
 
                 # --- Reasoning (streamed as reasoning_content) ---
                 elif etype == "reasoning-delta":
@@ -466,6 +533,12 @@ def _stream_gumloop_v2(
                     yield b": keepalive\n\n"
 
             unstreamed = full_text[streamed_pos:]
+            if in_thinking:
+                thinking_leftover = unstreamed.replace("</thinking>", "").rstrip()
+                if thinking_leftover:
+                    yield build_openai_chunk(stream_id, display_model, reasoning_content=thinking_leftover, created=created).encode()
+                unstreamed = ""
+            unstreamed = re.sub(r"<thinking>\n?.*?</thinking>\n?", "", unstreamed, flags=re.DOTALL)
             remaining_text, tool_uses = parse_tool_calls(unstreamed)
             if remaining_text:
                 yield build_openai_chunk(stream_id, display_model, content=remaining_text, created=created).encode()
@@ -536,9 +609,14 @@ async def _accumulate_gumloop_v2(
             elif etype == "error":
                 return JSONResponse({"error": {"message": event.get("error", "Unknown Gumloop v2 error"), "type": "proxy_error"}}, status_code=502), 0.0
 
-        remaining_text, tool_uses = parse_tool_calls(full_text)
+        thinking_parts = re.findall(r"<thinking>\n?(.*?)</thinking>", full_text, flags=re.DOTALL)
+        reasoning_text = "\n".join(p.strip() for p in thinking_parts if p.strip()) or None
+        clean_text = re.sub(r"<thinking>\n?.*?</thinking>\n?", "", full_text, flags=re.DOTALL)
+        remaining_text, tool_uses = parse_tool_calls(clean_text)
         tool_calls = _tool_uses_to_openai(tool_uses)
         message: dict[str, Any] = {"role": "assistant", "content": remaining_text or None}
+        if reasoning_text:
+            message["reasoning_content"] = reasoning_text
         if tool_calls:
             message["tool_calls"] = tool_calls
         finish_reason = "tool_calls" if tool_calls else "stop"
