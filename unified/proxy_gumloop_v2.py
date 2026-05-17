@@ -177,8 +177,8 @@ async def _process_message_images(
 
 
 async def proxy_chat_completions(
-    body: dict,
-    account: dict,
+    body: dict[str, Any],
+    account: dict[str, Any],
     client_wants_stream: bool,
     proxy_url: str | None = None,
 ) -> tuple[StreamingResponse | JSONResponse, float]:
@@ -385,7 +385,7 @@ def _stream_gumloop_v2(
             usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             buffering_notified = False
 
-            yield build_openai_chunk(stream_id, display_model, content="", role="assistant", created=created).encode()
+            yield build_openai_chunk(stream_id, display_model, role="assistant", created=created).encode()
 
             async for event in send_chat(gummie_id, messages, auth, turnstile, interaction_id=interaction_id, proxy_url=proxy_url):
                 etype = event.get("type", "")
@@ -476,12 +476,9 @@ def _stream_gumloop_v2(
                         content=f"\n> **[Result]** `{tool_name}` \u2192\n> ```\n> {preview}\n> ```\n", created=created,
                     ).encode()
 
-                # --- Step boundary (visible progress) ---
+                # --- Step boundary (skip — handled by reasoning flow) ---
                 elif etype == "step-start":
-                    yield build_openai_chunk(
-                        stream_id, display_model,
-                        content="\n---\n_Processing next step..._\n", created=created,
-                    ).encode()
+                    pass
 
                 # --- Error ---
                 elif etype == "error":
@@ -521,10 +518,6 @@ def _stream_gumloop_v2(
                     usage["completion_tokens"] += event_usage.get("output_tokens", 0)
                     usage["total_tokens"] += event_usage.get("total_tokens", 0)
                     if not event.get("final", True):
-                        yield build_openai_chunk(
-                            stream_id, display_model,
-                            content="\n_Agent processing..._\n", created=created,
-                        ).encode()
                         continue
                     break
 
@@ -574,7 +567,7 @@ def _stream_gumloop_v2(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
-    resp._gl_stream_state = _stream_state  # type: ignore[attr-defined]
+    resp._gl_stream_state = _stream_state  # pyright: ignore[reportAttributeAccessIssue]
     return resp
 
 
